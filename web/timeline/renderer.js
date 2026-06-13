@@ -137,6 +137,12 @@ export class TimelineRenderer {
     if (timeline.ui_state.selected_item_id === section.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
     item.style.width = `${Math.max(12, secondsToPixels(section.end_time - section.start_time, timeline, this.viewportWidth))}px`;
+    const thumbnail = sectionThumbnailUrl(this.node, timeline, section);
+    if (thumbnail) {
+      item.style.backgroundImage = `linear-gradient(rgba(17,23,34,0.32), rgba(17,23,34,0.32)), url("${thumbnail}")`;
+      item.style.backgroundSize = "cover";
+      item.style.backgroundPosition = "center";
+    }
     item.textContent = sectionLabel(section);
     item.title = sectionLabel(section);
     item.addEventListener("pointerdown", (event) => this.startSectionDrag(event, section, "move"));
@@ -174,7 +180,7 @@ export class TimelineRenderer {
     const clipLabel = el("div", "htd-audio-label");
     clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
     item.append(clipLabel);
-    if (shouldShowWaveform(timeline)) item.append(renderWaveform(timeline, clip));
+    if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip));
     item.title = "Audio";
     item.addEventListener("pointerdown", (event) => {
       event.stopPropagation();
@@ -363,16 +369,24 @@ function shouldShowWaveform(timeline) {
   );
 }
 
-function renderWaveform(timeline, clip) {
+function renderWaveform(node, timeline, clip) {
   const waveform = el("div", "htd-waveform");
   const asset = resolveMediaReference(timeline, clip.audio);
-  const bars = createWaveformBars(asset?.asset_id ?? asset?.path ?? clip.item_id);
+  const bars = node?._timelineMediaCache?.getWaveform(asset?.asset_id) ?? createWaveformBars(asset?.asset_id ?? asset?.path ?? clip.item_id);
   for (const value of bars) {
     const bar = el("span", "htd-waveform-bar");
     bar.style.height = `${Math.round(value * 100)}%`;
     waveform.append(bar);
   }
   return waveform;
+}
+
+function sectionThumbnailUrl(node, timeline, section) {
+  if (timeline.project.privacy.mode || timeline.project.privacy.hide_media_previews) return null;
+  const reference = section.type === "Image" ? section.image : section.type === "Video" ? section.video : null;
+  const asset = resolveMediaReference(timeline, reference);
+  if (!asset?.asset_id) return null;
+  return node?._timelineMediaCache?.getThumbnailUrl(asset.asset_id) ?? null;
 }
 
 function sectionLabel(section) {

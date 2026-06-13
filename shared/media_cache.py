@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+from typing import Any
+
+import av
+import folder_paths
+from PIL import Image, ImageOps
+
+
+IMAGE_EXTENSIONS = {".apng", ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
+AUDIO_EXTENSIONS = {".aac", ".aiff", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".weba"}
+
+DEFAULT_THUMBNAIL_SIZE = 320
+DEFAULT_WAVEFORM_PEAKS = 96
+
+
+def cache_root() -> Path:
+    root = Path(folder_paths.get_temp_directory()) / "helto_director_cache"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "thumbnails").mkdir(exist_ok=True)
+    (root / "waveforms").mkdir(exist_ok=True)
+    return root
+
+
+def resolve_media_path(path_value: str, source_type: str | None = None) -> Path:
+    if not path_value or not str(path_value).strip():
+        raise ValueError("Media path is required.")
+
+    raw_path = str(path_value).strip()
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        resolved = path.resolve()
+    else:
+        filename, annotated_dir = folder_paths.annotated_filepath(raw_path)
+        if not filename or filename.startswith("/") or ".." in Path(filename).parts:
+            raise ValueError("Media path is outside an allowed ComfyUI directory.")
+        base_dir = annotated_dir
+        if base_dir is None and source_type:
+            base_dir = folder_paths.get_directory_by_type(source_type)
+        if base_dir is None:
+            base_dir = folder_paths.get_input_directory()
+        base = Path(base_dir).resolve()
+        resolved = (base / filename).resolve()
+        if os.path.commonpath((str(base), str(resolved))) != str(base):
+            raise ValueError("Media path is outside an allowed ComfyUI directory.")
+
+    if not resolved.is_file():
+        raise FileNotFoundError(f"Media file not found: {resolved}")
+    return resolved
+
+
+def thumbnail_cache_path(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE) -> Path:
+    key = _cache_key(media_path, {"max_size": max_size, "kind": "thumbnail"})
+    return cache_root() / "thumbnails" / f"{key}.webp"
+
+
+def waveform_cache_path(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS) -> Path:
+    key = _cache_key(media_path, {"peaks": peaks, "kind": "waveform"})
+    return cache_root() / "waveforms" / f"{key}.json"
+
+
+def make_thumbnail(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE) -> Path:
+    max_size = _clamp_int(max_size, 64, 1024)
+    out = thumbnail_cache_path(media_path, max_size)
+    if out.exists():
+        return out
+
+    suffix = media_path.suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        image = _load_image_thumbnail(media_path, max_size)
+    elif suffix in VIDEO_EXTENSIONS:
+        image = _load_video_thumbnail(media_path, max_size)
+    else:
+        raise ValueError("Unsupported media type for thumbnail.")
+
+    tmp = out.with_suffix(".tmp")
+    image.save(tmp, "WEBP", quality=90, method=4)
+    tmp.replace(out)
+    return out
+
+
+def make_waveform(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS) -> dict[str, Any]:
+    peaks = _clamp_int(peaks, 16, 512)
+    out = waveform_cache_path(media_path, peaks)
+    if out.exists():
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    payload = _decode_audio_waveform(media_path, peaks)
+    payload["cache_key"] = out.stem
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    tmp.replace(out)
+    return payload
+
+
+def clear_media_cache() -> None:
+    root = cache_root()
+    for child in root.rglob("*"):
+        if child.is_file():
+            child.unlink(missing_ok=True)
+
+
+def _load_image_thumbnail(path: Path, max_size: int) -> Image.Image:
+    with Image.open(path) as image:
+        image = ImageOps.exif_transpose(image)
+        image = image.convert("RGB")
+        image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        return image.copy()
+
+
+def _load_video_thumbnail(path: Path, max_size: int) -> Image.Image:
+    with av.open(str(path)) as container:
+        for frame in container.decode(video=0):
+            image = frame.to_image().convert("RGB")
+            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            return image
+    raise ValueError("Could not decode a video frame for thumbnail.")
+
+
+def _decode_audio_waveform(path: Path, peaks: int) -> dict[str, Any]:
+    samples = []
+    sample_rate = None
+    channels = 0
+    duration_seconds = None
+
+    with av.open(str(path)) as container:
+        if container.duration is not None:
+            duration_seconds = max(0.0, float(container.duration / av.time_base))
+        for frame in container.decode(audio=0):
+            sample_rate = sample_rate or frame.sample_rate
+            channels = max(channels, len(frame.layout.channels))
+            array = frame.to_ndarray()
+            if array.ndim == 2:
+                values = abs(array).max(axis=0)
+            else:
+                values = abs(array)
+            samples.extend(float(value) for value in values)
+
+    peak_values = _bin_peaks(samples, peaks)
+    return {
+        "duration_seconds": duration_seconds,
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "peaks": peak_values,
+    }
+
+
+def _bin_peaks(samples: list[float], peaks: int) -> list[float]:
+    if not samples:
+        return [0.0 for _ in range(peaks)]
+    max_value = max(max(samples), 1.0)
+    chunk_size = max(1, math.ceil(len(samples) / peaks))
+    values = []
+    for index in range(peaks):
+        start = index * chunk_size
+        chunk = samples[start:start + chunk_size]
+        values.append(round(max(chunk or [0.0]) / max_value, 4))
+    return values
+
+
+def _cache_key(media_path: Path, params: dict[str, Any]) -> str:
+    stat = media_path.stat()
+    payload = {
+        "path": str(media_path.resolve()),
+        "mtime": stat.st_mtime_ns,
+        "size": stat.st_size,
+        **params,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _clamp_int(value: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = minimum
+    return max(minimum, min(maximum, number))
