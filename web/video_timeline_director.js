@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { mountTimelineState, unmountTimelineState } from "./timeline/state.js";
+import { mountTimelineRenderer, unmountTimelineRenderer } from "./timeline/renderer.js";
 
 app.registerExtension({
   name: "helto.videoTimelineDirector.state",
@@ -10,7 +11,8 @@ app.registerExtension({
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       const result = onNodeCreated?.apply(this, arguments);
-      mountTimelineState(this, app);
+      const controller = mountTimelineState(this, app);
+      mountTimelineRenderer(this, app, controller);
       return result;
     };
 
@@ -18,6 +20,7 @@ app.registerExtension({
     nodeType.prototype.onConfigure = function () {
       const result = onConfigure?.apply(this, arguments);
       const controller = mountTimelineState(this, app);
+      mountTimelineRenderer(this, app, controller);
       controller.loadTimelineState();
       controller.commitTimelineChange("workflow load", { pushUndo: false, markDirty: false });
       return result;
@@ -25,6 +28,7 @@ app.registerExtension({
 
     const onRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
+      unmountTimelineRenderer(this);
       unmountTimelineState(this);
       return onRemoved?.apply(this, arguments);
     };
