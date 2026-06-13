@@ -15,5 +15,6 @@ Generic ComfyUI nodepack for video timeline authoring and downstream model-speci
 - Phase 5 media attachment foundations store file/source asset records, attach media by `asset_id`, reject embedded media payloads, and render audio waveform placeholders.
 - Zoom-to-fit now measures the timeline viewport and syncs the visible Zoom Level widget so state commits preserve the fitted zoom.
 - Phase 7 media cache routes generate thumbnail `.webp` files and audio waveform peak JSON under ComfyUI temp, with frontend cache hydration for previews/waveforms.
+- Phase 8 adds LTX 2.3 Timeline Config and Planner nodes that output serializable LTX plans with frame mapping, resolved dimensions, prompt/media/audio plans, validation, and debug info.
 
-LTX 2.3 planning/runtime and WAN 2.2 planning/runtime are intentionally left for later phases.
+LTX 2.3 runtime and WAN 2.2 planning/runtime are intentionally left for later phases.

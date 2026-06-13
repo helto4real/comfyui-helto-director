@@ -20,6 +20,12 @@ if _PACKAGE_NAME not in sys.modules:
 VideoTimelineDirector = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.video_timeline_director.node"
 ).VideoTimelineDirector
+LTXTimelineConfig = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.ltx_timeline_config.node"
+).LTXTimelineConfig
+LTXTimelinePlanner = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.ltx_timeline_planner.node"
+).LTXTimelinePlanner
 register_media_cache_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.media_cache"
 ).register_media_cache_routes
@@ -32,10 +38,14 @@ WEB_DIRECTORY = "./web"
 
 NODE_CLASS_MAPPINGS = {
     "HeltoVideoTimelineDirector": VideoTimelineDirector,
+    "HeltoLTX23TimelineConfig": LTXTimelineConfig,
+    "HeltoLTX23TimelinePlanner": LTXTimelinePlanner,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoVideoTimelineDirector": "Video Timeline Director",
+    "HeltoLTX23TimelineConfig": "LTX 2.3 Timeline Config",
+    "HeltoLTX23TimelinePlanner": "LTX 2.3 Timeline Planner",
 }
 
 
@@ -44,6 +54,8 @@ class TimelineDirectorExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return [
             VideoTimelineDirector,
+            LTXTimelineConfig,
+            LTXTimelinePlanner,
         ]
 
 
