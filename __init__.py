@@ -1,11 +1,25 @@
+import importlib
+import sys
+import types
+from pathlib import Path
+
 from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io
 
-try:
-    from .nodes.video_timeline_director.node import VideoTimelineDirector
-except ImportError:
-    from nodes.video_timeline_director.node import VideoTimelineDirector
+
+_PACKAGE_NAME = "comfyui_helto_director_runtime"
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+
+if _PACKAGE_NAME not in sys.modules:
+    package = types.ModuleType(_PACKAGE_NAME)
+    package.__file__ = str(_PACKAGE_ROOT / "__init__.py")
+    package.__path__ = [str(_PACKAGE_ROOT)]
+    sys.modules[_PACKAGE_NAME] = package
+
+VideoTimelineDirector = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.video_timeline_director.node"
+).VideoTimelineDirector
 
 
 WEB_DIRECTORY = "./web"
