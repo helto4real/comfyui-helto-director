@@ -2,7 +2,10 @@ from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io
 
-from .nodes.video_timeline_director.node import VideoTimelineDirector
+try:
+    from .nodes.video_timeline_director.node import VideoTimelineDirector
+except ImportError:
+    from nodes.video_timeline_director.node import VideoTimelineDirector
 
 
 WEB_DIRECTORY = "./web"

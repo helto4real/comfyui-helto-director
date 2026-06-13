@@ -1,6 +1,9 @@
 from comfy_api.latest import io
 
-from ...shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
+try:
+    from ...shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
+except ImportError:
+    from shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
 
 
 class VideoTimelineDirector(io.ComfyNode):
