@@ -1,12 +1,8 @@
 from comfy_api.latest import io
 
-try:
-    from .backend import build_director_outputs
-    from ...shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
-except ImportError:
-    from nodes.video_timeline_director.backend import build_director_outputs
-    from shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
-from shared.contracts.video_timeline import (
+from .backend import build_director_outputs
+from ...shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
+from ...shared.contracts.video_timeline import (
     DEFAULT_ASPECT_RATIO,
     DEFAULT_DURATION_SECONDS,
     DEFAULT_FRAME_RATE,

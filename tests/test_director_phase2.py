@@ -1,11 +1,44 @@
+import asyncio
+import importlib.util
 import json
+import sys
+from pathlib import Path
 
-from nodes.video_timeline_director.node import VideoTimelineDirector
 from shared.contracts.video_timeline import SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline
 
 
+def get_video_timeline_director():
+    module_path = Path(__file__).resolve().parents[1]
+    sys_module_name = str(module_path).replace(".", "_x_")
+    spec = importlib.util.spec_from_file_location(
+        sys_module_name,
+        module_path / "__init__.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+
+    previous = sys.modules.get(sys_module_name)
+    previous_path = list(sys.path)
+    sys.modules[sys_module_name] = module
+    try:
+        sys.path = [
+            path
+            for path in sys.path
+            if Path(path or ".").resolve() != module_path
+        ]
+        spec.loader.exec_module(module)
+        extension = asyncio.run(module.comfy_entrypoint())
+        return asyncio.run(extension.get_node_list())[0]
+    finally:
+        sys.path = previous_path
+        if previous is None:
+            sys.modules.pop(sys_module_name, None)
+        else:
+            sys.modules[sys_module_name] = previous
+
+
 def test_director_schema_has_project_widgets_and_no_media_inputs():
+    VideoTimelineDirector = get_video_timeline_director()
     schema = VideoTimelineDirector.define_schema()
     input_ids = [input_item.id for input_item in schema.inputs]
     input_types = [input_item.io_type for input_item in schema.inputs]
@@ -28,6 +61,7 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
 
 
 def test_director_runs_without_frontend_state():
+    VideoTimelineDirector = get_video_timeline_director()
     timeline, validation = VideoTimelineDirector.execute().result
 
     assert timeline["type"] == "VIDEO_TIMELINE"
@@ -37,6 +71,7 @@ def test_director_runs_without_frontend_state():
 
 
 def test_director_applies_visible_widgets_as_authoritative_fields():
+    VideoTimelineDirector = get_video_timeline_director()
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 1.0
     timeline["project"]["frame_rate"] = 12.0
@@ -63,6 +98,7 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
 
 
 def test_director_outputs_validation_for_invalid_timeline():
+    VideoTimelineDirector = get_video_timeline_director()
     timeline = create_default_video_timeline()
     timeline["director_track"]["sections"].append(
         {
@@ -86,6 +122,7 @@ def test_director_outputs_validation_for_invalid_timeline():
 
 
 def test_director_invalid_json_returns_validation_error_not_crash():
+    VideoTimelineDirector = get_video_timeline_director()
     output_timeline, validation = VideoTimelineDirector.execute(
         video_timeline_json="{not json"
     ).result

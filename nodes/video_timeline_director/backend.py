@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from shared.contracts.validation import (
+from ...shared.contracts.validation import (
     SEVERITY_ERROR,
     create_validation_entry,
     create_validation_result,
     merge_validation_results,
 )
-from shared.timeline import create_default_video_timeline, normalize_video_timeline
-from shared.timeline.validate import validate_video_timeline
+from ...shared.timeline import create_default_video_timeline, normalize_video_timeline
+from ...shared.timeline.validate import validate_video_timeline
 
 
 def build_director_outputs(

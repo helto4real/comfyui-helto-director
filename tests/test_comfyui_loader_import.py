@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 
-def test_comfyui_style_custom_node_loader_imports_package():
+def load_nodepack_like_comfyui():
     module_path = Path(__file__).resolve().parents[1]
     sys_module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(
@@ -14,17 +14,33 @@ def test_comfyui_style_custom_node_loader_imports_package():
     module = importlib.util.module_from_spec(spec)
 
     previous = sys.modules.get(sys_module_name)
+    previous_path = list(sys.path)
     sys.modules[sys_module_name] = module
     try:
+        sys.path = [
+            path
+            for path in sys.path
+            if Path(path or ".").resolve() != module_path
+        ]
         spec.loader.exec_module(module)
-        extension = asyncio.run(module.comfy_entrypoint())
-        node = asyncio.run(extension.get_node_list())[0]
-        schema = node.define_schema()
+        return module
     finally:
+        sys.path = previous_path
         if previous is None:
             sys.modules.pop(sys_module_name, None)
         else:
             sys.modules[sys_module_name] = previous
+
+
+def get_video_timeline_director():
+    module = load_nodepack_like_comfyui()
+    extension = asyncio.run(module.comfy_entrypoint())
+    return asyncio.run(extension.get_node_list())[0]
+
+
+def test_comfyui_style_custom_node_loader_imports_package():
+    node = get_video_timeline_director()
+    schema = node.define_schema()
 
     assert schema.node_id == "HeltoVideoTimelineDirector"
     assert [output.io_type for output in schema.outputs] == [
