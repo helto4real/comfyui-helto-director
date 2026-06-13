@@ -1,9 +1,24 @@
 from comfy_api.latest import io
 
 try:
+    from .backend import build_director_outputs
     from ...shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
 except ImportError:
+    from nodes.video_timeline_director.backend import build_director_outputs
     from shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
+from shared.contracts.video_timeline import (
+    DEFAULT_ASPECT_RATIO,
+    DEFAULT_DURATION_SECONDS,
+    DEFAULT_FRAME_RATE,
+    DEFAULT_ORIENTATION,
+    DEFAULT_QUALITY_PRESET,
+    DEFAULT_ZOOM_LEVEL,
+    QUALITY_PRESETS,
+)
+
+
+ASPECT_RATIO_OPTIONS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
+ORIENTATION_OPTIONS = ["Landscape", "Portrait", "Square"]
 
 
 class VideoTimelineDirector(io.ComfyNode):
@@ -13,8 +28,72 @@ class VideoTimelineDirector(io.ComfyNode):
             node_id="HeltoVideoTimelineDirector",
             display_name="Video Timeline Director",
             category="timeline/director",
-            description="Phase 0 scaffold for generic video timeline authoring.",
-            inputs=[],
+            description="Generic video timeline authoring and validation.",
+            inputs=[
+                io.Float.Input(
+                    "duration_seconds",
+                    display_name="Duration",
+                    default=DEFAULT_DURATION_SECONDS,
+                    min=0.25,
+                    max=3600.0,
+                    step=0.25,
+                    round=0.001,
+                    display_mode=io.NumberDisplay.number,
+                    socketless=True,
+                ),
+                io.Float.Input(
+                    "frame_rate",
+                    display_name="Frame Rate",
+                    default=DEFAULT_FRAME_RATE,
+                    min=1.0,
+                    max=240.0,
+                    step=1.0,
+                    round=0.001,
+                    display_mode=io.NumberDisplay.number,
+                    socketless=True,
+                ),
+                io.Combo.Input(
+                    "aspect_ratio",
+                    display_name="Aspect Ratio",
+                    options=ASPECT_RATIO_OPTIONS,
+                    default=DEFAULT_ASPECT_RATIO,
+                    socketless=True,
+                ),
+                io.Combo.Input(
+                    "orientation",
+                    display_name="Orientation",
+                    options=ORIENTATION_OPTIONS,
+                    default=DEFAULT_ORIENTATION,
+                    socketless=True,
+                ),
+                io.Combo.Input(
+                    "quality_preset",
+                    display_name="Quality Preset",
+                    options=list(QUALITY_PRESETS),
+                    default=DEFAULT_QUALITY_PRESET,
+                    socketless=True,
+                ),
+                io.Float.Input(
+                    "zoom_level",
+                    display_name="Zoom Level",
+                    default=DEFAULT_ZOOM_LEVEL,
+                    min=0.1,
+                    max=8.0,
+                    step=0.05,
+                    round=0.001,
+                    display_mode=io.NumberDisplay.slider,
+                    socketless=True,
+                ),
+                io.String.Input(
+                    "video_timeline_json",
+                    display_name="video_timeline_json",
+                    multiline=True,
+                    default="",
+                    socketless=True,
+                    advanced=True,
+                    extra_dict={"hidden": True},
+                ),
+            ],
             outputs=[
                 VIDEO_TIMELINE.Output(
                     "video_timeline",
@@ -28,27 +107,23 @@ class VideoTimelineDirector(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls) -> io.NodeOutput:
-        video_timeline = {
-            "schema_version": "0.0-phase0",
-            "type": "VIDEO_TIMELINE",
-            "phase": 0,
-        }
-        timeline_validation = {
-            "is_valid": True,
-            "errors": [],
-            "warnings": [],
-            "info": [
-                {
-                    "code": "PHASE_0_SCAFFOLD",
-                    "severity": "Info",
-                    "source": "Director",
-                    "scope": "Node",
-                    "item_id": None,
-                    "message": "Timeline logic is not implemented in Phase 0.",
-                    "hint": "Continue with Phase 1 shared contracts.",
-                    "details": {},
-                }
-            ],
-        }
+    def execute(
+        cls,
+        duration_seconds: float = DEFAULT_DURATION_SECONDS,
+        frame_rate: float = DEFAULT_FRAME_RATE,
+        aspect_ratio: str = DEFAULT_ASPECT_RATIO,
+        orientation: str = DEFAULT_ORIENTATION,
+        quality_preset: str = DEFAULT_QUALITY_PRESET,
+        zoom_level: float = DEFAULT_ZOOM_LEVEL,
+        video_timeline_json: str = "",
+    ) -> io.NodeOutput:
+        video_timeline, timeline_validation = build_director_outputs(
+            video_timeline_json=video_timeline_json,
+            duration_seconds=duration_seconds,
+            frame_rate=frame_rate,
+            aspect_ratio=aspect_ratio,
+            orientation=orientation,
+            quality_preset=quality_preset,
+            zoom_level=zoom_level,
+        )
         return io.NodeOutput(video_timeline, timeline_validation)
