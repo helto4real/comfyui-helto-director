@@ -10,5 +10,6 @@ Generic ComfyUI nodepack for video timeline authoring and downstream model-speci
 - `Video Timeline Director` exposes generic project widgets and custom outputs.
 - Phase 1 shared timeline contracts are available under `shared/timeline/`.
 - Phase 2 Director backend parsing, normalization, visible-property application, and validation are wired.
+- Phase 3 frontend state shell mounts on the Director node and syncs `video_timeline_json`.
 
-Frontend editing, media picking, LTX 2.3 planning/runtime, and WAN 2.2 planning/runtime are intentionally left for later phases.
+Timeline rendering/interactions, media picking, LTX 2.3 planning/runtime, and WAN 2.2 planning/runtime are intentionally left for later phases.
