@@ -1,4 +1,5 @@
 export const DEFAULT_PIXELS_PER_SECOND = 96;
+export const MIN_PIXELS_PER_SECOND = 1;
 export const TIMELINE_WIDTH = 960;
 export const DIRECTOR_TRACK_HEIGHT = 44;
 export const AUDIO_LANE_HEIGHT = 34;
@@ -12,7 +13,7 @@ export function clamp(value, min, max) {
 export function getPixelsPerSecond(timeline, viewportWidth = TIMELINE_WIDTH) {
   const duration = Math.max(0.25, Number(timeline?.project?.duration_seconds ?? 5));
   const zoom = Math.max(0.1, Number(timeline?.ui_state?.zoom_level ?? 1));
-  return Math.max(24, (viewportWidth / duration) * zoom);
+  return Math.max(MIN_PIXELS_PER_SECOND, (viewportWidth / duration) * zoom);
 }
 
 export function secondsToPixels(seconds, timeline, viewportWidth = TIMELINE_WIDTH) {

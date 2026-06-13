@@ -33,6 +33,7 @@ import {
   splitSelectedSection,
   zoomToFit,
 } from "./operations.js";
+import { findWidget } from "./state.js";
 
 export const TIMELINE_WIDGET_HEIGHT = 360;
 
@@ -43,6 +44,7 @@ export class TimelineRenderer {
     this.controller = controller;
     this.container = container;
     this.drag = null;
+    this.viewportWidth = TIMELINE_WIDTH;
     this.container.className = "helto-timeline-director";
     installStyles(container.ownerDocument ?? globalThis.document);
     this.render(controller.timeline);
@@ -53,6 +55,7 @@ export class TimelineRenderer {
   }
 
   render(timeline = this.controller.timeline) {
+    this.viewportWidth = this.measureViewportWidth();
     this.container.replaceChildren();
     const root = el("div", "htd-root");
     root.append(this.renderToolbar(), this.renderTimeline(timeline), this.renderInspector(timeline));
@@ -69,7 +72,7 @@ export class TimelineRenderer {
       button("S", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
       button("D", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
       button("X", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete")),
-      button("[]", "Zoom to Fit", () => this.commitMutation((timeline) => zoomToFit(timeline), "zoom to fit")),
+      button("[]", "Zoom to Fit", () => this.handleZoomToFit()),
     );
     return toolbar;
   }
@@ -81,7 +84,7 @@ export class TimelineRenderer {
       this.controller.timeline.ui_state.scroll_x = viewport.scrollLeft;
     });
 
-    const width = getTimelineWidth(timeline, TIMELINE_WIDTH);
+    const width = getTimelineWidth(timeline, this.viewportWidth);
     const stage = el("div", "htd-stage");
     stage.style.width = `${width}px`;
     stage.append(this.renderRuler(timeline, width), this.renderDirectorTrack(timeline), this.renderAudioTracks(timeline));
@@ -95,15 +98,15 @@ export class TimelineRenderer {
     const duration = Number(timeline.project.duration_seconds);
     for (let second = 0; second <= Math.ceil(duration); second += 1) {
       const tick = el("div", "htd-tick");
-      tick.style.left = `${secondsToPixels(second, timeline, TIMELINE_WIDTH)}px`;
+      tick.style.left = `${secondsToPixels(second, timeline, this.viewportWidth)}px`;
       tick.textContent = `${second}s`;
       ruler.append(tick);
     }
     const playhead = el("div", "htd-playhead");
-    playhead.style.left = `${secondsToPixels(timeline.ui_state.playhead_time ?? 0, timeline, TIMELINE_WIDTH)}px`;
+    playhead.style.left = `${secondsToPixels(timeline.ui_state.playhead_time ?? 0, timeline, this.viewportWidth)}px`;
     ruler.append(playhead);
     ruler.addEventListener("pointerdown", (event) => {
-      timeline.ui_state.playhead_time = timeFromClientX(event.clientX, ruler, timeline, TIMELINE_WIDTH);
+      timeline.ui_state.playhead_time = timeFromClientX(event.clientX, ruler, timeline, this.viewportWidth);
       this.controller.commitTimelineChange("playhead", { pushUndo: false });
     });
     ruler.style.width = `${width}px`;
@@ -117,8 +120,8 @@ export class TimelineRenderer {
 
     for (const gap of computeGaps(timeline)) {
       const item = el("div", "htd-gap");
-      item.style.left = `${secondsToPixels(gap.start_time, timeline, TIMELINE_WIDTH)}px`;
-      item.style.width = `${secondsToPixels(gap.end_time - gap.start_time, timeline, TIMELINE_WIDTH)}px`;
+      item.style.left = `${secondsToPixels(gap.start_time, timeline, this.viewportWidth)}px`;
+      item.style.width = `${secondsToPixels(gap.end_time - gap.start_time, timeline, this.viewportWidth)}px`;
       item.title = "No Guidance";
       track.append(item);
     }
@@ -132,8 +135,8 @@ export class TimelineRenderer {
   renderSection(timeline, section) {
     const item = el("div", `htd-item htd-section htd-${section.type.toLowerCase()}`);
     if (timeline.ui_state.selected_item_id === section.item_id) item.classList.add("is-selected");
-    item.style.left = `${secondsToPixels(section.start_time, timeline, TIMELINE_WIDTH)}px`;
-    item.style.width = `${Math.max(12, secondsToPixels(section.end_time - section.start_time, timeline, TIMELINE_WIDTH))}px`;
+    item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
+    item.style.width = `${Math.max(12, secondsToPixels(section.end_time - section.start_time, timeline, this.viewportWidth))}px`;
     item.textContent = sectionLabel(section);
     item.title = sectionLabel(section);
     item.addEventListener("pointerdown", (event) => this.startSectionDrag(event, section, "move"));
@@ -165,9 +168,9 @@ export class TimelineRenderer {
   renderAudioClip(timeline, clip) {
     const item = el("div", "htd-item htd-audio-clip");
     if (timeline.ui_state.selected_item_id === clip.item_id) item.classList.add("is-selected");
-    item.style.left = `${secondsToPixels(clip.start_time, timeline, TIMELINE_WIDTH)}px`;
+    item.style.left = `${secondsToPixels(clip.start_time, timeline, this.viewportWidth)}px`;
     item.style.top = `${Number(clip.lane ?? 0) * AUDIO_LANE_HEIGHT + 4}px`;
-    item.style.width = `${Math.max(12, secondsToPixels(clip.end_time - clip.start_time, timeline, TIMELINE_WIDTH))}px`;
+    item.style.width = `${Math.max(12, secondsToPixels(clip.end_time - clip.start_time, timeline, this.viewportWidth))}px`;
     const clipLabel = el("div", "htd-audio-label");
     clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
     item.append(clipLabel);
@@ -263,8 +266,8 @@ export class TimelineRenderer {
 
   onPointerMove = (event) => {
     if (!this.drag) return;
-    const deltaSeconds = timeFromClientX(event.clientX, event.currentTarget.parentElement, this.controller.timeline, TIMELINE_WIDTH)
-      - timeFromClientX(this.drag.startX, event.currentTarget.parentElement, this.controller.timeline, TIMELINE_WIDTH);
+    const deltaSeconds = timeFromClientX(event.clientX, event.currentTarget.parentElement, this.controller.timeline, this.viewportWidth)
+      - timeFromClientX(this.drag.startX, event.currentTarget.parentElement, this.controller.timeline, this.viewportWidth);
     const timeline = this.controller.timeline;
     if (this.drag.mode === "move") {
       moveSection(timeline, this.drag.itemId, this.drag.startStart + deltaSeconds);
@@ -288,6 +291,16 @@ export class TimelineRenderer {
   commitMutation(mutator, reason, options = {}) {
     this.controller.updateTimeline(mutator, reason, options);
   }
+
+  handleZoomToFit() {
+    setNodeZoomWidgetValue(this.node, 1.0);
+    this.commitMutation((timeline) => zoomToFit(timeline), "zoom to fit");
+  }
+
+  measureViewportWidth() {
+    const viewport = this.container.querySelector?.(".htd-viewport");
+    return Math.max(1, viewport?.clientWidth || this.container.clientWidth || TIMELINE_WIDTH);
+  }
 }
 
 export function mountTimelineRenderer(node, app, controller) {
@@ -310,6 +323,14 @@ export function unmountTimelineRenderer(node) {
   node?._timelineRenderer?.destroy();
   delete node._timelineRenderer;
   delete node._timelineRendererWidget;
+}
+
+export function setNodeZoomWidgetValue(node, value) {
+  const widget = findWidget(node, "zoom_level");
+  if (!widget) return false;
+  widget.value = value;
+  widget.callback?.call(widget, value);
+  return true;
 }
 
 function computeGaps(timeline) {
