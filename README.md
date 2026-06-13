@@ -12,5 +12,6 @@ Generic ComfyUI nodepack for video timeline authoring and downstream model-speci
 - Phase 2 Director backend parsing, normalization, visible-property application, and validation are wired.
 - Phase 3 frontend state shell mounts on the Director node and syncs `video_timeline_json`.
 - Phase 4 timeline renderer/interactions cover sections, gaps, playhead, selection, split/duplicate/delete, snapping, zoom-to-fit, and audio lane stacking.
+- Phase 5 media attachment foundations store file/source asset records, attach media by `asset_id`, reject embedded media payloads, and render audio waveform placeholders.
 
-Media picking, LTX 2.3 planning/runtime, and WAN 2.2 planning/runtime are intentionally left for later phases.
+Thumbnail/waveform cache routes, LTX 2.3 planning/runtime, and WAN 2.2 planning/runtime are intentionally left for later phases.

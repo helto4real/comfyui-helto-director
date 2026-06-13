@@ -4,6 +4,9 @@ import {
   SECTION_TYPE_IMAGE,
   SECTION_TYPE_TEXT,
   SECTION_TYPE_VIDEO,
+  ASSET_SOURCE_FILE_PATH,
+  ASSET_TYPES,
+  ASSET_SOURCE_KINDS,
   CROP_MODE_PROJECT_DEFAULT,
   createDefaultVideoTimeline,
   deepClone,
@@ -29,6 +32,7 @@ export function migrateVideoTimeline(value) {
 export function normalizeVideoTimeline(value) {
   const migrated = migrateVideoTimeline(value);
   const normalized = fillMissing(migrated, createDefaultVideoTimeline());
+  normalized.assets = normalizeAssets(normalized.assets);
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
   return normalized;
@@ -57,6 +61,26 @@ function normalizeDirectorTrack(track) {
     .filter((section) => section && typeof section === "object" && !Array.isArray(section))
     .map(normalizeSection);
   return normalized;
+}
+
+function normalizeAssets(assets) {
+  if (!Array.isArray(assets)) return [];
+  return assets
+    .filter((asset) => asset && typeof asset === "object" && !Array.isArray(asset))
+    .map((asset, index) => {
+      const normalized = deepClone(asset);
+      normalized.asset_id ??= `asset_${String(index + 1).padStart(3, "0")}`;
+      if (!ASSET_TYPES.includes(normalized.type)) normalized.type = "Image";
+      if (!ASSET_SOURCE_KINDS.includes(normalized.source_kind)) normalized.source_kind = ASSET_SOURCE_FILE_PATH;
+      normalized.path ??= normalized.file_path ?? null;
+      normalized.name ??= basename(normalized.path ?? normalized.file_path ?? "");
+      normalized.mime_type ??= "";
+      normalized.size_bytes ??= null;
+      normalized.metadata = normalized.metadata && typeof normalized.metadata === "object" && !Array.isArray(normalized.metadata)
+        ? normalized.metadata
+        : {};
+      return normalized;
+    });
 }
 
 function normalizeSection(section, index) {
@@ -115,4 +139,8 @@ function normalizeAudioClip(clip, index) {
   normalized.name ??= "";
   normalized.lane ??= 0;
   return normalized;
+}
+
+function basename(path) {
+  return String(path ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
 }

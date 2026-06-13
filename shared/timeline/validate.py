@@ -9,6 +9,8 @@ from ..contracts.validation import (
     create_validation_result,
 )
 from ..contracts.video_timeline import (
+    ASSET_SOURCE_KINDS,
+    ASSET_TYPES,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
@@ -21,16 +23,78 @@ def validate_video_timeline(timeline: Any) -> dict:
     normalized = normalize_video_timeline(timeline)
     entries: list[dict[str, Any]] = []
     duration = _as_float(normalized["project"].get("duration_seconds"))
+    assets = normalized.get("assets", [])
+    assets_by_id = {asset.get("asset_id"): asset for asset in assets}
 
+    entries.extend(_validate_assets(assets))
     sections = normalized["director_track"]["sections"]
-    entries.extend(_validate_director_sections(sections, duration))
+    entries.extend(_validate_director_sections(sections, duration, assets_by_id))
     entries.extend(_gap_entries(normalized))
-    entries.extend(_validate_audio_tracks(normalized.get("audio_tracks", []), duration))
+    entries.extend(_validate_audio_tracks(normalized.get("audio_tracks", []), duration, assets_by_id))
 
     return create_validation_result(entries)
 
 
-def _validate_director_sections(sections: list[dict], duration: float | None) -> list[dict]:
+def _validate_assets(assets: list[dict]) -> list[dict]:
+    entries = []
+    seen = set()
+    for asset in assets:
+        asset_id = asset.get("asset_id")
+        if asset_id in seen:
+            entries.append(
+                create_validation_entry(
+                    "ASSET_DUPLICATE_ID",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "Asset",
+                    asset_id,
+                    "Asset IDs must be unique.",
+                    "Replace or remove the duplicate asset record.",
+                )
+            )
+        seen.add(asset_id)
+        if asset.get("type") not in ASSET_TYPES:
+            entries.append(
+                create_validation_entry(
+                    "ASSET_UNSUPPORTED_TYPE",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "Asset",
+                    asset_id,
+                    "Asset type is not supported.",
+                    "Use Image, Video, or Audio.",
+                    {"type": asset.get("type")},
+                )
+            )
+        if asset.get("source_kind") not in ASSET_SOURCE_KINDS:
+            entries.append(
+                create_validation_entry(
+                    "ASSET_UNSUPPORTED_SOURCE_KIND",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "Asset",
+                    asset_id,
+                    "Asset source kind is not supported.",
+                    "Use FilePath, UploadedFile, Generated, or ComfyUIInput.",
+                    {"source_kind": asset.get("source_kind")},
+                )
+            )
+        if _contains_embedded_media(asset):
+            entries.append(
+                create_validation_entry(
+                    "ASSET_EMBEDDED_MEDIA_NOT_ALLOWED",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "Asset",
+                    asset_id,
+                    "Assets must not embed media, thumbnails, or waveform data in workflow JSON.",
+                    "Store only a file/source reference and regenerate previews from cache.",
+                )
+            )
+    return entries
+
+
+def _validate_director_sections(sections: list[dict], duration: float | None, assets_by_id: dict) -> list[dict]:
     entries = []
     sorted_sections = sorted(
         sections,
@@ -116,6 +180,16 @@ def _validate_director_sections(sections: list[dict], duration: float | None) ->
                     "Choose an image or remove the Image Section.",
                 )
             )
+        elif section_type == SECTION_TYPE_IMAGE:
+            entries.extend(
+                _validate_media_reference(
+                    section.get("image"),
+                    assets_by_id,
+                    "Section",
+                    item_id,
+                    "IMAGE_SECTION_MEDIA",
+                )
+            )
         elif section_type == SECTION_TYPE_VIDEO and not _has_media_reference(section.get("video")):
             entries.append(
                 create_validation_entry(
@@ -126,6 +200,16 @@ def _validate_director_sections(sections: list[dict], duration: float | None) ->
                     item_id,
                     "Video Section requires a video.",
                     "Choose a video or remove the Video Section.",
+                )
+            )
+        elif section_type == SECTION_TYPE_VIDEO:
+            entries.extend(
+                _validate_media_reference(
+                    section.get("video"),
+                    assets_by_id,
+                    "Section",
+                    item_id,
+                    "VIDEO_SECTION_MEDIA",
                 )
             )
 
@@ -150,7 +234,7 @@ def _gap_entries(timeline: dict) -> list[dict]:
     return entries
 
 
-def _validate_audio_tracks(audio_tracks: list[dict], duration: float | None) -> list[dict]:
+def _validate_audio_tracks(audio_tracks: list[dict], duration: float | None, assets_by_id: dict) -> list[dict]:
     entries = []
     for track in audio_tracks:
         lanes: dict[int, list[dict]] = {}
@@ -192,6 +276,16 @@ def _validate_audio_tracks(audio_tracks: list[dict], duration: float | None) -> 
                         item_id,
                         "Audio Clip requires audio.",
                         "Choose audio or remove the clip.",
+                    )
+                )
+            else:
+                entries.extend(
+                    _validate_media_reference(
+                        clip.get("audio"),
+                        assets_by_id,
+                        "AudioClip",
+                        item_id,
+                        "AUDIO_CLIP_MEDIA",
                     )
                 )
             lane = int(clip.get("lane", 0))
@@ -239,6 +333,70 @@ def _has_media_reference(value: Any) -> bool:
     if isinstance(value, dict):
         return bool(value.get("asset_id") or value.get("path") or value.get("file_path"))
     return value is not None
+
+
+def _validate_media_reference(
+    reference: Any,
+    assets_by_id: dict,
+    scope: str,
+    item_id: str | None,
+    code_prefix: str,
+) -> list[dict]:
+    if _contains_embedded_media(reference):
+        return [
+            create_validation_entry(
+                f"{code_prefix}_EMBEDDED_MEDIA_NOT_ALLOWED",
+                SEVERITY_ERROR,
+                "Director",
+                scope,
+                item_id,
+                "Media references must not embed media, thumbnails, or waveform data in workflow JSON.",
+                "Reference an asset_id or file path instead.",
+            )
+        ]
+    if isinstance(reference, dict) and reference.get("asset_id") and reference.get("asset_id") not in assets_by_id:
+        return [
+            create_validation_entry(
+                f"{code_prefix}_ASSET_NOT_FOUND",
+                SEVERITY_ERROR,
+                "Director",
+                scope,
+                item_id,
+                "Media reference points to a missing asset record.",
+                "Choose the media again or remove the stale reference.",
+                {"asset_id": reference.get("asset_id")},
+            )
+        ]
+    return []
+
+
+def _contains_embedded_media(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return isinstance(value, str) and value.startswith(("data:", "blob:"))
+    stack = [value]
+    blocked_keys = {
+        "data",
+        "blob",
+        "bytes",
+        "thumbnail",
+        "thumbnail_data",
+        "waveform",
+        "waveform_data",
+    }
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, dict):
+            continue
+        for key, child in current.items():
+            if key in blocked_keys:
+                return True
+            if isinstance(child, str) and child.startswith(("data:", "blob:")):
+                return True
+            if isinstance(child, dict):
+                stack.append(child)
+            elif isinstance(child, list):
+                stack.extend(item for item in child if isinstance(item, dict))
+    return False
 
 
 def _as_float(value: Any) -> float | None:

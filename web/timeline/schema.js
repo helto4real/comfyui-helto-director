@@ -5,6 +5,26 @@ export const SECTION_TYPE_IMAGE = "Image";
 export const SECTION_TYPE_TEXT = "Text";
 export const SECTION_TYPE_VIDEO = "Video";
 
+export const ASSET_TYPE_IMAGE = "Image";
+export const ASSET_TYPE_VIDEO = "Video";
+export const ASSET_TYPE_AUDIO = "Audio";
+export const ASSET_TYPES = [
+  ASSET_TYPE_IMAGE,
+  ASSET_TYPE_VIDEO,
+  ASSET_TYPE_AUDIO,
+];
+
+export const ASSET_SOURCE_FILE_PATH = "FilePath";
+export const ASSET_SOURCE_UPLOADED_FILE = "UploadedFile";
+export const ASSET_SOURCE_GENERATED = "Generated";
+export const ASSET_SOURCE_COMFYUI_INPUT = "ComfyUIInput";
+export const ASSET_SOURCE_KINDS = [
+  ASSET_SOURCE_FILE_PATH,
+  ASSET_SOURCE_UPLOADED_FILE,
+  ASSET_SOURCE_GENERATED,
+  ASSET_SOURCE_COMFYUI_INPUT,
+];
+
 export const CROP_MODE_PROJECT_DEFAULT = "Project Default";
 export const QUALITY_PRESETS = [
   "Quick Draft",

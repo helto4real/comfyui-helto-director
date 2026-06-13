@@ -4,6 +4,10 @@ from copy import deepcopy
 from typing import Any
 
 from ..contracts.video_timeline import (
+    ASSET_SOURCE_FILE_PATH,
+    ASSET_SOURCE_KINDS,
+    ASSET_TYPES,
+    CROP_MODE_PROJECT_DEFAULT,
     DEFAULT_AUDIO_FADE_IN_SECONDS,
     DEFAULT_AUDIO_FADE_OUT_SECONDS,
     DEFAULT_AUDIO_VOLUME,
@@ -13,7 +17,6 @@ from ..contracts.video_timeline import (
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
-    CROP_MODE_PROJECT_DEFAULT,
 )
 from .defaults import create_default_video_timeline
 from .migration import migrate_video_timeline
@@ -22,6 +25,7 @@ from .migration import migrate_video_timeline
 def normalize_video_timeline(timeline: Any) -> dict:
     migrated = migrate_video_timeline(timeline)
     normalized = _fill_missing(migrated, create_default_video_timeline())
+    normalized["assets"] = _normalize_assets(normalized.get("assets"))
     normalized["director_track"] = _normalize_director_track(
         normalized.get("director_track")
     )
@@ -29,6 +33,29 @@ def normalize_video_timeline(timeline: Any) -> dict:
         normalized.get("audio_tracks")
     )
     return normalized
+
+
+def _normalize_assets(assets: Any) -> list[dict]:
+    if not isinstance(assets, list):
+        return []
+    normalized_assets = []
+    for index, asset in enumerate(assets):
+        if not isinstance(asset, dict):
+            continue
+        normalized = deepcopy(asset)
+        normalized.setdefault("asset_id", f"asset_{index + 1:03d}")
+        if normalized.get("type") not in ASSET_TYPES:
+            normalized["type"] = "Image"
+        if normalized.get("source_kind") not in ASSET_SOURCE_KINDS:
+            normalized["source_kind"] = ASSET_SOURCE_FILE_PATH
+        normalized.setdefault("path", normalized.get("file_path"))
+        normalized.setdefault("name", _basename(normalized.get("path")))
+        normalized.setdefault("mime_type", "")
+        normalized.setdefault("size_bytes", None)
+        if not isinstance(normalized.get("metadata"), dict):
+            normalized["metadata"] = {}
+        normalized_assets.append(normalized)
+    return normalized_assets
 
 
 def _fill_missing(value: Any, defaults: Any) -> Any:
@@ -118,3 +145,7 @@ def _normalize_audio_clip(clip: dict, index: int) -> dict:
     normalized.setdefault("name", "")
     normalized.setdefault("lane", 0)
     return normalized
+
+
+def _basename(path: Any) -> str:
+    return str(path or "").replace("\\", "/").rstrip("/").split("/")[-1]

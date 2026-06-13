@@ -1,4 +1,18 @@
 import {
+  ASSET_TYPE_AUDIO,
+  ASSET_TYPE_IMAGE,
+  ASSET_TYPE_VIDEO,
+} from "./schema.js";
+import {
+  attachMediaAsset,
+  clearMediaReference,
+  createBrowserFileAsset,
+  createFilePathAsset,
+  createWaveformBars,
+  mediaLabel,
+  resolveMediaReference,
+} from "./media.js";
+import {
   AUDIO_LANE_HEIGHT,
   DIRECTOR_TRACK_HEIGHT,
   HANDLE_WIDTH,
@@ -154,7 +168,10 @@ export class TimelineRenderer {
     item.style.left = `${secondsToPixels(clip.start_time, timeline, TIMELINE_WIDTH)}px`;
     item.style.top = `${Number(clip.lane ?? 0) * AUDIO_LANE_HEIGHT + 4}px`;
     item.style.width = `${Math.max(12, secondsToPixels(clip.end_time - clip.start_time, timeline, TIMELINE_WIDTH))}px`;
-    item.textContent = clip.name || "Audio";
+    const clipLabel = el("div", "htd-audio-label");
+    clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
+    item.append(clipLabel);
+    if (shouldShowWaveform(timeline)) item.append(renderWaveform(timeline, clip));
     item.title = "Audio";
     item.addEventListener("pointerdown", (event) => {
       event.stopPropagation();
@@ -166,16 +183,63 @@ export class TimelineRenderer {
   renderInspector(timeline) {
     const inspector = el("div", "htd-inspector");
     const selected = timeline.director_track.sections.find((section) => section.item_id === timeline.ui_state.selected_item_id);
-    if (!selected) return inspector;
-    const input = el("input", "htd-prompt");
-    input.value = selected.prompt ?? "";
-    input.placeholder = "Prompt";
-    input.addEventListener("input", () => {
-      selected.prompt = input.value;
-      this.controller.scheduleDebouncedCommit("prompt typing");
-    });
-    inspector.append(input);
+    const selectedAudio = findAudioClip(timeline, timeline.ui_state.selected_item_id);
+    if (!selected && !selectedAudio) return inspector;
+
+    if (selected?.type === ASSET_TYPE_IMAGE) {
+      inspector.append(this.renderMediaControls(timeline, selected, ASSET_TYPE_IMAGE, selected.image));
+    } else if (selected?.type === ASSET_TYPE_VIDEO) {
+      inspector.append(this.renderMediaControls(timeline, selected, ASSET_TYPE_VIDEO, selected.video));
+    } else if (selectedAudio) {
+      inspector.append(this.renderMediaControls(timeline, selectedAudio, ASSET_TYPE_AUDIO, selectedAudio.audio));
+    }
+
+    if (selected && "prompt" in selected && !timeline.project.privacy.hide_text_prompts) {
+      const input = el("input", "htd-prompt");
+      input.value = selected.prompt ?? "";
+      input.placeholder = "Prompt";
+      input.addEventListener("input", () => {
+        selected.prompt = input.value;
+        this.controller.scheduleDebouncedCommit("prompt typing");
+      });
+      inspector.append(input);
+    }
     return inspector;
+  }
+
+  renderMediaControls(timeline, item, assetType, reference) {
+    const controls = el("div", "htd-media-controls");
+    const pathInput = el("input", "htd-media-path");
+    pathInput.value = resolveMediaReference(timeline, reference)?.path ?? "";
+    pathInput.placeholder = `${assetType} file path`;
+
+    const fileInput = el("input", "htd-file-input");
+    fileInput.type = "file";
+    fileInput.accept = acceptForAssetType(assetType);
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      this.commitMutation((timelineState) => {
+        attachMediaAsset(timelineState, item.item_id, createBrowserFileAsset(file, assetType));
+      }, "replace media");
+    });
+
+    controls.append(
+      pathInput,
+      button("Attach", `Attach ${assetType}`, () => {
+        const path = pathInput.value.trim();
+        if (!path) return;
+        this.commitMutation((timelineState) => {
+          attachMediaAsset(timelineState, item.item_id, createFilePathAsset(assetType, path));
+        }, "replace media");
+      }),
+      button("Choose", `Choose ${assetType}`, () => fileInput.click()),
+      button("Clear", `Clear ${assetType}`, () => {
+        this.commitMutation((timelineState) => clearMediaReference(timelineState, item.item_id), "replace media");
+      }),
+      fileInput,
+    );
+    return controls;
   }
 
   startSectionDrag(event, section, mode) {
@@ -261,9 +325,45 @@ function computeGaps(timeline) {
   return gaps;
 }
 
+function findAudioClip(timeline, itemId) {
+  if (!itemId) return null;
+  for (const track of timeline.audio_tracks) {
+    const clip = track.clips.find((candidate) => candidate.item_id === itemId);
+    if (clip) return clip;
+  }
+  return null;
+}
+
+function shouldShowWaveform(timeline) {
+  return Boolean(
+    timeline.project.display.show_audio_waveforms &&
+    !timeline.project.privacy.mode &&
+    !timeline.project.privacy.hide_media_previews,
+  );
+}
+
+function renderWaveform(timeline, clip) {
+  const waveform = el("div", "htd-waveform");
+  const asset = resolveMediaReference(timeline, clip.audio);
+  const bars = createWaveformBars(asset?.asset_id ?? asset?.path ?? clip.item_id);
+  for (const value of bars) {
+    const bar = el("span", "htd-waveform-bar");
+    bar.style.height = `${Math.round(value * 100)}%`;
+    waveform.append(bar);
+  }
+  return waveform;
+}
+
 function sectionLabel(section) {
   if (section.type === "Text") return section.prompt || "Text";
   return section.type;
+}
+
+function acceptForAssetType(assetType) {
+  if (assetType === ASSET_TYPE_IMAGE) return "image/*";
+  if (assetType === ASSET_TYPE_VIDEO) return "video/*";
+  if (assetType === ASSET_TYPE_AUDIO) return "audio/*";
+  return "";
 }
 
 function button(text, title, onClick) {
@@ -295,7 +395,7 @@ function installStyles(documentRef) {
     .helto-timeline-director { height: ${TIMELINE_WIDGET_HEIGHT}px; overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
     .htd-root { height: 100%; display: flex; flex-direction: column; gap: 6px; }
     .htd-toolbar { display: flex; gap: 4px; align-items: center; min-height: 28px; }
-    .htd-button { width: 28px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; cursor: pointer; }
+    .htd-button { min-width: 28px; height: 24px; padding: 0 7px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; cursor: pointer; white-space: nowrap; }
     .htd-viewport { overflow-x: auto; overflow-y: hidden; border: 1px solid #3d4658; border-radius: 4px; background: #111722; height: 245px; }
     .htd-stage { position: relative; min-height: 100%; }
     .htd-ruler { position: relative; border-bottom: 1px solid #31394a; }
@@ -310,13 +410,19 @@ function installStyles(documentRef) {
     .htd-image { background: #4f7b52; }
     .htd-video { background: #7a5b35; }
     .htd-audio-track { min-height: ${AUDIO_LANE_HEIGHT}px; }
-    .htd-audio-clip { padding: 6px 8px; background: #6c4a8f; border: 1px solid rgba(255,255,255,0.25); }
+    .htd-audio-clip { padding: 4px 6px; background: #6c4a8f; border: 1px solid rgba(255,255,255,0.25); display: flex; flex-direction: column; gap: 3px; }
+    .htd-audio-label { overflow: hidden; text-overflow: ellipsis; }
+    .htd-waveform { height: 12px; display: flex; align-items: center; gap: 1px; opacity: 0.88; }
+    .htd-waveform-bar { flex: 1 1 1px; min-width: 1px; background: rgba(255,255,255,0.72); border-radius: 1px; }
     .htd-handle { position: absolute; top: 0; bottom: 0; cursor: ew-resize; background: rgba(255,255,255,0.16); }
     .htd-left { left: 0; }
     .htd-right { right: 0; }
     .is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }
-    .htd-inspector { min-height: 34px; display: flex; align-items: center; }
-    .htd-prompt { width: 100%; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
+    .htd-inspector { min-height: 34px; display: flex; align-items: center; gap: 5px; }
+    .htd-prompt { min-width: 100px; flex: 1 1 auto; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
+    .htd-media-controls { display: flex; gap: 4px; min-width: 0; flex: 1 1 auto; }
+    .htd-media-path { min-width: 120px; flex: 1 1 auto; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
+    .htd-file-input { display: none; }
   `;
   documentRef.head.append(style);
 }

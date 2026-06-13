@@ -2,8 +2,11 @@ import {
   SECTION_TYPE_IMAGE,
   SECTION_TYPE_TEXT,
   SECTION_TYPE_VIDEO,
+  ASSET_TYPES,
+  ASSET_SOURCE_KINDS,
 } from "./schema.js";
 import { normalizeVideoTimeline } from "./migration.js";
+import { containsEmbeddedMedia } from "./media.js";
 
 export function createValidationEntry(code, severity, source, scope, itemId, message, hint = "", details = {}) {
   return {
@@ -38,6 +41,8 @@ export function validateVideoTimeline(timeline) {
   const normalized = normalizeVideoTimeline(timeline);
   const entries = [];
   const duration = asNumber(normalized.project.duration_seconds);
+  const assetsById = new Map(normalized.assets.map((asset) => [asset.asset_id, asset]));
+  entries.push(...validateAssets(normalized.assets));
   const sections = [...normalized.director_track.sections].sort(
     (a, b) => (asNumber(a.start_time) ?? 0) - (asNumber(b.start_time) ?? 0),
   );
@@ -100,6 +105,8 @@ export function validateVideoTimeline(timeline) {
         "Image Section requires an image.",
         "Choose an image or remove the Image Section.",
       ));
+    } else if (section.type === SECTION_TYPE_IMAGE) {
+      entries.push(...validateMediaReference(section.image, assetsById, "Section", section.item_id, "IMAGE_SECTION_MEDIA"));
     } else if (section.type === SECTION_TYPE_VIDEO && !hasMediaReference(section.video)) {
       entries.push(createValidationEntry(
         "VIDEO_SECTION_MISSING_VIDEO",
@@ -110,6 +117,55 @@ export function validateVideoTimeline(timeline) {
         "Video Section requires a video.",
         "Choose a video or remove the Video Section.",
       ));
+    } else if (section.type === SECTION_TYPE_VIDEO) {
+      entries.push(...validateMediaReference(section.video, assetsById, "Section", section.item_id, "VIDEO_SECTION_MEDIA"));
+    }
+  }
+
+  for (const track of normalized.audio_tracks) {
+    const lanes = new Map();
+    for (const clip of track.clips) {
+      const start = asNumber(clip.start_time);
+      const end = asNumber(clip.end_time);
+      if (start == null || end == null || end <= start) {
+        entries.push(createValidationEntry(
+          "AUDIO_CLIP_INVALID_TIME_RANGE",
+          "Error",
+          "Director",
+          "AudioClip",
+          clip.item_id,
+          "Audio Clip requires a valid start_time and end_time.",
+          "Set end_time greater than start_time.",
+        ));
+      } else if (duration != null && (start < 0 || end > duration)) {
+        entries.push(createValidationEntry(
+          "AUDIO_CLIP_OUTSIDE_PROJECT_DURATION",
+          "Error",
+          "Director",
+          "AudioClip",
+          clip.item_id,
+          "Audio Clip must stay within Project Duration.",
+          "Move or trim the clip inside the project boundary.",
+        ));
+      }
+      if (!hasMediaReference(clip.audio)) {
+        entries.push(createValidationEntry(
+          "AUDIO_CLIP_MISSING_AUDIO",
+          "Error",
+          "Director",
+          "AudioClip",
+          clip.item_id,
+          "Audio Clip requires audio.",
+          "Choose audio or remove the clip.",
+        ));
+      } else {
+        entries.push(...validateMediaReference(clip.audio, assetsById, "AudioClip", clip.item_id, "AUDIO_CLIP_MEDIA"));
+      }
+      const lane = Number(clip.lane ?? 0);
+      lanes.set(lane, [...(lanes.get(lane) ?? []), clip]);
+    }
+    for (const [lane, clips] of lanes.entries()) {
+      entries.push(...validateAudioLane(track.track_id, lane, clips));
     }
   }
 
@@ -127,6 +183,116 @@ export function validateVideoTimeline(timeline) {
   }
 
   return createValidationResult(entries);
+}
+
+function validateAssets(assets) {
+  const entries = [];
+  const seen = new Set();
+  for (const asset of assets) {
+    if (seen.has(asset.asset_id)) {
+      entries.push(createValidationEntry(
+        "ASSET_DUPLICATE_ID",
+        "Error",
+        "Director",
+        "Asset",
+        asset.asset_id,
+        "Asset IDs must be unique.",
+        "Replace or remove the duplicate asset record.",
+      ));
+    }
+    seen.add(asset.asset_id);
+    if (!ASSET_TYPES.includes(asset.type)) {
+      entries.push(createValidationEntry(
+        "ASSET_UNSUPPORTED_TYPE",
+        "Error",
+        "Director",
+        "Asset",
+        asset.asset_id,
+        "Asset type is not supported.",
+        "Use Image, Video, or Audio.",
+        { type: asset.type },
+      ));
+    }
+    if (!ASSET_SOURCE_KINDS.includes(asset.source_kind)) {
+      entries.push(createValidationEntry(
+        "ASSET_UNSUPPORTED_SOURCE_KIND",
+        "Error",
+        "Director",
+        "Asset",
+        asset.asset_id,
+        "Asset source kind is not supported.",
+        "Use FilePath, UploadedFile, Generated, or ComfyUIInput.",
+        { source_kind: asset.source_kind },
+      ));
+    }
+    if (containsEmbeddedMedia(asset)) {
+      entries.push(createValidationEntry(
+        "ASSET_EMBEDDED_MEDIA_NOT_ALLOWED",
+        "Error",
+        "Director",
+        "Asset",
+        asset.asset_id,
+        "Assets must not embed media, thumbnails, or waveform data in workflow JSON.",
+        "Store only a file/source reference and regenerate previews from cache.",
+      ));
+    }
+  }
+  return entries;
+}
+
+function validateMediaReference(reference, assetsById, scope, itemId, codePrefix) {
+  if (containsEmbeddedMedia(reference)) {
+    return [createValidationEntry(
+      `${codePrefix}_EMBEDDED_MEDIA_NOT_ALLOWED`,
+      "Error",
+      "Director",
+      scope,
+      itemId,
+      "Media references must not embed media, thumbnails, or waveform data in workflow JSON.",
+      "Reference an asset_id or file path instead.",
+    )];
+  }
+  if (reference && typeof reference === "object" && reference.asset_id && !assetsById.has(reference.asset_id)) {
+    return [createValidationEntry(
+      `${codePrefix}_ASSET_NOT_FOUND`,
+      "Error",
+      "Director",
+      scope,
+      itemId,
+      "Media reference points to a missing asset record.",
+      "Choose the media again or remove the stale reference.",
+      { asset_id: reference.asset_id },
+    )];
+  }
+  return [];
+}
+
+function validateAudioLane(trackId, lane, clips) {
+  const entries = [];
+  const sorted = [...clips].sort((a, b) => (asNumber(a.start_time) ?? 0) - (asNumber(b.start_time) ?? 0));
+  let previousEnd = null;
+  let previousId = null;
+  for (const clip of sorted) {
+    const start = asNumber(clip.start_time);
+    const end = asNumber(clip.end_time);
+    if (previousEnd != null && start != null && start < previousEnd) {
+      entries.push(createValidationEntry(
+        "AUDIO_CLIP_LANE_OVERLAP",
+        "Error",
+        "Director",
+        "AudioClip",
+        clip.item_id,
+        "Audio Clips cannot overlap within the same lane.",
+        "Move one clip to another lane or trim the overlap.",
+        { track_id: trackId, lane, previous_item_id: previousId },
+      ));
+    }
+    if (end != null && (previousEnd == null || end > previousEnd)) {
+      previousEnd = end;
+      previousId = clip.item_id;
+    }
+  }
+  return entries;
 }
 
 export function detectDirectorGaps(timeline) {

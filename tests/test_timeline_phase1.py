@@ -1,6 +1,8 @@
 import json
 
 from shared.contracts.video_timeline import (
+    ASSET_SOURCE_FILE_PATH,
+    ASSET_TYPE_IMAGE,
     GLOBAL_PROMPT_POSITION_SUFFIX,
     SCHEMA_VERSION,
     SECTION_TYPE_IMAGE,
@@ -69,6 +71,24 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
     assert section["guide_strength"] == 1.0
 
 
+def test_normalization_fills_asset_defaults():
+    timeline = create_default_video_timeline()
+    timeline["assets"].append(
+        {
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/reference.png",
+        }
+    )
+
+    normalized = normalize_video_timeline(timeline)
+    asset = normalized["assets"][0]
+
+    assert asset["asset_id"] == "asset_001"
+    assert asset["name"] == "reference.png"
+    assert asset["metadata"] == {}
+
+
 def test_text_section_empty_prompt_gives_error():
     timeline = create_default_video_timeline()
     timeline["director_track"]["sections"].append(
@@ -106,6 +126,75 @@ def test_image_section_missing_image_gives_error():
     assert validation["is_valid"] is False
     assert "IMAGE_SECTION_MISSING_IMAGE" in [
         entry["code"] for entry in validation["errors"]
+    ]
+
+
+def test_media_reference_to_asset_validates():
+    timeline = create_default_video_timeline()
+    timeline["assets"].append(
+        {
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/reference.png",
+            "name": "reference.png",
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_IMAGE,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "image": {"asset_id": "image_001"},
+            "prompt": "",
+        }
+    )
+
+    validation = validate_video_timeline(timeline)
+
+    assert validation["is_valid"] is True
+    assert validation["errors"] == []
+
+
+def test_missing_asset_reference_gives_error():
+    timeline = create_default_video_timeline()
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_IMAGE,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "image": {"asset_id": "missing_asset"},
+            "prompt": "",
+        }
+    )
+
+    validation = validate_video_timeline(timeline)
+
+    assert validation["is_valid"] is False
+    assert [entry["code"] for entry in validation["errors"]] == [
+        "IMAGE_SECTION_MEDIA_ASSET_NOT_FOUND"
+    ]
+
+
+def test_embedded_media_payload_gives_error():
+    timeline = create_default_video_timeline()
+    timeline["assets"].append(
+        {
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/reference.png",
+            "waveform": [0.1, 0.2],
+        }
+    )
+
+    validation = validate_video_timeline(timeline)
+
+    assert validation["is_valid"] is False
+    assert [entry["code"] for entry in validation["errors"]] == [
+        "ASSET_EMBEDDED_MEDIA_NOT_ALLOWED"
     ]
 
 
