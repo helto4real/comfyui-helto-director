@@ -31,6 +31,7 @@ import {
   clampTimelineViewRange,
   durationToPixels,
   getProjectWholeSeconds,
+  getPixelsPerSecond,
   getTimelineViewportHeight,
   getTimelineViewRange,
   getTimelineWidth,
@@ -486,41 +487,40 @@ export class TimelineRenderer {
   }
 
   startSectionDrag(event, section, mode) {
-    event.preventDefault();
-    event.stopPropagation();
-    const target = event.currentTarget.closest(".htd-item");
-    target?.setPointerCapture?.(event.pointerId);
-    this.commitMutation((timeline) => selectItem(timeline, section.item_id), "select", { pushUndo: false });
-    this.controller.beginTimelineGesture();
-    this.drag = {
+    this.startItemDrag(event, {
       itemId: section.item_id,
       mode,
-      startX: event.clientX,
       startStart: section.start_time,
       startEnd: section.end_time,
-    };
-    target?.addEventListener("pointermove", this.onPointerMove);
-    target?.addEventListener("pointerup", this.onPointerUp);
-    target?.addEventListener("pointercancel", this.onPointerUp);
+    });
   }
 
   startAudioDrag(event, clip, mode) {
+    this.startItemDrag(event, {
+      itemId: clip.item_id,
+      mode,
+      startStart: clip.start_time,
+      startEnd: clip.end_time,
+    });
+  }
+
+  startItemDrag(event, dragState) {
     event.preventDefault();
     event.stopPropagation();
     const target = event.currentTarget.closest(".htd-item");
     target?.setPointerCapture?.(event.pointerId);
-    this.commitMutation((timeline) => selectItem(timeline, clip.item_id), "select", { pushUndo: false });
+    this.commitMutation((timeline) => selectItem(timeline, dragState.itemId), "select", { pushUndo: false, rerender: false });
     this.controller.beginTimelineGesture();
+    const moveTarget = target?.ownerDocument ?? this.container.ownerDocument ?? globalThis.document;
     this.drag = {
-      itemId: clip.item_id,
-      mode,
+      ...dragState,
       startX: event.clientX,
-      startStart: clip.start_time,
-      startEnd: clip.end_time,
+      moveTarget,
+      captureTarget: target,
     };
-    target?.addEventListener("pointermove", this.onPointerMove);
-    target?.addEventListener("pointerup", this.onPointerUp);
-    target?.addEventListener("pointercancel", this.onPointerUp);
+    moveTarget?.addEventListener("pointermove", this.onPointerMove);
+    moveTarget?.addEventListener("pointerup", this.onPointerUp);
+    moveTarget?.addEventListener("pointercancel", this.onPointerUp);
   }
 
   startRangeDrag(event, mode, bar) {
@@ -529,7 +529,7 @@ export class TimelineRenderer {
     event.currentTarget?.setPointerCapture?.(event.pointerId);
     this.controller.beginTimelineGesture();
     const moveTarget = bar?.ownerDocument ?? this.container.ownerDocument ?? globalThis.document;
-    this.drag = { mode, bar, moveTarget };
+    this.drag = { mode, bar, moveTarget, captureTarget: event.currentTarget };
     moveTarget?.addEventListener("pointermove", this.onPointerMove);
     moveTarget?.addEventListener("pointerup", this.onPointerUp);
     moveTarget?.addEventListener("pointercancel", this.onPointerUp);
@@ -544,9 +544,8 @@ export class TimelineRenderer {
       this.drag.bar = this.container.querySelector(".htd-range-bar") ?? this.drag.bar;
       return;
     }
-    const deltaSeconds = timeFromClientX(event.clientX, event.currentTarget.parentElement, this.controller.timeline, this.viewportWidth)
-      - timeFromClientX(this.drag.startX, event.currentTarget.parentElement, this.controller.timeline, this.viewportWidth);
     const timeline = this.controller.timeline;
+    const deltaSeconds = (Number(event.clientX) - Number(this.drag.startX)) / getPixelsPerSecond(timeline, this.viewportWidth);
     if (this.drag.mode === "move") {
       moveSection(timeline, this.drag.itemId, this.drag.startStart + deltaSeconds);
     } else if (this.drag.mode === "start") {
@@ -564,19 +563,12 @@ export class TimelineRenderer {
   };
 
   onPointerUp = (event) => {
-    if (this.drag?.mode === "range-start" || this.drag?.mode === "range-end") {
-      const moveTarget = this.drag.moveTarget;
-      moveTarget?.removeEventListener("pointermove", this.onPointerMove);
-      moveTarget?.removeEventListener("pointerup", this.onPointerUp);
-      moveTarget?.removeEventListener("pointercancel", this.onPointerUp);
-      this.drag = null;
-      this.controller.endTimelineGesture("drag end");
-      return;
-    }
-    event.currentTarget?.releasePointerCapture?.(event.pointerId);
-    event.currentTarget?.removeEventListener("pointermove", this.onPointerMove);
-    event.currentTarget?.removeEventListener("pointerup", this.onPointerUp);
-    event.currentTarget?.removeEventListener("pointercancel", this.onPointerUp);
+    const moveTarget = this.drag?.moveTarget;
+    const captureTarget = this.drag?.captureTarget;
+    captureTarget?.releasePointerCapture?.(event.pointerId);
+    moveTarget?.removeEventListener("pointermove", this.onPointerMove);
+    moveTarget?.removeEventListener("pointerup", this.onPointerUp);
+    moveTarget?.removeEventListener("pointercancel", this.onPointerUp);
     this.drag = null;
     this.controller.endTimelineGesture("drag end");
   };
@@ -981,6 +973,7 @@ function installStyles(documentRef) {
     .htd-track { position: relative; border-bottom: 1px solid #273043; }
     .htd-track-label { position: sticky; left: 0; z-index: 5; width: ${TIMELINE_RIGHT_PADDING}px; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(17, 23, 34, 0.92); color: #9ba8bd; }
     .htd-item, .htd-gap { position: absolute; top: 5px; height: calc(100% - 10px); border-radius: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; box-sizing: border-box; }
+    .htd-item { touch-action: none; user-select: none; }
     .htd-gap { border: 1px dashed #3d4658; background: rgba(80, 88, 105, 0.16); }
     .htd-section { padding: 0; border: 1px solid rgba(255,255,255,0.28); cursor: grab; }
     .htd-section-label { position: absolute; z-index: 3; top: 8px; left: 10px; right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,0.82); pointer-events: none; }
@@ -995,7 +988,7 @@ function installStyles(documentRef) {
     .htd-audio-label { overflow: hidden; text-overflow: ellipsis; }
     .htd-waveform { height: 12px; display: flex; align-items: center; gap: 1px; opacity: 0.88; }
     .htd-waveform-bar { flex: 1 1 1px; min-width: 1px; background: rgba(255,255,255,0.72); border-radius: 1px; }
-    .htd-handle { position: absolute; z-index: 4; top: 0; bottom: 0; cursor: ew-resize; background: rgba(255,255,255,0.16); }
+    .htd-handle { position: absolute; z-index: 4; top: 0; bottom: 0; cursor: ew-resize; background: rgba(255,255,255,0.16); touch-action: none; user-select: none; }
     .htd-left { left: 0; }
     .htd-right { right: 0; }
     .is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }

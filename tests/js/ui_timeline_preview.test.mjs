@@ -56,8 +56,14 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("scheduleViewportRemeasure"), true);
   assert.equal(rendererSource.includes("ResizeObserver"), true);
   assert.equal(rendererSource.includes("contentRect?.width"), true);
+  assert.equal(rendererSource.includes("startItemDrag(event"), true);
+  assert.equal(rendererSource.includes("selectItem(timeline, dragState.itemId)"), true);
+  assert.equal(rendererSource.includes("rerender: false"), true);
+  assert.equal(rendererSource.includes("getPixelsPerSecond(timeline, this.viewportWidth)"), true);
   assert.equal(rendererSource.includes("moveTarget?.addEventListener(\"pointermove\", this.onPointerMove)"), true);
   assert.equal(rendererSource.includes("moveTarget?.removeEventListener(\"pointermove\", this.onPointerMove)"), true);
+  assert.equal(rendererSource.includes("captureTarget?.releasePointerCapture"), true);
+  assert.equal(rendererSource.includes("event.currentTarget.parentElement"), false);
   assert.equal(rendererSource.includes("this.drag.bar = this.container.querySelector(\".htd-range-bar\")"), true);
   assert.equal(rendererSource.includes('trackLabel("director", "Director")'), true);
   assert.equal(rendererSource.includes('trackLabel("audio", "Audio")'), true);
@@ -65,6 +71,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("htd-section-preview"), true);
   assert.equal(rendererSource.includes("renderSectionPreview"), true);
   assert.equal(rendererSource.includes("object-fit: contain"), true);
+  assert.equal(rendererSource.includes("touch-action: none"), true);
+  assert.equal(rendererSource.includes("user-select: none"), true);
 }
 
 testTimelineHeightIsTripled();
