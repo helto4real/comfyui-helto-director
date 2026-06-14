@@ -26,6 +26,9 @@ LTXTimelineConfig = importlib.import_module(
 LTXTimelinePlanner = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_planner.node"
 ).LTXTimelinePlanner
+LTXTimelineRuntime = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.ltx_timeline_runtime.node"
+).LTXTimelineRuntime
 register_media_cache_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.media_cache"
 ).register_media_cache_routes
@@ -44,12 +47,14 @@ NODE_CLASS_MAPPINGS = {
     "HeltoVideoTimelineDirector": VideoTimelineDirector,
     "HeltoLTX23TimelineConfig": LTXTimelineConfig,
     "HeltoLTX23TimelinePlanner": LTXTimelinePlanner,
+    "HeltoLTX23TimelineRuntime": LTXTimelineRuntime,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoVideoTimelineDirector": "Video Timeline Director",
     "HeltoLTX23TimelineConfig": "LTX 2.3 Timeline Config",
     "HeltoLTX23TimelinePlanner": "LTX 2.3 Timeline Planner",
+    "HeltoLTX23TimelineRuntime": "LTX 2.3 Timeline Runtime",
 }
 
 
@@ -60,6 +65,7 @@ class TimelineDirectorExtension(ComfyExtension):
             VideoTimelineDirector,
             LTXTimelineConfig,
             LTXTimelinePlanner,
+            LTXTimelineRuntime,
         ]
 
 

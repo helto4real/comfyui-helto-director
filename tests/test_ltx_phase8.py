@@ -50,6 +50,7 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
         "HeltoVideoTimelineDirector",
         "HeltoLTX23TimelineConfig",
         "HeltoLTX23TimelinePlanner",
+        "HeltoLTX23TimelineRuntime",
     ]
 
     planner_schema = node_classes[2].define_schema()
