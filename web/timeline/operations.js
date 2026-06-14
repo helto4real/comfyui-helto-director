@@ -100,17 +100,101 @@ export function moveSection(timeline, itemId, startTime) {
 export function resizeSection(timeline, itemId, edge, time) {
   const section = findSection(timeline, itemId);
   if (!section) return false;
+  if (timeline.ui_state.section_edit_mode === "Ripple Edit") {
+    return rippleResizeSection(timeline, section, edge, time);
+  }
+  return trimResizeSection(timeline, section, edge, time);
+}
+
+export function moveAudioClip(timeline, itemId, startTime) {
+  const match = findAudioClipWithTrack(timeline, itemId);
+  if (!match || match.clip.locked) return false;
+  const { clip } = match;
+  const duration = clip.end_time - clip.start_time;
+  const start = clamp(snapTime(startTime, timeline), 0, Math.max(0, getDuration(timeline) - duration));
+  clip.start_time = start;
+  clip.end_time = start + duration;
+  autoStackAudioLanes(timeline);
+  return true;
+}
+
+export function resizeAudioClip(timeline, itemId, edge, time) {
+  const match = findAudioClipWithTrack(timeline, itemId);
+  if (!match || match.clip.locked) return false;
+  const { clip } = match;
+  const minDuration = getMinimumSectionDuration(timeline);
+  const snapped = snapTime(time, timeline);
+  const oldStart = Number(clip.start_time);
+  const oldEnd = Number(clip.end_time);
+  const sourceIn = Number(clip.source_in ?? 0);
+
+  if (edge === "start") {
+    const nextStart = clamp(snapped, 0, oldEnd - minDuration);
+    clip.start_time = nextStart;
+    clip.source_in = Math.max(0, sourceIn + (nextStart - oldStart));
+  } else {
+    const nextEnd = clamp(snapped, oldStart + minDuration, getDuration(timeline));
+    const sourceOut = clip.source_out == null ? sourceIn + (oldEnd - oldStart) : Number(clip.source_out);
+    clip.end_time = nextEnd;
+    clip.source_out = Math.max(clip.source_in ?? 0, sourceOut + (nextEnd - oldEnd));
+  }
+  autoStackAudioLanes(timeline);
+  return true;
+}
+
+function trimResizeSection(timeline, section, edge, time) {
   const minDuration = getMinimumSectionDuration(timeline);
   const neighbors = getSectionNeighbors(timeline, section);
   const snapped = snapTime(time, timeline);
 
   if (edge === "start") {
+    const touchesPrevious = neighbors.previous && Math.abs(Number(section.start_time) - Number(neighbors.previous.end_time)) < 0.000001;
+    if (touchesPrevious || (neighbors.previous && snapped < neighbors.previous.end_time)) {
+      const start = clamp(snapped, neighbors.previous.start_time + minDuration, section.end_time - minDuration);
+      neighbors.previous.end_time = start;
+      section.start_time = start;
+    } else {
+      const minStart = neighbors.previous ? neighbors.previous.end_time : 0;
+      section.start_time = clamp(snapped, minStart, section.end_time - minDuration);
+    }
+  } else {
+    const touchesNext = neighbors.next && Math.abs(Number(section.end_time) - Number(neighbors.next.start_time)) < 0.000001;
+    if (touchesNext || (neighbors.next && snapped > neighbors.next.start_time)) {
+      const end = clamp(snapped, section.start_time + minDuration, neighbors.next.end_time - minDuration);
+      section.end_time = end;
+      neighbors.next.start_time = end;
+    } else {
+      const maxEnd = neighbors.next ? neighbors.next.start_time : getDuration(timeline);
+      section.end_time = clamp(snapped, section.start_time + minDuration, maxEnd);
+    }
+  }
+  sortDirectorSections(timeline);
+  return true;
+}
+
+function rippleResizeSection(timeline, section, edge, time) {
+  const minDuration = getMinimumSectionDuration(timeline);
+  const snapped = snapTime(time, timeline);
+  if (edge === "start") {
+    const neighbors = getSectionNeighbors(timeline, section);
     const minStart = neighbors.previous ? neighbors.previous.end_time : 0;
     section.start_time = clamp(snapped, minStart, section.end_time - minDuration);
-  } else {
-    const maxEnd = neighbors.next ? neighbors.next.start_time : getDuration(timeline);
-    section.end_time = clamp(snapped, section.start_time + minDuration, maxEnd);
+    sortDirectorSections(timeline);
+    return true;
   }
+
+  const oldEnd = Number(section.end_time);
+  const requestedEnd = Math.max(Number(section.start_time) + minDuration, snapped);
+  const following = getFollowingSections(timeline, section);
+  const lastEnd = following.length ? Number(following.at(-1).end_time) : oldEnd;
+  const maxDelta = getDuration(timeline) - lastEnd;
+  const delta = clamp(requestedEnd - oldEnd, -Math.max(0, oldEnd - Number(section.start_time) - minDuration), maxDelta);
+  section.end_time = oldEnd + delta;
+  for (const candidate of following) {
+    candidate.start_time += delta;
+    candidate.end_time += delta;
+  }
+  sortDirectorSections(timeline);
   return true;
 }
 
@@ -242,6 +326,20 @@ function getSectionNeighbors(timeline, section) {
     previous: index > 0 ? sections[index - 1] : null,
     next: index >= 0 && index < sections.length - 1 ? sections[index + 1] : null,
   };
+}
+
+function getFollowingSections(timeline, section) {
+  return [...timeline.director_track.sections]
+    .sort((a, b) => a.start_time - b.start_time)
+    .filter((candidate) => candidate.item_id !== section.item_id && candidate.start_time >= section.end_time);
+}
+
+function findAudioClipWithTrack(timeline, itemId) {
+  for (const track of timeline.audio_tracks) {
+    const clip = track.clips.find((candidate) => candidate.item_id === itemId);
+    if (clip) return { track, clip };
+  }
+  return null;
 }
 
 function cleanupAudioTracks(timeline) {

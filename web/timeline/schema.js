@@ -4,6 +4,11 @@ export const VIDEO_TIMELINE_TYPE = "VIDEO_TIMELINE";
 export const SECTION_TYPE_IMAGE = "Image";
 export const SECTION_TYPE_TEXT = "Text";
 export const SECTION_TYPE_VIDEO = "Video";
+export const SECTION_TYPES = [
+  SECTION_TYPE_IMAGE,
+  SECTION_TYPE_TEXT,
+  SECTION_TYPE_VIDEO,
+];
 
 export const ASSET_TYPE_IMAGE = "Image";
 export const ASSET_TYPE_VIDEO = "Video";
@@ -26,6 +31,47 @@ export const ASSET_SOURCE_KINDS = [
 ];
 
 export const CROP_MODE_PROJECT_DEFAULT = "Project Default";
+export const CROP_MODES = [
+  CROP_MODE_PROJECT_DEFAULT,
+  "Crop",
+  "Pad",
+  "Stretch to Fit",
+  "Keep Aspect Ratio",
+];
+
+export const VIDEO_TIMING_MODES = [
+  "Fit to Section",
+  "Use Source Timing",
+  "Loop",
+  "Freeze Last Frame",
+];
+
+export const TIMELINE_DISPLAY_MODES = [
+  "Sections",
+  "Media",
+  "Prompts",
+];
+
+export const SECTION_EDIT_MODES = [
+  "Trim Neighbor",
+  "Ripple Edit",
+];
+
+export const SNAP_MODES = [
+  "None",
+  "Seconds",
+  "Frames",
+];
+
+export const GLOBAL_PROMPT_POSITIONS = [
+  "Prefix",
+  "Suffix",
+];
+
+export const AUDIO_NORMALIZATION_MODES = [
+  "Integrated LUFS",
+  "Peak",
+];
 export const QUALITY_PRESETS = [
   "Quick Draft",
   "Draft",

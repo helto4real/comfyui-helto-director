@@ -29,8 +29,12 @@ LTXTimelinePlanner = importlib.import_module(
 register_media_cache_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.media_cache"
 ).register_media_cache_routes
+register_media_browser_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.media_browser"
+).register_media_browser_routes
 
 register_media_cache_routes()
+register_media_browser_routes()
 
 
 WEB_DIRECTORY = "./web"
@@ -68,5 +72,6 @@ __all__ = [
     "NODE_DISPLAY_NAME_MAPPINGS",
     "WEB_DIRECTORY",
     "comfy_entrypoint",
+    "register_media_browser_routes",
     "register_media_cache_routes",
 ]

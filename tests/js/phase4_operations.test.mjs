@@ -5,7 +5,9 @@ import {
   addSection,
   autoStackAudioLanes,
   duplicateSelectedSection,
+  moveAudioClip,
   moveSection,
+  resizeAudioClip,
   resizeSection,
   splitSelectedSection,
 } from "../../web/timeline/operations.js";
@@ -76,10 +78,53 @@ function testAudioAutoLanes() {
   assert.deepEqual(lanes, [0, 0, 1]);
 }
 
+function testRippleResizeMovesFollowingSections() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+  timeline.ui_state.section_edit_mode = "Ripple Edit";
+  const first = addSection(timeline, "Text", 0);
+  const second = addSection(timeline, "Text", 1);
+  const third = addSection(timeline, "Text", 2.5);
+
+  resizeSection(timeline, first.item_id, "end", 1.5);
+
+  assert.equal(first.end_time, 1.5);
+  assert.equal(second.start_time, 1.5);
+  assert.equal(second.end_time, 2.5);
+  assert.equal(third.start_time, 3);
+  assert.equal(third.end_time, 4);
+  assert.equal(validateVideoTimeline(timeline).is_valid, true);
+}
+
+function testAudioMoveAndResizeKeepSourceTrim() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 6;
+  timeline.ui_state.snap_mode = "None";
+  const clip = addAudioClip(timeline, 0, 2);
+  clip.audio = "/tmp/audio.wav";
+
+  moveAudioClip(timeline, clip.item_id, 1);
+  assert.equal(clip.start_time, 1);
+  assert.equal(clip.end_time, 3);
+  assert.equal(clip.source_in, 0);
+  assert.equal(clip.source_out, null);
+
+  resizeAudioClip(timeline, clip.item_id, "start", 1.5);
+  assert.equal(clip.start_time, 1.5);
+  assert.equal(clip.source_in, 0.5);
+
+  resizeAudioClip(timeline, clip.item_id, "end", 4);
+  assert.equal(clip.end_time, 4);
+  assert.equal(clip.source_out, 3);
+  assert.equal(validateVideoTimeline(timeline).is_valid, true);
+}
+
 testSectionsCannotOverlapWhenMovedOrResized();
 testAddAndDuplicateReturnNullWhenNoGapFits();
 testGapsRemainAllowedAndDetected();
 testSplitAndDuplicate();
 testAudioAutoLanes();
+testRippleResizeMovesFollowingSections();
+testAudioMoveAndResizeKeepSourceTrim();
 
 console.log("phase4 operation tests passed");
