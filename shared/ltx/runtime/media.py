@@ -130,6 +130,7 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
             "label": media.get("asset_id"),
             "kind": "timeline_media",
             "section_type": section_type,
+            "image": tensor,
             "insert_frame": int(section.get("start_frame") or 0),
             "strength": float(media.get("guide_strength") if media.get("guide_strength") is not None else 1.0),
             "hidden_tail": False,

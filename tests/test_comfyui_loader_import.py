@@ -38,6 +38,12 @@ def get_video_timeline_director():
     return asyncio.run(extension.get_node_list())[0]
 
 
+def get_node_list():
+    module = load_nodepack_like_comfyui()
+    extension = asyncio.run(module.comfy_entrypoint())
+    return asyncio.run(extension.get_node_list())
+
+
 def test_comfyui_style_custom_node_loader_imports_package():
     node = get_video_timeline_director()
     schema = node.define_schema()
@@ -47,3 +53,14 @@ def test_comfyui_style_custom_node_loader_imports_package():
         "VIDEO_TIMELINE",
         "TIMELINE_VALIDATION",
     ]
+
+
+def test_comfyui_style_loader_includes_phase10_timeline_identity_nodes():
+    node_ids = [node.define_schema().node_id for node in get_node_list()]
+
+    assert "HeltoLTX23TimelineCropReferenceTail" in node_ids
+    assert "HeltoLTX23TimelineReferenceImageSelector" in node_ids
+    assert "HeltoLTX23TimelineIdentityAnchorLatentAware" in node_ids
+    assert "HeltoLTX23TimelineIdentityAnchorFace" in node_ids
+    assert "HeltoLTX23TimelineIdentityAnchorCombine" in node_ids
+    assert "HeltoLTX23TimelineApplyIdentityAnchor" in node_ids

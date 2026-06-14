@@ -29,6 +29,15 @@ LTXTimelinePlanner = importlib.import_module(
 LTXTimelineRuntime = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_runtime.node"
 ).LTXTimelineRuntime
+_identity_module = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.ltx_timeline_identity.node"
+)
+LTXTimelineCropReferenceTail = _identity_module.LTXTimelineCropReferenceTail
+LTXTimelineReferenceImageSelector = _identity_module.LTXTimelineReferenceImageSelector
+LTXTimelineIdentityAnchorLatentAware = _identity_module.LTXTimelineIdentityAnchorLatentAware
+LTXTimelineIdentityAnchorFace = _identity_module.LTXTimelineIdentityAnchorFace
+LTXTimelineIdentityAnchorCombine = _identity_module.LTXTimelineIdentityAnchorCombine
+LTXTimelineApplyIdentityAnchor = _identity_module.LTXTimelineApplyIdentityAnchor
 register_media_cache_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.media_cache"
 ).register_media_cache_routes
@@ -52,6 +61,12 @@ NODE_CLASS_MAPPINGS = {
     "HeltoLTX23TimelineConfig": LTXTimelineConfig,
     "HeltoLTX23TimelinePlanner": LTXTimelinePlanner,
     "HeltoLTX23TimelineRuntime": LTXTimelineRuntime,
+    "HeltoLTX23TimelineCropReferenceTail": LTXTimelineCropReferenceTail,
+    "HeltoLTX23TimelineReferenceImageSelector": LTXTimelineReferenceImageSelector,
+    "HeltoLTX23TimelineIdentityAnchorLatentAware": LTXTimelineIdentityAnchorLatentAware,
+    "HeltoLTX23TimelineIdentityAnchorFace": LTXTimelineIdentityAnchorFace,
+    "HeltoLTX23TimelineIdentityAnchorCombine": LTXTimelineIdentityAnchorCombine,
+    "HeltoLTX23TimelineApplyIdentityAnchor": LTXTimelineApplyIdentityAnchor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -59,6 +74,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoLTX23TimelineConfig": "LTX 2.3 Timeline Config",
     "HeltoLTX23TimelinePlanner": "LTX 2.3 Timeline Planner",
     "HeltoLTX23TimelineRuntime": "LTX 2.3 Timeline Runtime",
+    "HeltoLTX23TimelineCropReferenceTail": "LTX 2.3 Timeline Crop Reference Tail",
+    "HeltoLTX23TimelineReferenceImageSelector": "LTX 2.3 Timeline Reference Image Selector",
+    "HeltoLTX23TimelineIdentityAnchorLatentAware": "LTX 2.3 Timeline Identity Anchor: Latent Aware",
+    "HeltoLTX23TimelineIdentityAnchorFace": "LTX 2.3 Timeline Identity Anchor: Face",
+    "HeltoLTX23TimelineIdentityAnchorCombine": "LTX 2.3 Timeline Identity Anchor: Combine",
+    "HeltoLTX23TimelineApplyIdentityAnchor": "LTX 2.3 Timeline Apply Identity Anchor",
 }
 
 
@@ -70,6 +91,12 @@ class TimelineDirectorExtension(ComfyExtension):
             LTXTimelineConfig,
             LTXTimelinePlanner,
             LTXTimelineRuntime,
+            LTXTimelineCropReferenceTail,
+            LTXTimelineReferenceImageSelector,
+            LTXTimelineIdentityAnchorLatentAware,
+            LTXTimelineIdentityAnchorFace,
+            LTXTimelineIdentityAnchorCombine,
+            LTXTimelineApplyIdentityAnchor,
         ]
 
 
@@ -82,6 +109,12 @@ __all__ = [
     "NODE_DISPLAY_NAME_MAPPINGS",
     "WEB_DIRECTORY",
     "comfy_entrypoint",
+    "LTXTimelineApplyIdentityAnchor",
+    "LTXTimelineCropReferenceTail",
+    "LTXTimelineIdentityAnchorCombine",
+    "LTXTimelineIdentityAnchorFace",
+    "LTXTimelineIdentityAnchorLatentAware",
+    "LTXTimelineReferenceImageSelector",
     "register_media_browser_routes",
     "register_media_cache_routes",
     "register_prompt_optimizer_routes",

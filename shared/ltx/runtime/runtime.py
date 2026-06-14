@@ -6,6 +6,7 @@ from typing import Any
 import torch
 
 from ..config import LTX_MODEL_FAMILY, LTX_MODEL_VERSION
+from ..identity import apply_identity_anchor
 from ..planner import LTX_PLAN_TYPE
 from .audio import build_audio_latent, build_native_audio_latent, mix_timeline_audio
 from .guides import apply_guide_data
@@ -58,6 +59,13 @@ def build_ltx_runtime_outputs(
 
     negative = _resolve_negative_conditioning(negative, positive)
     guide_data, guide_diagnostics = build_guide_data(plan, width, height)
+    runtime_model = apply_identity_anchor(
+        runtime_model,
+        identity_anchor=identity_anchor,
+        sigmas=sigmas,
+        vae=vae,
+        guide_data=guide_data,
+    )
     positive, negative, video_latent, guide_apply_debug = apply_guide_data(
         positive,
         negative,
@@ -254,8 +262,6 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
 
 def _advanced_input_diagnostics(identity_anchor, sigmas) -> list[str]:
     diagnostics = []
-    if identity_anchor is not None:
-        diagnostics.append("identity_anchor input is accepted but Phase 9 runtime does not apply identity helpers yet.")
-    if sigmas is not None:
-        diagnostics.append("sigmas input is accepted for graph compatibility but Phase 9 runtime does not consume it yet.")
+    if sigmas is not None and identity_anchor is None:
+        diagnostics.append("sigmas input is connected but is only consumed when identity_anchor is connected.")
     return diagnostics
