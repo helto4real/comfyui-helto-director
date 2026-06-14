@@ -143,6 +143,11 @@ export class TimelineRenderer {
           timeline.project.global_prompt.enabled = !timeline.project.global_prompt.enabled;
         }, "settings change");
       }),
+      toggleIconButton("native-audio", "Use Native Audio", this.controller.timeline.project.audio.use_native_audio, () => {
+        this.commitMutation((timeline) => {
+          timeline.project.audio.use_native_audio = !timeline.project.audio.use_native_audio;
+        }, "settings change");
+      }),
       toolbarSpacer(),
       iconButton("split", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
       iconButton("duplicate", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
@@ -1255,6 +1260,7 @@ const ICONS = {
   trim: `<svg viewBox="0 0 24 24"><path d="M6 5v14M18 5v14M6 12h12"/><path d="m9 9-3 3 3 3M15 9l3 3-3 3"/></svg>`,
   magnet: `<svg viewBox="0 0 24 24"><path d="M7 5v7a5 5 0 0 0 10 0V5"/><path d="M7 9h4M13 9h4"/></svg>`,
   global: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/></svg>`,
+  "native-audio": `<svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 8-8"/><path d="M20 12a8 8 0 0 1-8 8"/><path d="M7 12v-2a5 5 0 0 1 10 0v2"/><rect x="6" y="12" width="3" height="6" rx="1"/><rect x="15" y="12" width="3" height="6" rx="1"/><path d="M12 18v2"/></svg>`,
   split: `<svg viewBox="0 0 24 24"><path d="M12 4v16"/><path d="M5 7h4M5 17h4M15 7h4M15 17h4"/></svg>`,
   duplicate: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
   delete: `<svg viewBox="0 0 24 24"><path d="M6 7h12M10 7V5h4v2M9 10v7M15 10v7M8 7l1 12h6l1-12"/></svg>`,

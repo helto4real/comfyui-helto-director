@@ -184,6 +184,32 @@ def build_audio_latent(audio: dict[str, Any], audio_vae, frame_count: int, frame
         }, diagnostics
 
 
+def build_native_audio_latent(audio_vae, frame_count: int, frame_rate: float) -> tuple[dict[str, Any], list[str]]:
+    diagnostics = ["Native audio is enabled; timeline audio was not encoded as provided audio."]
+    if audio_vae is None:
+        diagnostics.append("No audio_vae connected; returned an empty native audio latent placeholder.")
+        return {"samples": torch.zeros((1, 0, 0, 0), dtype=torch.float32), "type": "audio"}, diagnostics
+
+    inner = getattr(audio_vae, "first_stage_model", audio_vae)
+    try:
+        z_channels = int(getattr(audio_vae, "latent_channels"))
+        audio_freq = int(getattr(inner, "latent_frequency_bins"))
+        num_latents = int(inner.num_of_latents_from_frames(int(frame_count), float(frame_rate)))
+    except Exception as exc:
+        raise ValueError("Native audio requires an LTX audio VAE to create the empty audio latent.") from exc
+
+    try:
+        import comfy.model_management
+
+        device = comfy.model_management.intermediate_device()
+    except Exception:
+        device = "cpu"
+    return {
+        "samples": torch.zeros((1, z_channels, max(1, num_latents), audio_freq), dtype=torch.float32, device=device),
+        "type": "audio",
+    }, diagnostics
+
+
 def _volume_to_gain(value: Any) -> float:
     try:
         number = float(value)

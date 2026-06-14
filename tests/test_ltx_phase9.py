@@ -81,7 +81,14 @@ class FakeClip:
 
     def encode_from_tokens_scheduled(self, tokens):
         self.encoded.append(tokens)
-        return [["conditioning", {"text": tokens["text"]}]]
+        return [[
+            torch.ones((1, 2, 3), dtype=torch.float32),
+            {
+                "text": tokens["text"],
+                "pooled_output": torch.ones((1, 3), dtype=torch.float32),
+                "conditioning_lyrics": torch.ones((1, 4), dtype=torch.float32),
+            },
+        ]]
 
 
 class FakeAttention:
@@ -89,30 +96,35 @@ class FakeAttention:
 
 
 class FakeTransformerBlock:
-    def __init__(self):
+    def __init__(self, support_native_audio=True):
         self.attn2 = FakeAttention()
-        self.audio_attn2 = FakeAttention()
+        if support_native_audio:
+            self.audio_attn2 = FakeAttention()
 
 
 class FakeDiffusionModel:
-    def __init__(self):
+    def __init__(self, support_native_audio=True):
         self.patchifier = object()
         self.vae_scale_factors = (8, 32, 32)
-        self.transformer_blocks = [FakeTransformerBlock(), FakeTransformerBlock()]
+        self.transformer_blocks = [
+            FakeTransformerBlock(support_native_audio),
+            FakeTransformerBlock(support_native_audio),
+        ]
 
 
 class FakeModelWrapper:
-    def __init__(self):
-        self.diffusion_model = FakeDiffusionModel()
+    def __init__(self, support_native_audio=True):
+        self.diffusion_model = FakeDiffusionModel(support_native_audio)
 
 
 class FakeModel:
-    def __init__(self):
-        self.model = FakeModelWrapper()
+    def __init__(self, support_native_audio=True):
+        self.support_native_audio = support_native_audio
+        self.model = FakeModelWrapper(support_native_audio)
         self.object_patches = {}
 
     def clone(self):
-        return FakeModel()
+        return FakeModel(self.support_native_audio)
 
     def get_model_object(self, name):
         assert name == "diffusion_model"
@@ -132,11 +144,22 @@ class FakeVAE:
         return torch.ones((1, 128, frames, height, width), dtype=torch.float32)
 
 
+class FakeAudioVAEInner:
+    latent_frequency_bins = 16
+
+    def num_of_latents_from_frames(self, frames_number, frame_rate):
+        return max(1, int(round(float(frames_number) / float(frame_rate) * 12)))
+
+
+class FakeAudioVAE:
+    latent_channels = 4
+    first_stage_model = FakeAudioVAEInner()
+
+
 def _runtime_args(plan, **overrides):
     args = {
         "model": FakeModel(),
         "clip": FakeClip(),
-        "negative": [["negative", {}]],
         "vae": FakeVAE(),
         "ltx_timeline_plan": plan,
     }
@@ -262,15 +285,17 @@ def test_ltx_runtime_node_schema_io_order():
     assert [input_item.io_type for input_item in schema.inputs] == [
         "MODEL",
         "CLIP",
-        "CONDITIONING",
         "VAE",
         "LTX_TIMELINE_PLAN",
+        "CONDITIONING",
         "LATENT",
         "VAE",
         "LTX_IDENTITY_ANCHOR",
         "SIGMAS",
         "IC_LORA_PARAMETERS",
     ]
+    assert schema.inputs[4].id == "negative"
+    assert schema.inputs[4].optional is True
     assert [output.io_type for output in schema.outputs] == [
         "MODEL",
         "CONDITIONING",
@@ -321,7 +346,10 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
 
     assert len(runtime_model.object_patches) == 4
     assert "wide shot" in positive[0][1]["text"]
-    assert negative == [["negative", {}]]
+    assert torch.equal(negative[0][0], torch.zeros_like(positive[0][0]))
+    assert torch.equal(negative[0][1]["pooled_output"], torch.zeros_like(positive[0][1]["pooled_output"]))
+    assert torch.equal(negative[0][1]["conditioning_lyrics"], torch.zeros_like(positive[0][1]["conditioning_lyrics"]))
+    assert negative[0][1]["text"] == positive[0][1]["text"]
     assert video_latent["samples"].shape[2] == plan["resolved_output"]["frame_count"] // 8 + 1
     assert audio_latent["samples"].shape == (1, 0, 0, 0)
     assert combined_audio["waveform"].shape[1] == 2
@@ -379,6 +407,23 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     assert runtime_debug["summary"]["applied_guides"] == 1
 
 
+def test_connected_negative_conditioning_is_used_and_receives_guides(tmp_path):
+    image_path = tmp_path / "guide.png"
+    Image.new("RGB", (64, 64), (255, 32, 128)).save(image_path)
+    plan = _image_plan(image_path)
+    input_negative = [[
+        torch.full((1, 2, 3), 2.0, dtype=torch.float32),
+        {"text": "connected negative", "pooled_output": torch.full((1, 3), 3.0, dtype=torch.float32)},
+    ]]
+
+    _, _positive, negative, *_rest = build_ltx_runtime_outputs(**_runtime_args(plan, negative=input_negative))
+
+    assert negative[0][1]["text"] == "connected negative"
+    assert torch.equal(negative[0][0], input_negative[0][0])
+    assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.5
+    assert "guide_attention_entries" not in input_negative[0][1]
+
+
 def test_generated_wav_audio_mixes_with_volume_and_fades(tmp_path):
     audio_path = tmp_path / "tone.wav"
     _write_test_wav(audio_path)
@@ -396,6 +441,29 @@ def test_generated_wav_audio_mixes_with_volume_and_fades(tmp_path):
     assert waveform[:, :, :100].abs().max() < 0.05
     assert waveform[:, :, -100:].abs().max() < 0.05
     assert runtime_debug["summary"]["audio_clip_count"] == 1
+
+
+def test_native_audio_enabled_creates_empty_audio_latent_for_supported_model():
+    plan = _text_plan()
+    plan["project"]["audio"]["use_native_audio"] = True
+
+    *_, audio_latent, _combined_audio, _guide_data, _source_images, _source_audio, _source_fps, _source_count, runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan, audio_vae=FakeAudioVAE())
+    )
+
+    assert audio_latent["type"] == "audio"
+    assert audio_latent["samples"].shape[1] == 4
+    assert audio_latent["samples"].shape[3] == 16
+    assert any("Native audio is enabled" in entry for entry in runtime_debug["diagnostics"])
+    assert not any("No audio_vae connected" in entry for entry in runtime_debug["diagnostics"])
+
+
+def test_native_audio_enabled_fails_for_non_native_audio_model():
+    plan = _text_plan()
+    plan["project"]["audio"]["use_native_audio"] = True
+
+    with pytest.raises(ValueError, match="does not support native audio"):
+        build_ltx_runtime_outputs(**_runtime_args(plan, model=FakeModel(support_native_audio=False)))
 
 
 def test_optional_latent_is_cloned_without_mutating_input():

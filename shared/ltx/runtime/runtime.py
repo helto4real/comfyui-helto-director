@@ -7,19 +7,20 @@ import torch
 
 from ..config import LTX_MODEL_FAMILY, LTX_MODEL_VERSION
 from ..planner import LTX_PLAN_TYPE
-from .audio import build_audio_latent, mix_timeline_audio
+from .audio import build_audio_latent, build_native_audio_latent, mix_timeline_audio
 from .guides import apply_guide_data
 from .media import build_guide_data, source_video_outputs
 from .prompt_relay import encode_prompt_relay
+from .patches import supports_ltx_native_audio
 
 
 def build_ltx_runtime_outputs(
     *,
     model,
     clip,
-    negative,
     vae,
     ltx_timeline_plan: dict[str, Any],
+    negative=None,
     optional_latent=None,
     audio_vae=None,
     identity_anchor=None,
@@ -53,6 +54,7 @@ def build_ltx_runtime_outputs(
         runtime_model = model
         prompt_debug = {"full_prompt": prompt, "local_prompts": prompt_inputs["local_prompts"], "latent_lengths": []}
 
+    negative = _resolve_negative_conditioning(negative, positive)
     guide_data, guide_diagnostics = build_guide_data(plan, width, height)
     positive, negative, video_latent, guide_apply_debug = apply_guide_data(
         positive,
@@ -63,7 +65,13 @@ def build_ltx_runtime_outputs(
         iclora_parameters=iclora_parameters,
     )
     combined_audio, audio_diagnostics = mix_timeline_audio(plan)
-    audio_latent, audio_latent_diagnostics = build_audio_latent(combined_audio, audio_vae, frame_count, frame_rate)
+    use_native_audio = bool(plan.get("project", {}).get("audio", {}).get("use_native_audio"))
+    if use_native_audio:
+        if not supports_ltx_native_audio(model):
+            raise ValueError("LTX native audio is enabled, but the connected model does not support native audio. Use an LTX audio-video model or turn off Use Native Audio.")
+        audio_latent, audio_latent_diagnostics = build_native_audio_latent(audio_vae, frame_count, frame_rate)
+    else:
+        audio_latent, audio_latent_diagnostics = build_audio_latent(combined_audio, audio_vae, frame_count, frame_rate)
     source_images, source_audio, source_fps, source_frame_count = source_video_outputs(plan, width, height)
     runtime_debug = _runtime_debug(
         plan,
@@ -116,6 +124,20 @@ def clone_latent(latent: dict[str, Any]) -> dict[str, Any]:
     return cloned
 
 
+def zero_out_conditioning(conditioning):
+    zeroed = []
+    for tensor, metadata in conditioning:
+        next_metadata = metadata.copy()
+        pooled_output = next_metadata.get("pooled_output")
+        if pooled_output is not None:
+            next_metadata["pooled_output"] = torch.zeros_like(pooled_output)
+        conditioning_lyrics = next_metadata.get("conditioning_lyrics")
+        if conditioning_lyrics is not None:
+            next_metadata["conditioning_lyrics"] = torch.zeros_like(conditioning_lyrics)
+        zeroed.append([torch.zeros_like(tensor), next_metadata])
+    return zeroed
+
+
 def _validate_plan(plan: dict[str, Any]) -> None:
     if not isinstance(plan, dict):
         raise ValueError("LTX runtime requires an LTX_TIMELINE_PLAN dictionary.")
@@ -153,6 +175,10 @@ def _prompt_relay_inputs(plan: dict[str, Any]) -> dict[str, Any]:
         "local_prompts": local_prompts,
         "pixel_lengths": pixel_lengths,
     }
+
+
+def _resolve_negative_conditioning(negative, positive):
+    return negative if negative is not None else zero_out_conditioning(positive)
 
 
 def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio):

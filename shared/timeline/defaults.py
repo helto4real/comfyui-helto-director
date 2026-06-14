@@ -15,6 +15,7 @@ from ..contracts.video_timeline import (
     DEFAULT_MINIMUM_SECTION_DURATION_SECONDS,
     DEFAULT_ORIENTATION,
     DEFAULT_QUALITY_PRESET,
+    DEFAULT_USE_NATIVE_AUDIO,
     GLOBAL_PROMPT_POSITION_PREFIX,
     SCHEMA_VERSION,
     SECTION_EDIT_MODE_TRIM_NEIGHBOR,
@@ -48,6 +49,7 @@ def create_default_video_timeline() -> dict:
                 "show_effective_prompt": False,
             },
             "audio": {
+                "use_native_audio": DEFAULT_USE_NATIVE_AUDIO,
                 "always_normalize": False,
                 "normalization_mode": "Integrated LUFS",
                 "target_lufs": -16.0,

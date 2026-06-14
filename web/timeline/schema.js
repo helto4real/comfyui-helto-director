@@ -110,6 +110,7 @@ export function createDefaultVideoTimeline() {
         show_effective_prompt: false,
       },
       audio: {
+        use_native_audio: false,
         always_normalize: false,
         normalization_mode: "Integrated LUFS",
         target_lufs: -16.0,

@@ -142,6 +142,15 @@ def detect_ltx_model_geometry(model: Any) -> tuple[tuple[int, int, int], int]:
     return (1, 1, 1), temporal_stride
 
 
+def supports_ltx_native_audio(model: Any) -> bool:
+    detect_ltx_model_geometry(model)
+    diff_model = model.model.diffusion_model
+    blocks = getattr(diff_model, "transformer_blocks", None)
+    if not blocks:
+        return False
+    return any(getattr(block, "audio_attn2", None) is not None for block in blocks)
+
+
 def _check_unpatched(model_clone: Any, key: str) -> None:
     if key in getattr(model_clone, "object_patches", {}):
         raise RuntimeError(

@@ -207,6 +207,9 @@ function testToolbarUsesGroupedIconControls() {
 
   assert.equal(toolbarSpacers.length >= 4, true);
   assert.equal(rendererSource.includes('settingsButton.classList.add("htd-settings-button")'), true);
+  assert.equal(rendererSource.includes('toggleIconButton("native-audio", "Use Native Audio"'), true);
+  assert.equal(rendererSource.includes("timeline.project.audio.use_native_audio = !timeline.project.audio.use_native_audio"), true);
+  assert.equal(rendererSource.includes('"native-audio": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes(".htd-toolbar-spacer {"), true);
   assert.equal(rendererSource.includes(".htd-settings-button { margin-left: auto; }"), true);
   assert.equal(rendererSource.includes('settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5'), true);

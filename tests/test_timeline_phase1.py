@@ -29,6 +29,7 @@ def test_create_default_video_timeline_shape():
     assert timeline["type"] == VIDEO_TIMELINE_TYPE
     assert timeline["project"]["settings"]["allow_gaps"] is True
     assert timeline["project"]["settings"]["auto_close_gaps"] is False
+    assert timeline["project"]["audio"]["use_native_audio"] is False
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
     assert timeline["ui_state"]["view_start_seconds"] == 0
     assert timeline["ui_state"]["view_end_seconds"] == 5
