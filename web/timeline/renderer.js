@@ -22,6 +22,7 @@ import {
   replacePickedSectionMedia,
 } from "./media_actions.js";
 import { showMediaPicker } from "./media_picker.js";
+import { showPromptOptimizer } from "./prompt_optimizer.js";
 import {
   AUDIO_LANE_HEIGHT,
   DIRECTOR_TRACK_HEIGHT,
@@ -128,6 +129,7 @@ export class TimelineRenderer {
       this.settingsOpen = true;
       this.render();
     });
+    const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer", () => this.openPromptOptimizer());
     const repairButtons = hasOverflow
       ? [
           iconButton("fit-last-section", "Fit Last Section", () => {
@@ -138,6 +140,7 @@ export class TimelineRenderer {
           }),
         ]
       : [];
+    promptOptimizerButton.classList.add("htd-prompt-optimizer-button");
     settingsButton.classList.add("htd-settings-button");
     toolbar.append(
       iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
@@ -172,6 +175,7 @@ export class TimelineRenderer {
       ...repairButtons,
       toolbarSpacer(),
       iconButton("fit", "Zoom to Fit", () => this.handleZoomToFit()),
+      promptOptimizerButton,
       settingsButton,
     );
     return toolbar;
@@ -873,6 +877,24 @@ export class TimelineRenderer {
     }
   }
 
+  openPromptOptimizer() {
+    showPromptOptimizer({
+      timeline: this.controller.timeline,
+      node: this.node,
+      app: this.app,
+      documentRef: this.container.ownerDocument,
+      onApply: (updates) => {
+        this.commitMutation((timeline) => {
+          for (const section of timeline.director_track.sections) {
+            if (Object.prototype.hasOwnProperty.call(updates, section.item_id)) {
+              section.prompt = updates[section.item_id] ?? "";
+            }
+          }
+        }, "prompt optimizer apply");
+      },
+    });
+  }
+
   handleZoomToFit() {
     this.commitMutation((timeline) => zoomToFit(timeline), "zoom to fit");
   }
@@ -1296,6 +1318,7 @@ const ICONS = {
   timing: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`,
   "guide-range": `<svg viewBox="0 0 24 24"><path d="M5 7h14M5 17h14"/><path d="M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   "guide-frames": `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="12" rx="2"/><path d="M8 10h4M8 14h4"/><path d="M17 8l3-2v12l-3-2"/></svg>`,
+  sparkle: `<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M5 3l.7 1.8 1.8.7-1.8.7L5 8l-.7-1.8-1.8-.7 1.8-.7z"/></svg>`,
 };
 
 function settingRow(title) {
@@ -1356,7 +1379,7 @@ function installStyles(documentRef) {
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
     .htd-button:disabled { opacity: 0.42; cursor: not-allowed; }
     .htd-toolbar-spacer { width: 1px; height: 18px; margin: 0 4px; background: #3d4658; opacity: 0.9; flex: 0 0 auto; }
-    .htd-settings-button { margin-left: auto; }
+    .htd-prompt-optimizer-button { margin-left: auto; }
     .htd-menu { position: relative; display: inline-flex; align-items: center; }
     .htd-menu-button { width: 34px; min-width: 34px; }
     .htd-menu-button::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.78; }

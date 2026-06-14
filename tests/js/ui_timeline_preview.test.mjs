@@ -222,15 +222,21 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes("canFitLastDirectorSectionToDuration(this.controller.timeline)"), true);
   assert.equal(rendererSource.includes("...repairButtons"), true);
   assert.equal(rendererSource.includes("control.disabled = Boolean(options.disabled)"), true);
+  assert.equal(rendererSource.includes('const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer"'), true);
+  assert.equal(rendererSource.includes("showPromptOptimizer({"), true);
+  assert.equal(rendererSource.includes("promptOptimizerButton,"), true);
+  assert.equal(rendererSource.indexOf("promptOptimizerButton,") < rendererSource.indexOf("settingsButton,"), true);
+  assert.equal(rendererSource.includes('promptOptimizerButton.classList.add("htd-prompt-optimizer-button")'), true);
   assert.equal(rendererSource.includes('settingsButton.classList.add("htd-settings-button")'), true);
   assert.equal(rendererSource.includes('toggleIconButton("native-audio", "Use Native Audio"'), true);
   assert.equal(rendererSource.includes("timeline.project.audio.use_native_audio = !timeline.project.audio.use_native_audio"), true);
   assert.equal(rendererSource.includes('"native-audio": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('"fit-last-section": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('"fit-all-sections": `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes('sparkle: `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes(".htd-toolbar-spacer {"), true);
   assert.equal(rendererSource.includes(".htd-button:disabled {"), true);
-  assert.equal(rendererSource.includes(".htd-settings-button { margin-left: auto; }"), true);
+  assert.equal(rendererSource.includes(".htd-prompt-optimizer-button { margin-left: auto; }"), true);
   assert.equal(rendererSource.includes('settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5'), true);
 }
 

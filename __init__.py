@@ -35,9 +35,13 @@ register_media_cache_routes = importlib.import_module(
 register_media_browser_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.media_browser"
 ).register_media_browser_routes
+register_prompt_optimizer_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.prompt_optimizer"
+).register_prompt_optimizer_routes
 
 register_media_cache_routes()
 register_media_browser_routes()
+register_prompt_optimizer_routes()
 
 
 WEB_DIRECTORY = "./web"
@@ -80,4 +84,5 @@ __all__ = [
     "comfy_entrypoint",
     "register_media_browser_routes",
     "register_media_cache_routes",
+    "register_prompt_optimizer_routes",
 ]
