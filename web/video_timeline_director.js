@@ -25,7 +25,9 @@ app.registerExtension({
       mountTimelineMediaCache(this, app);
       mountTimelineRenderer(this, app, controller);
       controller.loadTimelineState();
-      controller.commitTimelineChange("workflow load", { pushUndo: false, markDirty: false });
+      if (!controller.hasEncryptedTimelineWidget?.()) {
+        controller.commitTimelineChange("workflow load", { pushUndo: false, markDirty: false });
+      }
       return result;
     };
 

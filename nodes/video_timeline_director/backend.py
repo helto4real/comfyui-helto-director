@@ -11,6 +11,7 @@ from ...shared.contracts.validation import (
 )
 from ...shared.timeline import create_default_video_timeline, normalize_video_timeline
 from ...shared.timeline.validate import validate_video_timeline
+from ...shared.privacy import decrypt_state, is_encrypted_payload
 
 
 def build_director_outputs(
@@ -62,6 +63,9 @@ def serialize_video_timeline(timeline: dict[str, Any]) -> str:
 
 def _parse_timeline_json(video_timeline_json: str | dict | None) -> tuple[dict, dict]:
     if isinstance(video_timeline_json, dict):
+        if is_encrypted_payload(video_timeline_json):
+            state = decrypt_state(video_timeline_json)
+            return state.get("timeline", state), create_validation_result()
         return video_timeline_json, create_validation_result()
 
     if video_timeline_json is None or not str(video_timeline_json).strip():
@@ -87,6 +91,10 @@ def _parse_timeline_json(video_timeline_json: str | dict | None) -> tuple[dict, 
                 ]
             ),
         )
+
+    if is_encrypted_payload(parsed):
+        state = decrypt_state(parsed)
+        parsed = state.get("timeline", state)
 
     if not isinstance(parsed, dict):
         return (

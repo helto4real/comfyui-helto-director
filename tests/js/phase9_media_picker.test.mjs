@@ -105,11 +105,21 @@ function testInspectorNoLongerRendersPathAttachChooseClearControls() {
   assert.equal(rendererSource.includes("htd-media-path"), false);
 }
 
+function testMediaPickerPrivacyUsesSingleDirectorMode() {
+  const pickerSource = readFileSync(new URL("../../web/timeline/media_picker.js", import.meta.url), "utf8");
+
+  assert.equal(pickerSource.includes("hover-hide"), false);
+  assert.equal(pickerSource.includes("privacyMode = false"), true);
+  assert.equal(pickerSource.includes("pr-image-browser-dialog.privacy-mode"), true);
+  assert.equal(pickerSource.includes("pr-audio-browser-dialog.privacy-mode"), true);
+}
+
 testImagePickerSelectionCreatesSectionAndAsset();
 testVideoPickerSelectionCreatesSectionAndAsset();
 testAudioPickerSelectionCreatesClipAndAsset();
 testCancelOrEmptySelectionDoesNotCreateBlankSection();
 testReplaceModePreservesTiming();
 testInspectorNoLongerRendersPathAttachChooseClearControls();
+testMediaPickerPrivacyUsesSingleDirectorMode();
 
 console.log("phase9 media picker tests passed");

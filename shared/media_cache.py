@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -11,6 +12,8 @@ import av
 import folder_paths
 from PIL import Image, ImageOps
 
+from .privacy import decrypt_bytes, encrypt_bytes
+
 
 IMAGE_EXTENSIONS = {".apng", ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
@@ -20,10 +23,12 @@ DEFAULT_THUMBNAIL_SIZE = 320
 DEFAULT_WAVEFORM_PEAKS = 96
 MIN_WAVEFORM_PEAKS = 16
 MAX_WAVEFORM_PEAKS = 512
+THUMBNAIL_CACHE_PURPOSE = "timeline-thumbnail-cache"
+WAVEFORM_CACHE_PURPOSE = "timeline-waveform-cache"
 
 
 def cache_root() -> Path:
-    root = Path(folder_paths.get_temp_directory()) / "helto_director_cache"
+    root = Path(folder_paths.get_temp_directory()) / "helto_timeline_director"
     root.mkdir(parents=True, exist_ok=True)
     (root / "thumbnails").mkdir(exist_ok=True)
     (root / "waveforms").mkdir(exist_ok=True)
@@ -57,20 +62,24 @@ def resolve_media_path(path_value: str, source_type: str | None = None) -> Path:
     return resolved
 
 
-def thumbnail_cache_path(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE) -> Path:
-    key = _cache_key(media_path, {"max_size": max_size, "kind": "thumbnail"})
-    return cache_root() / "thumbnails" / f"{key}.webp"
+def thumbnail_cache_path(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE, privacy_mode: bool = False) -> Path:
+    key = _cache_key(media_path, {"max_size": max_size, "kind": "thumbnail", "privacy": bool(privacy_mode)})
+    suffix = ".webp.enc" if privacy_mode else ".webp"
+    return cache_root() / "thumbnails" / f"{key}{suffix}"
 
 
-def waveform_cache_path(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS) -> Path:
-    key = _cache_key(media_path, {"peaks": peaks, "kind": "waveform"})
-    return cache_root() / "waveforms" / f"{key}.json"
+def waveform_cache_path(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS, privacy_mode: bool = False) -> Path:
+    key = _cache_key(media_path, {"peaks": peaks, "kind": "waveform", "privacy": bool(privacy_mode)})
+    suffix = ".json.enc" if privacy_mode else ".json"
+    return cache_root() / "waveforms" / f"{key}{suffix}"
 
 
-def make_thumbnail(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE) -> Path:
+def make_thumbnail(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE, privacy_mode: bool = False) -> Path | bytes:
     max_size = _clamp_int(max_size, 64, 1024)
-    out = thumbnail_cache_path(media_path, max_size)
+    out = thumbnail_cache_path(media_path, max_size, privacy_mode=privacy_mode)
     if out.exists():
+        if privacy_mode:
+            return decrypt_bytes(out.read_text(encoding="utf-8"), THUMBNAIL_CACHE_PURPOSE)
         return out
 
     suffix = media_path.suffix.lower()
@@ -81,22 +90,35 @@ def make_thumbnail(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE) -> 
     else:
         raise ValueError("Unsupported media type for thumbnail.")
 
-    tmp = out.with_suffix(".tmp")
+    if privacy_mode:
+        thumbnail = _image_to_webp_bytes(image)
+        _write_private_json(out, encrypt_bytes(thumbnail, THUMBNAIL_CACHE_PURPOSE))
+        return thumbnail
+
+    tmp = out.with_suffix(out.suffix + ".tmp")
     image.save(tmp, "WEBP", quality=90, method=4)
     tmp.replace(out)
     return out
 
 
-def make_waveform(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS) -> dict[str, Any]:
+def make_waveform(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS, privacy_mode: bool = False) -> dict[str, Any]:
     peaks = _clamp_int(peaks, MIN_WAVEFORM_PEAKS, MAX_WAVEFORM_PEAKS)
-    out = waveform_cache_path(media_path, peaks)
+    out = waveform_cache_path(media_path, peaks, privacy_mode=privacy_mode)
     if out.exists():
+        if privacy_mode:
+            decrypted = decrypt_bytes(out.read_text(encoding="utf-8"), WAVEFORM_CACHE_PURPOSE)
+            return json.loads(decrypted.decode("utf-8"))
         return json.loads(out.read_text(encoding="utf-8"))
 
     payload = _decode_audio_waveform(media_path, peaks)
     payload["cache_key"] = out.stem
-    tmp = out.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if privacy_mode:
+        _write_private_json(out, encrypt_bytes(payload_bytes, WAVEFORM_CACHE_PURPOSE))
+        return payload
+
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_bytes(payload_bytes)
     tmp.replace(out)
     return payload
 
@@ -123,6 +145,27 @@ def _load_video_thumbnail(path: Path, max_size: int) -> Image.Image:
             image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             return image
     raise ValueError("Could not decode a video frame for thumbnail.")
+
+
+def _image_to_webp_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, "WEBP", quality=90, method=4)
+    return buffer.getvalue()
+
+
+def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def _decode_audio_waveform(path: Path, peaks: int) -> dict[str, Any]:

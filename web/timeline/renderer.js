@@ -95,10 +95,17 @@ export class TimelineRenderer {
     this.resizeObserver = null;
     this.observedWidth = null;
     this.viewportWidth = TIMELINE_WIDTH;
+    this.privacyRevealActive = false;
     this.onContextMenuPointerDown = (event) => this.handleContextMenuPointerDown(event);
     this.onContextMenuKeyDown = (event) => this.handleContextMenuKeyDown(event);
+    this.onPrivacyPointerEnter = () => this.setPrivacyRevealActive(true);
+    this.onPrivacyPointerLeave = () => {
+      if (!this.contextMenuElement) this.setPrivacyRevealActive(false);
+    };
     this.container.className = "helto-timeline-director";
     installStyles(container.ownerDocument ?? globalThis.document);
+    this.container.addEventListener?.("pointerenter", this.onPrivacyPointerEnter);
+    this.container.addEventListener?.("pointerleave", this.onPrivacyPointerLeave);
     this.render(controller.timeline);
     this.startResizeObserver();
   }
@@ -107,6 +114,8 @@ export class TimelineRenderer {
     this.closeContextMenu({ rerender: false });
     this.cancelViewportRemeasure();
     this.stopResizeObserver();
+    this.container.removeEventListener?.("pointerenter", this.onPrivacyPointerEnter);
+    this.container.removeEventListener?.("pointerleave", this.onPrivacyPointerLeave);
     this.container.replaceChildren();
   }
 
@@ -116,10 +125,24 @@ export class TimelineRenderer {
     this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
     this.container.replaceChildren();
     const root = el("div", "htd-root");
+    root.classList.toggle("is-private", Boolean(timeline?.project?.privacy?.mode));
+    root.classList.toggle("is-privacy-revealed", this.privacyRevealActive || !timeline?.project?.privacy?.mode);
     root.append(this.renderToolbar(), this.renderRangeControl(timeline), this.renderTimeline(timeline), this.renderInspector(timeline));
+    if (this.controller.privacyError) {
+      const status = el("div", "htd-privacy-status");
+      status.textContent = this.controller.privacyError;
+      root.append(status);
+    }
     if (this.settingsOpen) root.append(this.renderProjectSettings(timeline));
     this.container.append(root);
     this.scheduleViewportRemeasure();
+  }
+
+  setPrivacyRevealActive(active) {
+    const next = Boolean(active);
+    if (next === this.privacyRevealActive) return;
+    this.privacyRevealActive = next;
+    if (this.controller.timeline?.project?.privacy?.mode) this.render();
   }
 
   renderToolbar() {
@@ -299,7 +322,7 @@ export class TimelineRenderer {
     item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
     const itemWidth = Math.max(12, durationToPixels(section.end_time - section.start_time, timeline, this.viewportWidth));
     item.style.width = `${itemWidth}px`;
-    const thumbnail = sectionThumbnailUrl(this.node, timeline, section);
+    const thumbnail = sectionThumbnailUrl(this.node, timeline, section, this.privacyRevealActive);
     if (thumbnail) {
       item.classList.add("has-preview");
       item.append(renderSectionPreview(timeline, thumbnail, itemWidth));
@@ -353,7 +376,7 @@ export class TimelineRenderer {
     item.style.width = `${itemWidth}px`;
     const clipLabel = el("div", "htd-audio-label");
     clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
-    if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));
+    if (shouldShowWaveform(timeline, this.privacyRevealActive)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));
     item.append(clipLabel);
     item.title = "Audio";
     item.addEventListener("pointerdown", (event) => this.startAudioDrag(event, clip, "audio-move"));
@@ -637,9 +660,6 @@ export class TimelineRenderer {
       this.renderSettingNumber("Default Audio Fade In", ["project", "audio", "default_fade_in_seconds"], { min: 0, step: 0.05 }),
       this.renderSettingNumber("Default Audio Fade Out", ["project", "audio", "default_fade_out_seconds"], { min: 0, step: 0.05 }),
       this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"]),
-      this.renderSettingCheckbox("Hide Media Previews", ["project", "privacy", "hide_media_previews"]),
-      this.renderSettingCheckbox("Hide Text Prompts", ["project", "privacy", "hide_text_prompts"]),
-      this.renderSettingCheckbox("Encrypt Previews", ["project", "privacy", "encrypt_previews"]),
       this.renderSettingCheckbox("Show Section Labels", ["project", "display", "show_section_labels"]),
       this.renderSettingCheckbox("Show Thumbnails", ["project", "display", "show_thumbnails"]),
       this.renderSettingCheckbox("Show Audio Waveforms", ["project", "display", "show_audio_waveforms"]),
@@ -791,6 +811,7 @@ export class TimelineRenderer {
     event.stopPropagation();
     this.closeContextMenu({ rerender: false });
     this.openMenu = null;
+    this.setPrivacyRevealActive(true);
     this.commitMutation((timeline) => selectItem(timeline, itemId), "select", { pushUndo: false });
 
     const documentRef = this.container.ownerDocument ?? globalThis.document;
@@ -830,11 +851,15 @@ export class TimelineRenderer {
   }
 
   closeContextMenu(options = {}) {
+    const hadMenu = Boolean(this.contextMenuElement);
     this.contextMenuDocument?.removeEventListener?.("pointerdown", this.onContextMenuPointerDown, true);
     this.contextMenuDocument?.removeEventListener?.("keydown", this.onContextMenuKeyDown, true);
     this.contextMenuDocument = null;
     this.contextMenuElement?.remove?.();
     this.contextMenuElement = null;
+    if (hadMenu && this.controller.timeline?.project?.privacy?.mode && !this.container.matches?.(":hover")) {
+      this.privacyRevealActive = false;
+    }
     if (options.rerender) this.render();
   }
 
@@ -857,10 +882,7 @@ export class TimelineRenderer {
         node: this.node,
         documentRef: this.container.ownerDocument,
         mode: options.mode ?? "add",
-        privacyMode: Boolean(
-          this.controller.timeline.project.privacy.mode ||
-          this.controller.timeline.project.privacy.hide_media_previews,
-        ),
+        privacyMode: Boolean(this.controller.timeline.project.privacy.mode),
       });
       if (!item) return;
       const reason = options.mode === "replace" ? "replace media" : "add";
@@ -883,6 +905,7 @@ export class TimelineRenderer {
       node: this.node,
       app: this.app,
       documentRef: this.container.ownerDocument,
+      privacyMode: Boolean(this.controller.timeline.project.privacy.mode),
       onApply: (updates) => {
         this.commitMutation((timeline) => {
           for (const section of timeline.director_track.sections) {
@@ -1024,17 +1047,14 @@ function getInspectorHeight(timeline) {
 function shouldRenderPromptInput(timeline, item) {
   return Boolean(
     item &&
-    "prompt" in item &&
-    !timeline?.project?.privacy?.mode &&
-    !timeline?.project?.privacy?.hide_text_prompts,
+    "prompt" in item,
   );
 }
 
-function shouldShowWaveform(timeline) {
+function shouldShowWaveform(timeline, privacyRevealActive = false) {
   return Boolean(
     timeline.project.display.show_audio_waveforms &&
-    !timeline.project.privacy.mode &&
-    !timeline.project.privacy.hide_media_previews,
+    (!timeline.project.privacy.mode || privacyRevealActive),
   );
 }
 
@@ -1126,10 +1146,9 @@ function applyWaveformVolume(peaks, clip) {
   return peaks.map((value) => Math.max(0, Math.min(1, Number(value) * multiplier)));
 }
 
-function sectionThumbnailUrl(node, timeline, section) {
+function sectionThumbnailUrl(node, timeline, section, privacyRevealActive = false) {
   if (
-    timeline.project.privacy.mode ||
-    timeline.project.privacy.hide_media_previews ||
+    (timeline.project.privacy.mode && !privacyRevealActive) ||
     timeline.project.display.show_thumbnails === false
   ) {
     return null;
@@ -1171,7 +1190,6 @@ function projectPreviewAspect(timeline) {
 
 function sectionLabel(timeline, section) {
   if (!timeline.project.display.show_section_labels) return "";
-  if (timeline.project.privacy.mode || timeline.project.privacy.hide_text_prompts) return section.type;
   if (timeline.ui_state.timeline_display_mode === "Media") {
     const reference = section.type === "Image" ? section.image : section.type === "Video" ? section.video : null;
     return mediaLabel(timeline, reference, section.type);
@@ -1371,6 +1389,15 @@ function installStyles(documentRef) {
   style.textContent = `
     .helto-timeline-director { overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
     .htd-root { position: relative; height: 100%; display: flex; flex-direction: column; gap: 6px; }
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-range-control,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-viewport,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-inspector { visibility: hidden; }
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-section-label,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-audio-label,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-prompt,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-media-value { color: transparent !important; text-shadow: none !important; }
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-prompt::placeholder { color: transparent !important; }
+    .htd-privacy-status { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 40; padding: 6px 8px; border: 1px solid #7a4f32; border-radius: 4px; background: #2b1d18; color: #ffd8c2; box-shadow: 0 8px 22px rgba(0,0,0,0.4); }
     .htd-toolbar { position: relative; z-index: 15; display: flex; gap: 4px; align-items: center; min-height: 28px; overflow: visible; }
     .htd-button { min-width: 28px; height: 24px; padding: 0 7px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; cursor: pointer; white-space: nowrap; }
     .htd-icon-button { width: 28px; min-width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }

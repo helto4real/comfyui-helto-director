@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from shared import media_browser
+from shared.privacy import CRYPTO_AVAILABLE
 
 
 def test_media_browser_folder_config_defaults_adds_removes_and_rejects_invalid(tmp_path, monkeypatch):
@@ -81,6 +82,29 @@ def test_image_and_video_browser_thumbnails_return_cached_webp(tmp_path, monkeyp
         assert video_thumb.suffix == ".webp"
         assert image_thumb.is_file()
         assert video_thumb.is_file()
+    finally:
+        folder_paths.set_input_directory(original_input)
+        folder_paths.set_temp_directory(original_temp)
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for encrypted preview tests")
+def test_image_browser_thumbnail_privacy_returns_bytes_and_encrypted_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_browser, "CONFIG_DIR", tmp_path / "config")
+    original_input = folder_paths.get_input_directory()
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_input_directory(str(tmp_path / "input"))
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        Image.new("RGB", (64, 32), color=(10, 20, 30)).save(input_dir / "image.png")
+
+        thumb = media_browser.make_browser_thumbnail("image", "input", "image.png", privacy_mode=True)
+
+        assert isinstance(thumb, bytes)
+        assert thumb.startswith(b"RIFF")
+        assert list((tmp_path / "temp" / "helto_timeline_director" / "thumbnails").glob("*.webp.enc"))
+        assert list((tmp_path / "temp" / "helto_timeline_director" / "thumbnails").glob("*.webp")) == []
     finally:
         folder_paths.set_input_directory(original_input)
         folder_paths.set_temp_directory(original_temp)

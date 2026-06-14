@@ -199,6 +199,8 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes('"Audio Clip": "Delete Audio Clip"'), true);
   assert.equal(rendererSource.includes("deleteLabelForItemType"), true);
   assert.equal(rendererSource.includes("deleteSelectedItem(timeline)"), true);
+  assert.equal(rendererSource.includes("if (!this.contextMenuElement) this.setPrivacyRevealActive(false);"), true);
+  assert.equal(rendererSource.includes("this.setPrivacyRevealActive(true);"), true);
   assert.equal(rendererSource.includes("htd-context-menu"), true);
   assert.equal(rendererSource.includes("htd-context-menu-item"), true);
   assert.equal(rendererSource.includes('(documentRef?.body ?? this.container).append(menu)'), true);
@@ -248,11 +250,17 @@ function testRendererUsesRealWaveformsOnly() {
   assert.equal(rendererSource.includes("waveformPeakRequestForClip"), true);
   assert.equal(rendererSource.includes("waveformPeaksForClip"), true);
   assert.equal(rendererSource.includes("is-loading"), true);
-  assert.equal(rendererSource.includes("if (shouldShowWaveform(timeline))"), true);
+  assert.equal(rendererSource.includes("if (shouldShowWaveform(timeline, this.privacyRevealActive))"), true);
   assert.equal(rendererSource.includes("item.style.height = `${AUDIO_LANE_HEIGHT - 8}px`;"), true);
-  assert.equal(rendererSource.includes('if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));\n    item.append(clipLabel);'), true);
+  assert.equal(rendererSource.includes('if (shouldShowWaveform(timeline, this.privacyRevealActive)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));\n    item.append(clipLabel);'), true);
   assert.equal(rendererSource.includes(".htd-audio-label { position: absolute; z-index: 3;"), true);
   assert.equal(rendererSource.includes(".htd-waveform { position: absolute; z-index: 1; inset: 4px 9px;"), true);
+  assert.equal(rendererSource.includes('this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"])'), true);
+  assert.equal(rendererSource.includes("Hide Media Previews"), false);
+  assert.equal(rendererSource.includes("Hide Text Prompts"), false);
+  assert.equal(rendererSource.includes("Encrypt Previews"), false);
+  assert.equal(rendererSource.includes("is-private"), true);
+  assert.equal(rendererSource.includes("is-privacy-revealed"), true);
 }
 
 function testWaveformHelpersAdaptAndTrimPeaks() {

@@ -1,17 +1,22 @@
+import json
 import math
 import wave
 
 import folder_paths
+import pytest
 from PIL import Image
 
 from shared.media_cache import (
     MAX_WAVEFORM_PEAKS,
     MIN_WAVEFORM_PEAKS,
+    THUMBNAIL_CACHE_PURPOSE,
+    WAVEFORM_CACHE_PURPOSE,
     cache_root,
     make_thumbnail,
     make_waveform,
     resolve_media_path,
 )
+from shared.privacy import CRYPTO_AVAILABLE, decrypt_bytes
 
 
 def test_thumbnail_cache_writes_webp_under_comfy_temp(tmp_path):
@@ -26,6 +31,31 @@ def test_thumbnail_cache_writes_webp_under_comfy_temp(tmp_path):
         assert thumbnail.suffix == ".webp"
         assert thumbnail.is_file()
         assert cache_root() in thumbnail.parents
+        assert cache_root().name == "helto_timeline_director"
+    finally:
+        folder_paths.set_temp_directory(original_temp)
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for encrypted preview tests")
+def test_private_thumbnail_cache_writes_only_encrypted_webp(tmp_path):
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        image_path = tmp_path / "reference.png"
+        Image.new("RGB", (640, 320), color=(32, 96, 160)).save(image_path)
+
+        thumbnail = make_thumbnail(image_path, max_size=128, privacy_mode=True)
+        encrypted_files = list((cache_root() / "thumbnails").glob("*.webp.enc"))
+
+        assert isinstance(thumbnail, bytes)
+        assert thumbnail.startswith(b"RIFF")
+        assert encrypted_files
+        assert list((cache_root() / "thumbnails").glob("*.webp")) == []
+        encrypted_text = encrypted_files[0].read_text(encoding="utf-8")
+        assert "RIFF" not in encrypted_text
+        assert "WEBP" not in encrypted_text
+        assert "reference.png" not in encrypted_text
+        assert decrypt_bytes(json.loads(encrypted_text), THUMBNAIL_CACHE_PURPOSE).startswith(b"RIFF")
     finally:
         folder_paths.set_temp_directory(original_temp)
 
@@ -43,6 +73,28 @@ def test_waveform_cache_writes_peak_json_under_comfy_temp(tmp_path):
         assert len(waveform["peaks"]) == 32
         assert all(0.0 <= value <= 1.0 for value in waveform["peaks"])
         assert any(value > 0.0 for value in waveform["peaks"])
+    finally:
+        folder_paths.set_temp_directory(original_temp)
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for encrypted preview tests")
+def test_private_waveform_cache_writes_only_encrypted_json(tmp_path):
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        audio_path = tmp_path / "tone.wav"
+        write_test_wav(audio_path)
+
+        waveform = make_waveform(audio_path, peaks=32, privacy_mode=True)
+        encrypted_files = list((cache_root() / "waveforms").glob("*.json.enc"))
+
+        assert len(waveform["peaks"]) == 32
+        assert encrypted_files
+        assert list((cache_root() / "waveforms").glob("*.json")) == []
+        encrypted_text = encrypted_files[0].read_text(encoding="utf-8")
+        assert "peaks" not in encrypted_text
+        decrypted = json.loads(decrypt_bytes(json.loads(encrypted_text), WAVEFORM_CACHE_PURPOSE).decode("utf-8"))
+        assert decrypted["peaks"] == waveform["peaks"]
     finally:
         folder_paths.set_temp_directory(original_temp)
 

@@ -17,6 +17,7 @@ export class TimelineMediaCache {
     this.waveforms = new Map();
     this.pendingWaveforms = new Set();
     this.destroyed = false;
+    this.privacyMode = false;
   }
 
   destroy() {
@@ -27,16 +28,18 @@ export class TimelineMediaCache {
   }
 
   refresh(timeline) {
-    if (timeline.project.privacy.mode || timeline.project.privacy.hide_media_previews) {
+    const nextPrivacyMode = Boolean(timeline.project.privacy.mode);
+    if (nextPrivacyMode !== this.privacyMode) {
       this.thumbnailUrls.clear();
       this.waveforms.clear();
-      return;
+      this.pendingWaveforms.clear();
     }
+    this.privacyMode = nextPrivacyMode;
 
     for (const asset of timeline.assets ?? []) {
       if (!asset?.asset_id || !asset.path) continue;
       if ((asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && timeline.project.display.show_thumbnails) {
-        this.thumbnailUrls.set(asset.asset_id, thumbnailUrl(asset));
+        this.thumbnailUrls.set(asset.asset_id, thumbnailUrl(asset, 320, this.privacyMode));
       }
     }
   }
@@ -52,7 +55,7 @@ export class TimelineMediaCache {
   requestWaveform(asset, peaks = DEFAULT_WAVEFORM_PEAKS) {
     if (!asset?.asset_id || !asset.path) return null;
     const peakCount = clampWaveformPeaks(peaks);
-    const key = waveformKey(asset.asset_id, peakCount);
+    const key = waveformKey(asset.asset_id, peakCount, this.privacyMode);
     const cached = this.waveforms.get(key) ?? null;
     if (!cached) this.loadWaveform(asset, peakCount);
     return cached;
@@ -60,11 +63,11 @@ export class TimelineMediaCache {
 
   async loadWaveform(asset, peaks = DEFAULT_WAVEFORM_PEAKS) {
     const peakCount = clampWaveformPeaks(peaks);
-    const key = waveformKey(asset.asset_id, peakCount);
+    const key = waveformKey(asset.asset_id, peakCount, this.privacyMode);
     if (this.waveforms.has(key) || this.pendingWaveforms.has(key)) return;
     this.pendingWaveforms.add(key);
     try {
-      const response = await fetch(waveformUrl(asset, peakCount));
+      const response = await fetch(waveformUrl(asset, peakCount, this.privacyMode));
       if (!response.ok) return;
       const payload = await response.json();
       if (this.destroyed) return;
@@ -98,12 +101,12 @@ export function unmountTimelineMediaCache(node) {
   delete node._timelineMediaCache;
 }
 
-export function thumbnailUrl(asset, maxSize = 320) {
-  return `${ROUTE_PREFIX}/thumbnail?${paramsFor(asset, { max_size: maxSize })}`;
+export function thumbnailUrl(asset, maxSize = 320, privacyMode = false) {
+  return `${ROUTE_PREFIX}/thumbnail?${paramsFor(asset, { max_size: maxSize, ...(privacyMode ? { privacy: 1 } : {}) })}`;
 }
 
-export function waveformUrl(asset, peaks = 96) {
-  return `${ROUTE_PREFIX}/waveform?${paramsFor(asset, { peaks: clampWaveformPeaks(peaks) })}`;
+export function waveformUrl(asset, peaks = 96, privacyMode = false) {
+  return `${ROUTE_PREFIX}/waveform?${paramsFor(asset, { peaks: clampWaveformPeaks(peaks), ...(privacyMode ? { privacy: 1 } : {}) })}`;
 }
 
 export function clampWaveformPeaks(peaks) {
@@ -112,8 +115,8 @@ export function clampWaveformPeaks(peaks) {
   return Math.max(MIN_WAVEFORM_PEAKS, Math.min(MAX_WAVEFORM_PEAKS, Math.round(value)));
 }
 
-function waveformKey(assetId, peaks) {
-  return `${assetId}:${clampWaveformPeaks(peaks)}`;
+function waveformKey(assetId, peaks, privacyMode = false) {
+  return `${assetId}:${clampWaveformPeaks(peaks)}:${privacyMode ? "private" : "plain"}`;
 }
 
 function paramsFor(asset, extra = {}) {

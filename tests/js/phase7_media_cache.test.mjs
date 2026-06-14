@@ -18,6 +18,15 @@ function testThumbnailUrlUsesBackendRoute() {
   assert.ok(url.startsWith("/helto_director/media/thumbnail?"));
   assert.ok(url.includes("max_size=256"));
   assert.ok(url.includes("path=%2Fmnt%2Fmedia%2Freference+image.png"));
+  assert.equal(url.includes("privacy=1"), false);
+
+  const privateUrl = thumbnailUrl({
+    type: "Image",
+    source_kind: "FilePath",
+    path: "/mnt/media/reference image.png",
+  }, 256, true);
+
+  assert.ok(privateUrl.includes("privacy=1"));
 }
 
 function testUploadedFileWaveformUsesInputType() {
@@ -30,6 +39,14 @@ function testUploadedFileWaveformUsesInputType() {
   assert.ok(url.startsWith("/helto_director/media/waveform?"));
   assert.ok(url.includes("type=input"));
   assert.ok(url.includes("peaks=64"));
+
+  const privateUrl = waveformUrl({
+    type: "Audio",
+    source_kind: "UploadedFile",
+    path: "voice.wav",
+  }, 64, true);
+
+  assert.ok(privateUrl.includes("privacy=1"));
 }
 
 function testWaveformUrlClampsPeakCount() {
@@ -57,7 +74,7 @@ function testWaveformCacheUsesAssetAndPeakCountKeys() {
   cache.loadWaveform = (requestedAsset, peaks) => loadCalls.push([requestedAsset.asset_id, peaks]);
 
   assert.equal(cache.requestWaveform(asset, 64), null);
-  cache.waveforms.set("asset_audio:64", { peaks: [0.2, 0.8], duration_seconds: 2 });
+  cache.waveforms.set("asset_audio:64:plain", { peaks: [0.2, 0.8], duration_seconds: 2 });
 
   assert.deepEqual(cache.requestWaveform(asset, 64).peaks, [0.2, 0.8]);
   assert.equal(cache.requestWaveform(asset, 128), null);
@@ -71,7 +88,7 @@ function testRefreshDoesNotPreloadAudioWaveforms() {
 
   cache.refresh({
     project: {
-      privacy: { mode: false, hide_media_previews: false },
+      privacy: { mode: false },
       display: { show_thumbnails: true, show_audio_waveforms: true },
     },
     assets: [{ asset_id: "asset_audio", type: "Audio", path: "/mnt/media/voice.wav" }],

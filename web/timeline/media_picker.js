@@ -39,7 +39,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
 
   return new Promise((resolve) => {
     const overlay = documentRef.createElement("div");
-    overlay.className = "pr-image-browser-dialog";
+    overlay.className = `pr-image-browser-dialog${privacyMode ? " privacy-mode" : ""}`;
     overlay.innerHTML = `
       <div class="pr-image-browser-panel">
         <h3>${escapeHtml(title)}</h3>
@@ -62,11 +62,8 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
             <span class="columns-value">${COLUMN_DEFAULT}</span>
           </label>
         </div>
-        <div class="pr-image-browser-controls" style="grid-template-columns: auto 1fr;">
-          <button class="hover-hide pr-image-icon-btn" type="button" title="Hide thumbnails until hovering over window" aria-label="Hide thumbnails until hovering over window"></button>
-          <span class="pr-image-browser-meta"></span>
-        </div>
-        <div class="pr-image-browser-grid hide-images"></div>
+        <span class="pr-image-browser-meta"></span>
+        <div class="pr-image-browser-grid"></div>
         <div class="pr-image-browser-actions">
           <button class="cancel" type="button">Cancel</button>
           <button class="ok" type="button">${escapeHtml(okLabel)}</button>
@@ -83,14 +80,12 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     const folderRemoveButton = overlay.querySelector(".folder-remove");
     const columnsInput = overlay.querySelector(".columns");
     const columnsValue = overlay.querySelector(".columns-value");
-    const hoverHideButton = overlay.querySelector(".hover-hide");
     const grid = overlay.querySelector(".pr-image-browser-grid");
     const meta = overlay.querySelector(".pr-image-browser-meta");
 
     let availableItems = [];
     let selectedItem = null;
     let recursive = true;
-    let hideImagesUntilHover = true;
     let sortMode = "newest";
     columnsInput.value = String(getStoredColumns());
     const sortOptions = [
@@ -114,12 +109,8 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     };
 
     const syncGridVisibility = () => {
-      hoverHideButton.title = hideImagesUntilHover ? "Hide thumbnails until the mouse is over this window" : "Always show thumbnails in this window";
-      hoverHideButton.innerHTML = hideImagesUntilHover
-        ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg>`
-        : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/></svg>`;
-      grid.classList.toggle("hide-images", hideImagesUntilHover);
-      grid.classList.toggle("show-images", !hideImagesUntilHover);
+      grid.classList.toggle("hide-images", privacyMode);
+      grid.classList.toggle("show-images", !privacyMode);
     };
 
     const syncColumns = () => {
@@ -271,10 +262,6 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
       sortButton.setAttribute("aria-expanded", "false");
       renderGrid();
     });
-    hoverHideButton.addEventListener("click", () => {
-      hideImagesUntilHover = !hideImagesUntilHover;
-      syncGridVisibility();
-    });
     overlay.addEventListener("click", (event) => {
       if (!event.target.closest(".pr-image-sort-wrap")) {
         sortMenu.classList.remove("is-open");
@@ -302,11 +289,11 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
   });
 }
 
-async function showAudioPicker({ node, documentRef }) {
+async function showAudioPicker({ node, documentRef, privacyMode = false }) {
   closeMediaPicker(documentRef);
   return new Promise((resolve) => {
     const overlay = documentRef.createElement("div");
-    overlay.className = "pr-image-browser-dialog pr-audio-browser-dialog";
+    overlay.className = `pr-image-browser-dialog pr-audio-browser-dialog${privacyMode ? " privacy-mode" : ""}`;
     overlay.innerHTML = `
       <div class="pr-image-browser-panel">
         <h3>Add Timeline Audio</h3>
@@ -688,8 +675,8 @@ function installMediaPickerStyles(documentRef) {
     .pr-image-columns-control svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .pr-image-columns-control input { width: 100%; min-width: 0; }
     .pr-image-browser-grid { --pr-image-columns: 4; display: grid; grid-template-columns: repeat(var(--pr-image-columns), minmax(0, 1fr)); gap: 8px; max-height: 52vh; overflow: auto; padding: 2px; }
-    .pr-image-browser-grid.hide-images .pr-image-tile img { opacity: 0; }
-    .pr-image-browser-panel:hover .pr-image-browser-grid.hide-images .pr-image-tile img, .pr-image-browser-grid.show-images .pr-image-tile img { opacity: 1; }
+    .pr-image-browser-dialog.privacy-mode .pr-image-browser-grid.hide-images .pr-image-tile img { opacity: 0; }
+    .pr-image-browser-dialog.privacy-mode .pr-image-browser-panel:hover .pr-image-browser-grid.hide-images .pr-image-tile img, .pr-image-browser-grid.show-images .pr-image-tile img { opacity: 1; }
     .pr-image-tile { min-width: 0; background: #181818; border: 1px solid #444; border-radius: 5px; padding: 5px; color: #ddd; cursor: pointer; text-align: left; }
     .pr-image-tile.selected { border-color: #8ab4f8; background: #202a36; box-shadow: none; }
     .pr-image-tile img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #101010; border: 1px solid #2d2d2d; border-radius: 3px; transition: opacity .12s ease; box-sizing: border-box; }
@@ -700,6 +687,9 @@ function installMediaPickerStyles(documentRef) {
     .pr-audio-details { min-width: 0; }
     .pr-audio-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eee; font-size: 12px; }
     .pr-audio-size { color: #aaa; font-size: 11px; margin-top: 2px; }
+    .pr-audio-browser-dialog.privacy-mode .pr-audio-name, .pr-audio-browser-dialog.privacy-mode .pr-audio-size, .pr-audio-browser-dialog.privacy-mode .pr-image-browser-meta { color: transparent; text-shadow: none; }
+    .pr-audio-browser-dialog.privacy-mode .pr-image-browser-panel:hover .pr-audio-name { color: #eee; }
+    .pr-audio-browser-dialog.privacy-mode .pr-image-browser-panel:hover .pr-audio-size, .pr-audio-browser-dialog.privacy-mode .pr-image-browser-panel:hover .pr-image-browser-meta { color: #aaa; }
     .pr-image-browser-meta { min-height: 18px; color: #aaa; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pr-image-browser-actions { display: flex; justify-content: flex-end; gap: 8px; }
     .pr-image-large-preview { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; }

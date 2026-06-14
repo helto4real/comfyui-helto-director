@@ -4,6 +4,12 @@ import { normalizeTimelineViewRange } from "./geometry.js";
 import { deleteSelectedItem } from "./operations.js";
 import { validateVideoTimeline } from "./validation.js";
 import { TimelineUndoStack } from "./undo.js";
+import {
+  encryptTimelineSync,
+  fetchPrivacyJson,
+  isEncryptedPrivacyPayload,
+  parsePrivacyPayload,
+} from "./privacy.js";
 
 export const VIDEO_TIMELINE_WIDGET = "video_timeline_json";
 
@@ -15,16 +21,22 @@ export class TimelineStateController {
     this.debounceMs = options.debounceMs ?? 300;
     this.undo = new TimelineUndoStack(options.undoLimit ?? 100);
     this.hiddenWidget = findWidget(node, VIDEO_TIMELINE_WIDGET);
-    this.timeline = loadTimelineState(node);
+    this.timeline = loadTimelineState(node, { deferEncrypted: true });
     this.pendingDebounce = null;
     this.gestureStartState = null;
     this.destroyed = false;
+    this.privacyError = "";
+    this.decryptingPrivacy = false;
     this._onKeyDown = (event) => this.handleKeyDown(event);
     this._onMouseUp = () => this.endTimelineGesture("drag end");
 
     hideWidget(this.hiddenWidget);
     this.installEventListeners();
-    this.commitTimelineChange("mount", { pushUndo: false, markDirty: false });
+    if (this.hasEncryptedTimelineWidget()) {
+      this.decryptTimelineWidget();
+    } else {
+      this.commitTimelineChange("mount", { pushUndo: false, markDirty: false });
+    }
   }
 
   destroy() {
@@ -42,8 +54,44 @@ export class TimelineStateController {
   }
 
   loadTimelineState() {
+    if (this.hasEncryptedTimelineWidget()) {
+      this.decryptTimelineWidget();
+      return this.timeline;
+    }
     this.timeline = loadTimelineState(this.node);
     return this.timeline;
+  }
+
+  hasEncryptedTimelineWidget() {
+    return isEncryptedPrivacyPayload(this.hiddenWidget?.value);
+  }
+
+  async decryptTimelineWidget() {
+    if (this.decryptingPrivacy || !this.hasEncryptedTimelineWidget()) return false;
+    const payload = parsePrivacyPayload(this.hiddenWidget?.value);
+    this.decryptingPrivacy = true;
+    this.privacyError = "Decrypting private timeline data...";
+    this.requestRender();
+    try {
+      const result = await fetchPrivacyJson("decrypt", { payload });
+      const state = result.state || {};
+      this.timeline = normalizeVideoTimeline(state.timeline || state || {});
+      applyVisibleNodeProperties(this.timeline, this.node);
+      this.timeline.validation = validateVideoTimeline(this.timeline);
+      this.privacyError = "";
+      this.requestRender();
+      this.refreshAsyncMediaCaches("privacy decrypt", {});
+      return true;
+    } catch (error) {
+      this.timeline = normalizeVideoTimeline("");
+      this.timeline.project.privacy.mode = true;
+      this.privacyError = `Private timeline locked: ${error.message}`;
+      console.error("Helto Director privacy decrypt failed", error);
+      this.requestRender();
+      return false;
+    } finally {
+      this.decryptingPrivacy = false;
+    }
   }
 
   updateTimeline(mutator, reason, options = {}) {
@@ -63,7 +111,14 @@ export class TimelineStateController {
       this.undo.push(previousState);
     }
 
-    writeTimelineWidget(this.node, this.timeline);
+    try {
+      writeTimelineWidget(this.node, this.timeline);
+      if (!this.decryptingPrivacy) this.privacyError = "";
+    } catch (error) {
+      this.privacyError = `Privacy encryption failed: ${error.message}`;
+      this.requestRender();
+      throw error;
+    }
     if (options.markDirty !== false) markGraphDirty(this.node, this.app);
     if (options.rerender !== false) this.requestRender();
     this.refreshAsyncMediaCaches(reason, options);
@@ -191,6 +246,11 @@ export function unmountTimelineState(node) {
 
 export function loadTimelineState(node) {
   const widget = findWidget(node, VIDEO_TIMELINE_WIDGET);
+  if (isEncryptedPrivacyPayload(widget?.value)) {
+    const timeline = normalizeVideoTimeline("");
+    timeline.project.privacy.mode = true;
+    return timeline;
+  }
   const timeline = normalizeVideoTimeline(widget?.value ?? "");
   applyVisibleNodeProperties(timeline, node);
   timeline.validation = validateVideoTimeline(timeline);
@@ -199,7 +259,14 @@ export function loadTimelineState(node) {
 
 export function writeTimelineWidget(node, timeline) {
   const widget = findWidget(node, VIDEO_TIMELINE_WIDGET);
-  if (widget) widget.value = serializeTimeline(timeline);
+  if (widget) {
+    if (timeline?.project?.privacy?.mode) {
+      const envelope = encryptTimelineSync(timeline);
+      widget.value = JSON.stringify(envelope);
+    } else {
+      widget.value = serializeTimeline(timeline);
+    }
+  }
   return widget;
 }
 

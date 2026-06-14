@@ -6,6 +6,8 @@ from pathlib import Path
 
 from shared.contracts.video_timeline import SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline
+from shared.privacy import CRYPTO_AVAILABLE, encrypt_state
+import pytest
 
 
 def get_video_timeline_director():
@@ -119,6 +121,31 @@ def test_director_outputs_validation_for_invalid_timeline():
     assert [entry["code"] for entry in validation["errors"]] == [
         "TEXT_SECTION_EMPTY_PROMPT"
     ]
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
+def test_director_decrypts_private_timeline_json():
+    VideoTimelineDirector = get_video_timeline_director()
+    timeline = create_default_video_timeline()
+    timeline["project"]["privacy"]["mode"] = True
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "private prompt",
+        }
+    )
+    envelope = encrypt_state({"timeline": timeline})
+
+    output_timeline, validation = VideoTimelineDirector.execute(
+        video_timeline_json=json.dumps(envelope)
+    ).result
+
+    assert validation["is_valid"] is True
+    assert output_timeline["project"]["privacy"] == {"mode": True}
+    assert output_timeline["director_track"]["sections"][0]["prompt"] == "private prompt"
 
 
 def test_director_invalid_json_returns_validation_error_not_crash():

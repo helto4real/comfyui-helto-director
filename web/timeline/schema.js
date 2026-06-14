@@ -136,9 +136,6 @@ export function createDefaultVideoTimeline() {
       },
       privacy: {
         mode: false,
-        hide_media_previews: false,
-        hide_text_prompts: false,
-        encrypt_previews: false,
       },
       display: {
         show_section_labels: true,

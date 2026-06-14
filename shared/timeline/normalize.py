@@ -35,6 +35,7 @@ def normalize_video_timeline(timeline: Any) -> dict:
     normalized["audio_tracks"] = _normalize_audio_tracks(
         normalized.get("audio_tracks")
     )
+    _normalize_privacy(normalized)
     _normalize_ui_state_view_range(normalized)
     return normalized
 
@@ -151,6 +152,23 @@ def _normalize_audio_clip(clip: dict, index: int) -> dict:
     normalized.setdefault("name", "")
     normalized.setdefault("lane", 0)
     return normalized
+
+
+def _normalize_privacy(timeline: dict) -> None:
+    project = timeline.setdefault("project", {})
+    privacy = project.get("privacy")
+    if not isinstance(privacy, dict):
+        privacy = {}
+    mode = any(
+        bool(privacy.get(key))
+        for key in (
+            "mode",
+            "hide_media_previews",
+            "hide_text_prompts",
+            "encrypt_previews",
+        )
+    )
+    project["privacy"] = {"mode": mode}
 
 
 def _normalize_ui_state_view_range(timeline: dict) -> None:

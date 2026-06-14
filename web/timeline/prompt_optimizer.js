@@ -13,7 +13,7 @@ export function showPromptOptimizer(options) {
   installPromptOptimizerStyles(documentRef);
   closePromptOptimizer(documentRef);
 
-  const timelineRows = promptOptimizerRows(options.timeline);
+  const timelineRows = promptOptimizerRows(options.timeline, Boolean(options.privacyMode));
   const overlay = documentRef.createElement("div");
   overlay.className = "htd-prompt-optimizer-dialog";
   overlay.innerHTML = `
@@ -323,7 +323,7 @@ export function closePromptOptimizer(documentRef = globalThis.document) {
   dialog?.remove();
 }
 
-export function promptOptimizerRows(timeline) {
+export function promptOptimizerRows(timeline, privacyMode = false) {
   const fps = frameRate(timeline);
   return [...(timeline?.director_track?.sections || [])]
     .filter((section) => section && section.type)
@@ -342,15 +342,15 @@ export function promptOptimizerRows(timeline) {
         mediaPath: asset?.path || asset?.file_path || "",
         mediaFile: asset?.metadata?.browser_filename || asset?.name || "",
         mediaFolderAlias: asset?.metadata?.browser_alias || "",
-        thumbnailUrl: thumbnailUrlForAsset(asset),
+        thumbnailUrl: thumbnailUrlForAsset(asset, privacyMode),
         label: asset?.name || asset?.path || (section.type === SECTION_TYPE_TEXT ? "Text segment" : `${section.type} segment`),
       };
     });
 }
 
-function thumbnailUrlForAsset(asset) {
+function thumbnailUrlForAsset(asset, privacyMode = false) {
   if (!asset?.path || (asset.type !== ASSET_TYPE_IMAGE && asset.type !== ASSET_TYPE_VIDEO)) return "";
-  return thumbnailUrl(asset);
+  return thumbnailUrl(asset, 320, privacyMode);
 }
 
 async function loadPromptOptimizerModels(node, selectEl, statusEl, fetchOptions = undefined) {

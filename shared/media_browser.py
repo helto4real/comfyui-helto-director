@@ -235,11 +235,11 @@ def resolve_browser_media_path(media_type: str, alias: str, filename: str) -> Pa
     return candidate
 
 
-def make_browser_thumbnail(media_type: str, alias: str, filename: str, max_size: int = 320) -> Path:
+def make_browser_thumbnail(media_type: str, alias: str, filename: str, max_size: int = 320, privacy_mode: bool = False) -> Path | bytes:
     media_type = normalize_media_type(media_type)
     if media_type not in {"image", "video"}:
         raise ValueError("Only image and video media have thumbnails.")
-    return make_thumbnail(resolve_browser_media_path(media_type, alias, filename), max_size=max_size)
+    return make_thumbnail(resolve_browser_media_path(media_type, alias, filename), max_size=max_size, privacy_mode=privacy_mode)
 
 
 def image_metadata(path: Path) -> dict[str, int]:

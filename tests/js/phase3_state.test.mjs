@@ -5,6 +5,7 @@ import {
   mountTimelineState,
   VIDEO_TIMELINE_WIDGET,
 } from "../../web/timeline/state.js";
+import { PRIVACY_SCHEMA } from "../../web/timeline/privacy.js";
 
 function createWidget(name, value) {
   return { name, value, type: "string" };
@@ -50,6 +51,36 @@ function createWindowStub() {
 
 function getHiddenTimeline(node) {
   return JSON.parse(node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value);
+}
+
+function installPrivacyXhrStub() {
+  const previous = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = class PrivacyXhrStub {
+    open(_method, _url, _async) {
+      this.status = 200;
+      this.statusText = "OK";
+    }
+
+    setRequestHeader() {}
+
+    send(body) {
+      this.responseText = JSON.stringify({
+        ok: true,
+        envelope: {
+          version: 1,
+          schema: PRIVACY_SCHEMA,
+          encrypted: true,
+          algorithm: "AES-256-GCM",
+          keyId: "test",
+          nonce: "nonce",
+          ciphertext: Buffer.from(String(body || "")).toString("base64"),
+        },
+      });
+    }
+  };
+  return () => {
+    globalThis.XMLHttpRequest = previous;
+  };
 }
 
 function longMultilinePrompt() {
@@ -284,6 +315,88 @@ async function testUndoRestoresDeleteKeyRemoval() {
   assert.equal(getHiddenTimeline(node).director_track.sections[0].prompt, "restore me");
 }
 
+async function testPrivacyModeWritesEncryptedHiddenWidget() {
+  const restoreXhr = installPrivacyXhrStub();
+  try {
+    const node = createNode();
+    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+    controller.updateTimeline((timeline) => {
+      timeline.project.privacy.mode = true;
+      timeline.project.global_prompt.prompt = "private global";
+      timeline.assets.push({
+        asset_id: "asset_001",
+        type: "Image",
+        source_kind: "FilePath",
+        path: "/private/reference.png",
+        name: "reference.png",
+      });
+      timeline.director_track.sections.push({
+        item_id: "section_001",
+        type: "Image",
+        start_time: 0,
+        end_time: 1,
+        prompt: "private prompt",
+        image: { asset_id: "asset_001" },
+      });
+    }, "privacy");
+
+    const hiddenValue = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
+    const payload = JSON.parse(hiddenValue);
+    assert.equal(payload.encrypted, true);
+    assert.equal(payload.schema, PRIVACY_SCHEMA);
+    assert.equal(hiddenValue.includes("private prompt"), false);
+    assert.equal(hiddenValue.includes("reference.png"), false);
+  } finally {
+    restoreXhr();
+  }
+}
+
+async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value = JSON.stringify({
+    version: 1,
+    schema: PRIVACY_SCHEMA,
+    encrypted: true,
+    algorithm: "AES-256-GCM",
+    keyId: "test",
+    nonce: "nonce",
+    ciphertext: "cipher",
+  });
+  globalThis.fetch = async () => ({
+    ok: true,
+    statusText: "OK",
+    text: async () => JSON.stringify({
+      ok: true,
+      state: {
+        timeline: {
+          type: "VIDEO_TIMELINE",
+          project: { privacy: { mode: true } },
+          director_track: {
+            sections: [{
+              item_id: "section_001",
+              type: "Text",
+              start_time: 0,
+              end_time: 1,
+              prompt: "decrypted prompt",
+            }],
+          },
+        },
+      },
+    }),
+  });
+  try {
+    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(controller.timeline.director_track.sections[0].prompt, "decrypted prompt");
+    assert.equal(controller.timeline.project.privacy.mode, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();
 await testLongMultilinePromptSurvivesCommit();
 await testUndoRedoUpdatesStateAndWidget();
@@ -294,5 +407,7 @@ await testGestureMouseupCommitBoundary();
 await testDeleteKeyRemovesSelectedItem();
 await testDeleteKeyIsIgnoredWhileTyping();
 await testUndoRestoresDeleteKeyRemoval();
+await testPrivacyModeWritesEncryptedHiddenWidget();
+await testEncryptedWorkflowLoadDecryptsBeforeRender();
 
 console.log("phase3 state tests passed");

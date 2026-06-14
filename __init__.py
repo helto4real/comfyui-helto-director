@@ -47,7 +47,11 @@ register_media_browser_routes = importlib.import_module(
 register_prompt_optimizer_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.prompt_optimizer"
 ).register_prompt_optimizer_routes
+register_privacy_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.privacy"
+).register_privacy_routes
 
+register_privacy_routes()
 register_media_cache_routes()
 register_media_browser_routes()
 register_prompt_optimizer_routes()
@@ -117,5 +121,6 @@ __all__ = [
     "LTXTimelineReferenceImageSelector",
     "register_media_browser_routes",
     "register_media_cache_routes",
+    "register_privacy_routes",
     "register_prompt_optimizer_routes",
 ]

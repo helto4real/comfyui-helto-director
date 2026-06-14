@@ -35,6 +35,7 @@ export function normalizeVideoTimeline(value) {
   normalized.assets = normalizeAssets(normalized.assets);
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
+  normalizePrivacy(normalized);
   normalizeUiStateViewRange(normalized);
   return normalized;
 }
@@ -142,6 +143,21 @@ function normalizeAudioClip(clip, index) {
   normalized.name ??= "";
   normalized.lane ??= 0;
   return normalized;
+}
+
+function normalizePrivacy(timeline) {
+  const project = timeline.project ??= {};
+  const privacy = project.privacy && typeof project.privacy === "object" && !Array.isArray(project.privacy)
+    ? project.privacy
+    : {};
+  project.privacy = {
+    mode: Boolean(
+      privacy.mode ||
+      privacy.hide_media_previews ||
+      privacy.hide_text_prompts ||
+      privacy.encrypt_previews,
+    ),
+  };
 }
 
 function normalizeUiStateViewRange(timeline) {

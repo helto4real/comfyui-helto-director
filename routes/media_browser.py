@@ -23,6 +23,10 @@ ROUTE_PREFIX = "/helto_director/media_browser"
 _ROUTES_REGISTERED = False
 
 
+def query_bool(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def register_media_browser_routes() -> bool:
     global _ROUTES_REGISTERED
     if _ROUTES_REGISTERED:
@@ -88,7 +92,10 @@ def register_media_browser_routes() -> bool:
                 encoded = urllib.parse.urlencode(params)
                 item["view_url"] = f"{ROUTE_PREFIX}/{media_type}/view?{encoded}"
                 if media_type in {"image", "video"}:
-                    item["thumb_url"] = f"{ROUTE_PREFIX}/{media_type}/thumb?{encoded}"
+                    thumb_params = dict(params)
+                    if query_bool(request.rel_url.query.get("privacy")):
+                        thumb_params["privacy"] = "1"
+                    item["thumb_url"] = f"{ROUTE_PREFIX}/{media_type}/thumb?{urllib.parse.urlencode(thumb_params)}"
             return web.json_response({items_key: items})
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
@@ -98,12 +105,22 @@ def register_media_browser_routes() -> bool:
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
             filename = urllib.parse.unquote(request.rel_url.query.get("filename", ""))
+            privacy_mode = query_bool(request.rel_url.query.get("privacy"))
             thumb = make_browser_thumbnail(
                 media_type,
                 request.rel_url.query.get("alias", ""),
                 filename,
                 int(request.rel_url.query.get("max_size", "320")),
+                privacy_mode=privacy_mode,
             )
+            if privacy_mode:
+                return web.Response(
+                    body=thumb,
+                    headers={
+                        "Cache-Control": "private, no-store",
+                        "Content-Type": "image/webp",
+                    },
+                )
             return web.FileResponse(
                 thumb,
                 headers={

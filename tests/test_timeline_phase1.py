@@ -34,6 +34,7 @@ def test_create_default_video_timeline_shape():
     assert timeline["project"]["settings"]["allow_gaps"] is True
     assert timeline["project"]["settings"]["auto_close_gaps"] is False
     assert timeline["project"]["audio"]["use_native_audio"] is False
+    assert timeline["project"]["privacy"] == {"mode": False}
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
     assert timeline["ui_state"]["view_start_seconds"] == 0
     assert timeline["ui_state"]["view_end_seconds"] == 5
@@ -50,6 +51,20 @@ def test_migrate_accepts_json_string():
 
     assert migrated["schema_version"] == SCHEMA_VERSION
     assert migrated["type"] == VIDEO_TIMELINE_TYPE
+
+
+def test_legacy_privacy_flags_normalize_to_single_mode():
+    timeline = create_default_video_timeline()
+    timeline["project"]["privacy"] = {
+        "mode": False,
+        "hide_media_previews": True,
+        "hide_text_prompts": False,
+        "encrypt_previews": False,
+    }
+
+    normalized = normalize_video_timeline(timeline)
+
+    assert normalized["project"]["privacy"] == {"mode": True}
 
 
 def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():

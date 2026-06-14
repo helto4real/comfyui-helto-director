@@ -34,6 +34,8 @@ function testPromptOptimizerRowsUseTimelineSectionsAndAssets() {
   assert.equal(rows[0].mediaFile, "guide.png");
   assert.equal(rows[0].thumbnailUrl.includes("/helto_director/media/thumbnail?"), true);
   assert.equal(rows[0].thumbnailUrl.includes("path=%2Ftmp%2Fguide.png"), true);
+  assert.equal(rows[0].thumbnailUrl.includes("privacy=1"), false);
+  assert.equal(promptOptimizerRows(timeline, true)[0].thumbnailUrl.includes("privacy=1"), true);
   assert.equal(rows[1].id, "section_text");
   assert.equal(rows[1].prompt, "walk forward");
 }

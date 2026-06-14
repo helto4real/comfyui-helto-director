@@ -60,9 +60,6 @@ def create_default_video_timeline() -> dict:
             },
             "privacy": {
                 "mode": False,
-                "hide_media_previews": False,
-                "hide_text_prompts": False,
-                "encrypt_previews": False,
             },
             "display": {
                 "show_section_labels": True,
