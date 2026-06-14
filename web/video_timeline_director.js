@@ -29,6 +29,14 @@ app.registerExtension({
       return result;
     };
 
+    const serialize = nodeType.prototype.serialize;
+    if (typeof serialize === "function") {
+      nodeType.prototype.serialize = function () {
+        this.flushTimelineBeforeSerialization?.();
+        return serialize.apply(this, arguments);
+      };
+    }
+
     const onRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
       unmountTimelineRenderer(this);

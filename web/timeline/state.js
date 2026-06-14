@@ -78,12 +78,26 @@ export class TimelineStateController {
     }, options.delayMs ?? this.debounceMs);
   }
 
-  flushDebouncedCommit(reason = "prompt typing") {
+  flushDebouncedCommit(reason = "prompt typing", options = {}) {
     if (!this.pendingDebounce) return null;
     const clearTimer = this.window?.clearTimeout ?? globalThis.clearTimeout;
     clearTimer(this.pendingDebounce);
     this.pendingDebounce = null;
-    return this.commitTimelineChange(reason);
+    return this.commitTimelineChange(reason, options);
+  }
+
+  flushTimelineBeforeSerialization() {
+    if (this.pendingDebounce) {
+      return this.flushDebouncedCommit("prompt typing", {
+        markDirty: false,
+        rerender: false,
+      });
+    }
+    return this.commitTimelineChange("serialize timeline", {
+      pushUndo: false,
+      markDirty: false,
+      rerender: false,
+    });
   }
 
   beginTimelineGesture() {
@@ -143,7 +157,8 @@ export function mountTimelineState(node, app, options = {}) {
   node.commitTimelineChange = (reason, commitOptions) => controller.commitTimelineChange(reason, commitOptions);
   node.updateTimelineState = (mutator, reason, commitOptions) => controller.updateTimeline(mutator, reason, commitOptions);
   node.scheduleDebouncedTimelineCommit = (reason, commitOptions) => controller.scheduleDebouncedCommit(reason, commitOptions);
-  node.flushDebouncedTimelineCommit = (reason) => controller.flushDebouncedCommit(reason);
+  node.flushDebouncedTimelineCommit = (reason, commitOptions) => controller.flushDebouncedCommit(reason, commitOptions);
+  node.flushTimelineBeforeSerialization = () => controller.flushTimelineBeforeSerialization();
   node.beginTimelineGesture = () => controller.beginTimelineGesture();
   node.endTimelineGesture = (reason) => controller.endTimelineGesture(reason);
   node.undoTimelineChange = () => controller.undoTimelineChange();

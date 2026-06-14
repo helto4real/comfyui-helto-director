@@ -8,7 +8,7 @@ import {
   TIMELINE_VIEWPORT_BORDER_HEIGHT,
   getTimelineViewportHeight,
 } from "../../web/timeline/geometry.js";
-import { getTimelineWidgetHeight } from "../../web/timeline/renderer.js";
+import { getTimelineWidgetHeight, setLiveItemField } from "../../web/timeline/renderer.js";
 
 function testTimelineHeightIsTripled() {
   const timeline = createDefaultVideoTimeline();
@@ -49,6 +49,25 @@ function testAudioLanesExpandViewportToContent() {
     getTimelineViewportHeight(timeline),
     RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + AUDIO_LANE_HEIGHT * 3 + TIMELINE_VIEWPORT_BORDER_HEIGHT,
   );
+}
+
+function testPromptEditsUpdateLiveSectionAfterStateReplacement() {
+  const timeline = createDefaultVideoTimeline();
+  const liveSection = {
+    item_id: "section_001",
+    type: "Text",
+    start_time: 0,
+    end_time: 1,
+    prompt: "first debounce chunk",
+  };
+  const staleSectionReference = { ...liveSection };
+  timeline.director_track.sections.push(liveSection);
+
+  const updated = setLiveItemField(timeline, staleSectionReference, "prompt", "first debounce chunk plus the rest of the prompt");
+
+  assert.equal(updated, liveSection);
+  assert.equal(timeline.director_track.sections[0].prompt, "first debounce chunk plus the rest of the prompt");
+  assert.equal(staleSectionReference.prompt, "first debounce chunk");
 }
 
 function testSectionPreviewUsesContainedRepeatedFrames() {
@@ -92,6 +111,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("input.placeholder = options.placeholder ?? title"), true);
   assert.equal(rendererSource.includes("rows: 5"), true);
   assert.equal(rendererSource.includes('scheduleDebouncedCommit("prompt typing", { rerender: false })'), true);
+  assert.equal(rendererSource.includes("setLiveItemField(this.controller.timeline, item, field, input.value)"), true);
+  assert.equal(rendererSource.includes('flushDebouncedCommit("prompt typing", { rerender: false })'), true);
   assert.equal(rendererSource.includes('this.renderInspectorRow("Prompt", control, "is-prompt")'), false);
   assert.equal(rendererSource.includes('el("div", "htd-inspector-row is-prompt")'), true);
   assert.equal(rendererSource.includes("htd-inspector.has-selection"), true);
@@ -130,6 +151,7 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
 testTimelineHeightIsTripled();
 testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
+testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testSectionPreviewUsesContainedRepeatedFrames();
 
 console.log("timeline preview UI tests passed");

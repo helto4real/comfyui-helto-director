@@ -42,6 +42,7 @@ import {
   addSection,
   deleteSelectedItem,
   duplicateSelectedSection,
+  findSection,
   moveAudioClip,
   moveSection,
   resizeAudioClip,
@@ -58,6 +59,12 @@ const ROOT_GAP = 6;
 
 export function getTimelineWidgetHeight(timeline) {
   return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
+}
+
+export function setLiveItemField(timeline, item, field, value) {
+  const liveItem = resolveLiveTimelineItem(timeline, item) ?? item;
+  liveItem[field] = value;
+  return liveItem;
 }
 
 export class TimelineRenderer {
@@ -471,13 +478,18 @@ export class TimelineRenderer {
     input.placeholder = options.placeholder ?? title;
     input.title = title;
     input.addEventListener("input", () => {
-      item[field] = input.value;
+      setLiveItemField(this.controller.timeline, item, field, input.value);
       if (options.debounced) {
         this.controller.scheduleDebouncedCommit("prompt typing", { rerender: false });
       } else {
         this.controller.scheduleDebouncedCommit("settings change", { delayMs: 150 });
       }
     });
+    if (options.debounced) {
+      input.addEventListener("blur", () => {
+        this.controller.flushDebouncedCommit("prompt typing", { rerender: false });
+      });
+    }
     return input;
   }
 
@@ -846,6 +858,12 @@ function findAudioClip(timeline, itemId) {
     if (clip) return clip;
   }
   return null;
+}
+
+function resolveLiveTimelineItem(timeline, item) {
+  const itemId = item?.item_id;
+  if (!itemId) return item;
+  return findSection(timeline, itemId) ?? findAudioClip(timeline, itemId) ?? item;
 }
 
 function getInspectorHeight(timeline) {
