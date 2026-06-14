@@ -13,9 +13,10 @@
 - Zoom-to-fit now measures the timeline viewport and syncs the visible Zoom Level widget so state commits preserve the fitted zoom.
 - Phase 7 media cache routes generate thumbnail `.webp` files and audio waveform peak JSON under ComfyUI temp, with frontend cache hydration for previews/waveforms.
 - Phase 8 adds LTX 2.3 Timeline Config and Planner nodes that output serializable LTX plans with frame mapping, resolved dimensions, prompt/media/audio plans, validation, and debug info.
+- Phase 9 adds the LTX 2.3 Timeline Runtime node with Prompt Relay model patching, image guide data/application, provided-audio mixing, native-audio mode gating, optional negative conditioning, video/audio latents, source-video placeholder outputs, and runtime debug.
 
-We are now refining the UI before moving phase 9 LTX 2.3 runtime and WAN 2.2 planning/runtime into later phases. The current focus is on improving the timeline interactions, media attachment UX, and cache performance to ensure a solid foundation for the more complex planning and runtime execution in the next phases.
+We are now hardening Phase 9 against practical ComfyUI graph usage before moving to LTX identity/reference helpers or WAN 2.2. The current focus is validating the full Director -> LTX Config -> LTX Planner -> LTX Runtime path with realistic text, image, audio, native-audio, and failure scenarios.
 
 UI preference for further edits: use compact icon buttons and icon menu controls for node buttons/selection controls where practical, matching the timeline toolbar style. Keep full English labels in tooltips, aria labels, and dropdown menu items rather than putting bulky text controls in the node body.
 
-LTX 2.3 runtime and WAN 2.2 planning/runtime are intentionally left for later phases.
+LTX 2.3 source-video runtime behavior is the next Phase 9 follow-up target. WAN 2.2 planning/runtime remains deferred until the LTX runtime path has been exercised end to end.

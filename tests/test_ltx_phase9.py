@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import asyncio
 import importlib.util
+import json
 import math
 import struct
 import sys
@@ -25,7 +26,7 @@ from shared.ltx import build_ltx_runtime_outputs, build_ltx_timeline_plan, creat
 from shared.timeline import create_default_video_timeline
 
 
-def _registered_runtime_node():
+def _registered_node(node_id):
     module_path = Path(__file__).resolve().parents[1]
     sys_module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(
@@ -46,7 +47,7 @@ def _registered_runtime_node():
         spec.loader.exec_module(module)
         extension = asyncio.run(module.comfy_entrypoint())
         for node_class in asyncio.run(extension.get_node_list()):
-            if node_class.define_schema().node_id == "HeltoLTX23TimelineRuntime":
+            if node_class.define_schema().node_id == node_id:
                 return node_class
     finally:
         sys.path = previous_path
@@ -54,7 +55,11 @@ def _registered_runtime_node():
             sys.modules.pop(sys_module_name, None)
         else:
             sys.modules[sys_module_name] = previous
-    raise AssertionError("HeltoLTX23TimelineRuntime was not registered.")
+    raise AssertionError(f"{node_id} was not registered.")
+
+
+def _registered_runtime_node():
+    return _registered_node("HeltoLTX23TimelineRuntime")
 
 
 class FakeRawTokenizer:
@@ -278,6 +283,63 @@ def _audio_plan(path: Path):
     return plan
 
 
+def _image_audio_timeline(image_path: Path, audio_path: Path):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["assets"].extend(
+        [
+            {
+                "asset_id": "image_001",
+                "type": ASSET_TYPE_IMAGE,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": str(image_path),
+                "name": image_path.name,
+            },
+            {
+                "asset_id": "audio_001",
+                "type": ASSET_TYPE_AUDIO,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": str(audio_path),
+                "name": audio_path.name,
+            },
+        ]
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_IMAGE,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "image": {"asset_id": "image_001"},
+            "prompt": "practical smoke workflow image",
+            "guide_strength": 0.75,
+        }
+    )
+    timeline["audio_tracks"].append(
+        {
+            "track_id": "audio_track_001",
+            "clips": [
+                {
+                    "item_id": "audio_clip_001",
+                    "audio": {"asset_id": "audio_001"},
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "source_in": 0.0,
+                    "source_out": 1.0,
+                    "volume": 80.0,
+                    "fade_in": 0.05,
+                    "fade_out": 0.05,
+                    "enabled": True,
+                    "lane": 0,
+                }
+            ],
+        }
+    )
+    return timeline
+
+
 def test_ltx_runtime_node_schema_io_order():
     schema = _registered_runtime_node().define_schema()
 
@@ -324,6 +386,60 @@ def test_ltx_runtime_node_schema_io_order():
         "source_video_frame_count",
         "runtime_debug",
     ]
+
+
+def test_director_to_ltx_runtime_smoke_graph_with_image_and_audio(tmp_path):
+    image_path = tmp_path / "guide.png"
+    audio_path = tmp_path / "tone.wav"
+    Image.new("RGB", (64, 64), (96, 160, 255)).save(image_path)
+    _write_test_wav(audio_path, amplitude=0.4)
+
+    Director = _registered_node("HeltoVideoTimelineDirector")
+    Config = _registered_node("HeltoLTX23TimelineConfig")
+    Planner = _registered_node("HeltoLTX23TimelinePlanner")
+    Runtime = _registered_node("HeltoLTX23TimelineRuntime")
+
+    authored_timeline = _image_audio_timeline(image_path, audio_path)
+    video_timeline, director_validation = Director.execute(
+        duration_seconds=1.0,
+        frame_rate=24.0,
+        quality_preset=QUALITY_PRESET_QUICK_DRAFT,
+        video_timeline_json=json.dumps(authored_timeline),
+    ).result
+    ltx_config = Config.execute(debug_mode=True).result[0]
+    ltx_plan, planner_validation, planner_debug = Planner.execute(video_timeline, ltx_config).result
+    (
+        runtime_model,
+        positive,
+        negative,
+        video_latent,
+        audio_latent,
+        combined_audio,
+        guide_data,
+        source_video_images,
+        source_video_audio,
+        source_video_frame_rate,
+        source_video_frame_count,
+        runtime_debug,
+    ) = Runtime.execute(FakeModel(), FakeClip(), FakeVAE(), ltx_plan, audio_vae=FakeAudioVAE()).result
+
+    assert director_validation["is_valid"] is True
+    assert planner_validation["is_valid"] is True
+    assert planner_debug["type"] == "DEBUG_INFO"
+    assert len(runtime_model.object_patches) == 4
+    assert "practical smoke workflow image" in positive[0][1]["text"]
+    assert torch.equal(negative[0][0], torch.zeros_like(positive[0][0]))
+    assert video_latent["samples"].shape[2] > ((ltx_plan["resolved_output"]["frame_count"] - 1) // 8) + 1
+    assert audio_latent["samples"].shape[1] == 4
+    assert combined_audio["waveform"].abs().max() > 0.0
+    assert guide_data["strengths"] == [0.75]
+    assert source_video_images.shape[0] == 1
+    assert source_video_audio["waveform"].shape[1] == 2
+    assert source_video_frame_rate == ltx_plan["resolved_output"]["frame_rate"]
+    assert source_video_frame_count == 0
+    assert runtime_debug["enabled"] is True
+    assert runtime_debug["summary"]["applied_guides"] == 1
+    assert runtime_debug["summary"]["audio_clip_count"] == 1
 
 
 def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
