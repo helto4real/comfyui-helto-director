@@ -756,20 +756,22 @@ export class TimelineRenderer {
     this.openMenu = null;
     this.commitMutation((timeline) => selectItem(timeline, itemId), "select", { pushUndo: false });
 
-    const root = this.container.querySelector(".htd-root") ?? this.container;
-    const menu = this.renderItemContextMenu(itemId, deleteLabelForItemType(itemType), event.clientX, event.clientY, root);
-    root.append(menu);
+    const documentRef = this.container.ownerDocument ?? globalThis.document;
+    const menu = this.renderItemContextMenu(itemId, deleteLabelForItemType(itemType), event.clientX, event.clientY, documentRef);
+    (documentRef?.body ?? this.container).append(menu);
     this.contextMenuElement = menu;
-    this.contextMenuDocument = this.container.ownerDocument ?? globalThis.document;
+    this.contextMenuDocument = documentRef;
     this.contextMenuDocument?.addEventListener?.("pointerdown", this.onContextMenuPointerDown, true);
     this.contextMenuDocument?.addEventListener?.("keydown", this.onContextMenuKeyDown, true);
   }
 
-  renderItemContextMenu(itemId, label, clientX, clientY, root) {
+  renderItemContextMenu(itemId, label, clientX, clientY, documentRef) {
     const menu = el("div", "htd-context-menu");
-    const rect = root.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 0, height: 0 };
-    const left = clampNumber(Number(clientX) - Number(rect.left), 4, Math.max(4, Number(rect.width) - 150), 4);
-    const top = clampNumber(Number(clientY) - Number(rect.top), 4, Math.max(4, Number(rect.height) - 32), 4);
+    const viewport = documentRef?.defaultView ?? globalThis.window;
+    const viewportWidth = Number(viewport?.innerWidth ?? documentRef?.documentElement?.clientWidth ?? 0);
+    const viewportHeight = Number(viewport?.innerHeight ?? documentRef?.documentElement?.clientHeight ?? 0);
+    const left = clampNumber(Number(clientX), 4, Math.max(4, viewportWidth - 150), 4);
+    const top = clampNumber(Number(clientY), 4, Math.max(4, viewportHeight - 32), 4);
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
     menu.setAttribute("role", "menu");
@@ -1316,7 +1318,7 @@ function installStyles(documentRef) {
     .htd-menu.align-end .htd-menu-list { right: 0; left: auto; }
     .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-menu-item:hover, .htd-menu-item.is-active { background: #293244; color: #f7f9fc; }
-    .htd-context-menu { position: absolute; z-index: 35; min-width: 132px; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 8px 20px rgba(0,0,0,0.42); }
+    .htd-context-menu { position: fixed; z-index: 35; min-width: 132px; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 8px 20px rgba(0,0,0,0.42); }
     .htd-context-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-context-menu-item:hover { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }

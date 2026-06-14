@@ -194,6 +194,11 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes("deleteSelectedItem(timeline)"), true);
   assert.equal(rendererSource.includes("htd-context-menu"), true);
   assert.equal(rendererSource.includes("htd-context-menu-item"), true);
+  assert.equal(rendererSource.includes('(documentRef?.body ?? this.container).append(menu)'), true);
+  assert.equal(rendererSource.includes("viewport?.innerWidth"), true);
+  assert.equal(rendererSource.includes("viewport?.innerHeight"), true);
+  assert.equal(rendererSource.includes("root.getBoundingClientRect"), false);
+  assert.equal(rendererSource.includes(".htd-context-menu { position: fixed;"), true);
 }
 
 function testRendererUsesRealWaveformsOnly() {
