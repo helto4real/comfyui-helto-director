@@ -261,6 +261,10 @@ function testRendererUsesRealWaveformsOnly() {
   assert.equal(rendererSource.includes("Encrypt Previews"), false);
   assert.equal(rendererSource.includes("is-private"), true);
   assert.equal(rendererSource.includes("is-privacy-revealed"), true);
+  assert.equal(rendererSource.includes("privacyExternalModalOpen"), true);
+  assert.equal(rendererSource.includes("is-privacy-modal-open"), true);
+  assert.equal(rendererSource.includes("this.privacyRevealActive && !this.privacyExternalModalOpen"), true);
+  assert.equal(rendererSource.includes("onClose: () => {"), true);
 }
 
 function testWaveformHelpersAdaptAndTrimPeaks() {

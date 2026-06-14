@@ -96,6 +96,7 @@ export class TimelineRenderer {
     this.observedWidth = null;
     this.viewportWidth = TIMELINE_WIDTH;
     this.privacyRevealActive = false;
+    this.privacyExternalModalOpen = false;
     this.onContextMenuPointerDown = (event) => this.handleContextMenuPointerDown(event);
     this.onContextMenuKeyDown = (event) => this.handleContextMenuKeyDown(event);
     this.onPrivacyPointerEnter = () => this.setPrivacyRevealActive(true);
@@ -125,8 +126,11 @@ export class TimelineRenderer {
     this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
     this.container.replaceChildren();
     const root = el("div", "htd-root");
-    root.classList.toggle("is-private", Boolean(timeline?.project?.privacy?.mode));
-    root.classList.toggle("is-privacy-revealed", this.privacyRevealActive || !timeline?.project?.privacy?.mode);
+    const privacyMode = Boolean(timeline?.project?.privacy?.mode);
+    const privacyRevealed = !privacyMode || (this.privacyRevealActive && !this.privacyExternalModalOpen);
+    root.classList.toggle("is-private", privacyMode);
+    root.classList.toggle("is-privacy-modal-open", this.privacyExternalModalOpen);
+    root.classList.toggle("is-privacy-revealed", privacyRevealed);
     root.append(this.renderToolbar(), this.renderRangeControl(timeline), this.renderTimeline(timeline), this.renderInspector(timeline));
     if (this.controller.privacyError) {
       const status = el("div", "htd-privacy-status");
@@ -900,12 +904,23 @@ export class TimelineRenderer {
   }
 
   openPromptOptimizer() {
+    const privacyMode = Boolean(this.controller.timeline.project.privacy.mode);
+    if (privacyMode) {
+      this.privacyExternalModalOpen = true;
+      this.privacyRevealActive = false;
+      this.render();
+    }
     showPromptOptimizer({
       timeline: this.controller.timeline,
       node: this.node,
       app: this.app,
       documentRef: this.container.ownerDocument,
-      privacyMode: Boolean(this.controller.timeline.project.privacy.mode),
+      privacyMode,
+      onClose: () => {
+        if (!this.privacyExternalModalOpen) return;
+        this.privacyExternalModalOpen = false;
+        this.render();
+      },
       onApply: (updates) => {
         this.commitMutation((timeline) => {
           for (const section of timeline.director_track.sections) {

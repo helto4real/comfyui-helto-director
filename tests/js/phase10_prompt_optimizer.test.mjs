@@ -53,6 +53,11 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
   assert.equal(optimizerSource.includes("width: 96px; height: 96px; min-width: 96px"), true);
   assert.equal(optimizerSource.includes("object-fit: contain"), true);
   assert.equal(optimizerSource.includes("object-fit: cover"), false);
+  assert.equal(optimizerSource.includes('overlay.className = `htd-prompt-optimizer-dialog${options.privacyMode ? " privacy-mode" : ""}`'), true);
+  assert.equal(optimizerSource.includes("options.onClose?.();"), true);
+  assert.equal(optimizerSource.includes(".htd-prompt-optimizer-dialog.privacy-mode .thumb img { opacity: 0; }"), true);
+  assert.equal(optimizerSource.includes(".htd-prompt-optimizer-dialog.privacy-mode .grid .field textarea"), true);
+  assert.equal(optimizerSource.includes(".htd-prompt-optimizer-panel:hover .thumb img { opacity: 1; }"), true);
   assert.equal(rendererSource.includes('this.commitMutation((timeline) => {'), true);
   assert.equal(rendererSource.includes('}, "prompt optimizer apply");'), true);
 }

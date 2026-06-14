@@ -15,7 +15,7 @@ export function showPromptOptimizer(options) {
 
   const timelineRows = promptOptimizerRows(options.timeline, Boolean(options.privacyMode));
   const overlay = documentRef.createElement("div");
-  overlay.className = "htd-prompt-optimizer-dialog";
+  overlay.className = `htd-prompt-optimizer-dialog${options.privacyMode ? " privacy-mode" : ""}`;
   overlay.innerHTML = `
     <div class="htd-prompt-optimizer-panel">
       <h3>LTX Prompt Optimizer</h3>
@@ -112,6 +112,7 @@ export function showPromptOptimizer(options) {
     closed = true;
     abortController.abort();
     unloadPromptOptimizerModel(loadedModelAlias);
+    options.onClose?.();
   };
 
   const updateProgressBar = (progress = {}, visible = true) => {
@@ -529,6 +530,20 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-panel .field { display: grid; gap: 4px; min-width: 0; }
     .htd-prompt-optimizer-panel .field span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; font-size: 11px; }
     .htd-prompt-optimizer-panel .field textarea { width: 100%; height: 96px; min-height: 72px; resize: vertical; padding: 7px; line-height: 1.35; }
+    .htd-prompt-optimizer-dialog.privacy-mode .thumb { color: transparent; }
+    .htd-prompt-optimizer-dialog.privacy-mode .thumb img { opacity: 0; }
+    .htd-prompt-optimizer-dialog.privacy-mode .grid .field span,
+    .htd-prompt-optimizer-dialog.privacy-mode .grid .field textarea,
+    .htd-prompt-optimizer-dialog.privacy-mode .status,
+    .htd-prompt-optimizer-dialog.privacy-mode .progress-text { color: transparent; text-shadow: none; }
+    .htd-prompt-optimizer-dialog.privacy-mode .grid .field textarea::placeholder { color: transparent; }
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .thumb { color: #aab4c4; }
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .thumb img { opacity: 1; }
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .grid .field span { color: #cbd5e1; }
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .grid .field textarea { color: #e5e9f0; }
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .grid .field textarea::placeholder,
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .status,
+    .htd-prompt-optimizer-dialog.privacy-mode .htd-prompt-optimizer-panel:hover .progress-text { color: #aab4c4; }
     .htd-prompt-optimizer-panel .empty { padding: 12px; color: #aab4c4; background: #151c28; border: 1px solid #30394c; border-radius: 5px; }
     .htd-prompt-optimizer-panel .actions { display: flex; justify-content: flex-end; gap: 8px; }
     .htd-prompt-optimizer-panel .actions button { min-width: 82px; height: 32px; padding: 0 12px; }
