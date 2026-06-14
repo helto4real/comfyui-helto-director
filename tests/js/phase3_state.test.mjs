@@ -25,7 +25,6 @@ function createNode() {
       createWidget("aspect_ratio", "16:9"),
       createWidget("orientation", "Landscape"),
       createWidget("quality_preset", "Standard"),
-      createWidget("zoom_level", 1.0),
       createWidget(VIDEO_TIMELINE_WIDGET, ""),
     ],
     dirtyCalls,
@@ -113,12 +112,15 @@ async function testGestureMouseupCommitBoundary() {
   const controller = new TimelineStateController(node, {}, { window: windowStub });
 
   controller.beginTimelineGesture();
-  controller.timeline.ui_state.scroll_x = 42;
+  controller.timeline.ui_state.view_start_seconds = 1;
+  controller.timeline.ui_state.view_end_seconds = 4;
   windowStub.listeners.mouseup[0]();
 
-  assert.equal(getHiddenTimeline(node).ui_state.scroll_x, 42);
+  assert.equal(getHiddenTimeline(node).ui_state.view_start_seconds, 1);
+  assert.equal(getHiddenTimeline(node).ui_state.view_end_seconds, 4);
   assert.equal(controller.undoTimelineChange(), true);
-  assert.equal(getHiddenTimeline(node).ui_state.scroll_x, 0);
+  assert.equal(getHiddenTimeline(node).ui_state.view_start_seconds, 0);
+  assert.equal(getHiddenTimeline(node).ui_state.view_end_seconds, 5);
 }
 
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();

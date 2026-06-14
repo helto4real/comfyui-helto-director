@@ -4,7 +4,7 @@ import {
   SECTION_TYPE_VIDEO,
   deepClone,
 } from "./schema.js";
-import { clamp, snapTime } from "./geometry.js";
+import { clamp, getProjectWholeSeconds, snapTime } from "./geometry.js";
 
 const DEFAULT_SECTION_DURATION = 1.0;
 const MIN_SECTION_DURATION = 0.25;
@@ -240,8 +240,8 @@ export function autoStackAudioLanes(timeline) {
 }
 
 export function zoomToFit(timeline) {
-  timeline.ui_state.zoom_level = 1.0;
-  timeline.ui_state.scroll_x = 0.0;
+  timeline.ui_state.view_start_seconds = 0;
+  timeline.ui_state.view_end_seconds = getProjectWholeSeconds(timeline);
   return timeline;
 }
 

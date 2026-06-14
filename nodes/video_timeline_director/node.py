@@ -8,7 +8,6 @@ from ...shared.contracts.video_timeline import (
     DEFAULT_FRAME_RATE,
     DEFAULT_ORIENTATION,
     DEFAULT_QUALITY_PRESET,
-    DEFAULT_ZOOM_LEVEL,
     QUALITY_PRESETS,
 )
 
@@ -69,17 +68,6 @@ class VideoTimelineDirector(io.ComfyNode):
                     default=DEFAULT_QUALITY_PRESET,
                     socketless=True,
                 ),
-                io.Float.Input(
-                    "zoom_level",
-                    display_name="Zoom Level",
-                    default=DEFAULT_ZOOM_LEVEL,
-                    min=0.1,
-                    max=8.0,
-                    step=0.05,
-                    round=0.001,
-                    display_mode=io.NumberDisplay.slider,
-                    socketless=True,
-                ),
                 io.String.Input(
                     "video_timeline_json",
                     display_name="video_timeline_json",
@@ -110,7 +98,6 @@ class VideoTimelineDirector(io.ComfyNode):
         aspect_ratio: str = DEFAULT_ASPECT_RATIO,
         orientation: str = DEFAULT_ORIENTATION,
         quality_preset: str = DEFAULT_QUALITY_PRESET,
-        zoom_level: float = DEFAULT_ZOOM_LEVEL,
         video_timeline_json: str = "",
     ) -> io.NodeOutput:
         video_timeline, timeline_validation = build_director_outputs(
@@ -120,6 +107,5 @@ class VideoTimelineDirector(io.ComfyNode):
             aspect_ratio=aspect_ratio,
             orientation=orientation,
             quality_preset=quality_preset,
-            zoom_level=zoom_level,
         )
         return io.NodeOutput(video_timeline, timeline_validation)

@@ -49,7 +49,6 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
         "aspect_ratio",
         "orientation",
         "quality_preset",
-        "zoom_level",
         "video_timeline_json",
     ]
     assert "IMAGE" not in input_types
@@ -76,7 +75,8 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     timeline["project"]["duration_seconds"] = 1.0
     timeline["project"]["frame_rate"] = 12.0
     timeline["project"]["aspect_ratio"] = "1:1"
-    timeline["ui_state"]["zoom_level"] = 0.5
+    timeline["ui_state"]["view_start_seconds"] = 2
+    timeline["ui_state"]["view_end_seconds"] = 4
 
     output_timeline, validation = VideoTimelineDirector.execute(
         duration_seconds=12.0,
@@ -84,7 +84,6 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
         aspect_ratio="9:16",
         orientation="Portrait",
         quality_preset="High",
-        zoom_level=2.25,
         video_timeline_json=json.dumps(timeline),
     ).result
 
@@ -94,7 +93,8 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     assert output_timeline["project"]["aspect_ratio"] == "9:16"
     assert output_timeline["project"]["orientation"] == "Portrait"
     assert output_timeline["project"]["quality_preset"] == "High"
-    assert output_timeline["ui_state"]["zoom_level"] == 2.25
+    assert output_timeline["ui_state"]["view_start_seconds"] == 2
+    assert output_timeline["ui_state"]["view_end_seconds"] == 4
 
 
 def test_director_outputs_validation_for_invalid_timeline():

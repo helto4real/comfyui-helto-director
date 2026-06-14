@@ -18,7 +18,7 @@ function testTimelineHeightIsTripled() {
     getTimelineViewportHeight(timeline),
     RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + AUDIO_LANE_HEIGHT + TIMELINE_VIEWPORT_BORDER_HEIGHT,
   );
-  assert.equal(getTimelineWidgetHeight(timeline), 270);
+  assert.equal(getTimelineWidgetHeight(timeline), 302);
 }
 
 function testAudioLanesExpandViewportToContent() {
@@ -48,8 +48,17 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("aria-label"), true);
   assert.equal(rendererSource.includes("htd-project-end"), true);
   assert.equal(rendererSource.includes("TIMELINE_RIGHT_PADDING"), true);
-  assert.equal(rendererSource.includes("getVisibleTimelineSeconds(timeline)"), true);
+  assert.equal(rendererSource.includes("renderRangeControl"), true);
+  assert.equal(rendererSource.includes("htd-range-control"), true);
+  assert.equal(rendererSource.includes("view_start_seconds"), true);
+  assert.equal(rendererSource.includes("view_end_seconds"), true);
+  assert.equal(rendererSource.includes("getTimelineViewRange(timeline)"), true);
   assert.equal(rendererSource.includes("scheduleViewportRemeasure"), true);
+  assert.equal(rendererSource.includes("ResizeObserver"), true);
+  assert.equal(rendererSource.includes("contentRect?.width"), true);
+  assert.equal(rendererSource.includes("moveTarget?.addEventListener(\"pointermove\", this.onPointerMove)"), true);
+  assert.equal(rendererSource.includes("moveTarget?.removeEventListener(\"pointermove\", this.onPointerMove)"), true);
+  assert.equal(rendererSource.includes("this.drag.bar = this.container.querySelector(\".htd-range-bar\")"), true);
   assert.equal(rendererSource.includes('trackLabel("director", "Director")'), true);
   assert.equal(rendererSource.includes('trackLabel("audio", "Audio")'), true);
   assert.equal(rendererSource.includes("width: ${TIMELINE_RIGHT_PADDING}px"), true);

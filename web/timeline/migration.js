@@ -35,6 +35,7 @@ export function normalizeVideoTimeline(value) {
   normalized.assets = normalizeAssets(normalized.assets);
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
+  normalizeUiStateViewRange(normalized);
   return normalized;
 }
 
@@ -139,6 +140,21 @@ function normalizeAudioClip(clip, index) {
   normalized.name ??= "";
   normalized.lane ??= 0;
   return normalized;
+}
+
+function normalizeUiStateViewRange(timeline) {
+  const uiState = timeline.ui_state ??= {};
+  const rawDuration = Number(timeline?.project?.duration_seconds ?? 5);
+  const duration = Number.isFinite(rawDuration) ? rawDuration : 5;
+  const projectSeconds = Math.max(1, Math.ceil(Math.max(0.25, duration)));
+  let start = Math.round(Number(uiState.view_start_seconds));
+  let end = Math.round(Number(uiState.view_end_seconds));
+  if (!Number.isFinite(start)) start = 0;
+  if (!Number.isFinite(end)) end = projectSeconds;
+  start = Math.max(0, Math.min(start, Math.max(0, projectSeconds - 1)));
+  end = Math.max(start + 1, Math.min(end, projectSeconds));
+  uiState.view_start_seconds = start;
+  uiState.view_end_seconds = end;
 }
 
 function basename(path) {

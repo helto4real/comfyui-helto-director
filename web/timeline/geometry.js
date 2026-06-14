@@ -7,6 +7,7 @@ export const RULER_HEIGHT = 28;
 export const HANDLE_WIDTH = 8;
 export const TIMELINE_VIEWPORT_BORDER_HEIGHT = 2;
 export const TIMELINE_RIGHT_PADDING = 28;
+export const RANGE_CONTROL_HEIGHT = 26;
 
 export function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -25,11 +26,58 @@ export function getTimelineViewportHeight(timeline) {
   return RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + getAudioTracksHeight(timeline) + TIMELINE_VIEWPORT_BORDER_HEIGHT;
 }
 
+export function getProjectWholeSeconds(timeline) {
+  const rawDuration = Number(timeline?.project?.duration_seconds ?? 5);
+  const duration = Math.max(0.25, Number.isFinite(rawDuration) ? rawDuration : 5);
+  return Math.max(1, Math.ceil(duration));
+}
+
+export function normalizeTimelineViewRange(timeline) {
+  const uiState = timeline.ui_state ??= {};
+  const projectSeconds = getProjectWholeSeconds(timeline);
+  const start = Number.isFinite(Number(uiState.view_start_seconds))
+    ? Number(uiState.view_start_seconds)
+    : 0;
+  const end = Number.isFinite(Number(uiState.view_end_seconds))
+    ? Number(uiState.view_end_seconds)
+    : projectSeconds;
+  const range = clampTimelineViewRange(timeline, start, end);
+  uiState.view_start_seconds = range.start;
+  uiState.view_end_seconds = range.end;
+  return range;
+}
+
+export function getTimelineViewRange(timeline) {
+  const uiState = timeline?.ui_state ?? {};
+  return clampTimelineViewRange(
+    timeline,
+    uiState.view_start_seconds,
+    uiState.view_end_seconds,
+  );
+}
+
+export function clampTimelineViewRange(timeline, startSeconds, endSeconds) {
+  const projectSeconds = getProjectWholeSeconds(timeline);
+  let start = Math.round(Number(startSeconds));
+  let end = Math.round(Number(endSeconds));
+  if (!Number.isFinite(start)) start = 0;
+  if (!Number.isFinite(end)) end = projectSeconds;
+  start = clamp(start, 0, Math.max(0, projectSeconds - 1));
+  end = clamp(end, start + 1, projectSeconds);
+  if (end - start < 1) {
+    if (start >= projectSeconds) {
+      start = Math.max(0, projectSeconds - 1);
+      end = projectSeconds;
+    } else {
+      end = Math.min(projectSeconds, start + 1);
+    }
+  }
+  return { start, end };
+}
+
 export function getVisibleTimelineSeconds(timeline) {
-  const duration = Math.max(0.25, Number(timeline?.project?.duration_seconds ?? 5));
-  const zoom = Math.max(0.1, Number(timeline?.ui_state?.zoom_level ?? 1));
-  const projectSeconds = Math.max(1, Math.ceil(duration));
-  return clamp(Math.ceil(duration / zoom), 1, projectSeconds);
+  const range = getTimelineViewRange(timeline);
+  return range.end - range.start;
 }
 
 export function getPixelsPerSecond(timeline, viewportWidth = TIMELINE_WIDTH) {
@@ -39,11 +87,17 @@ export function getPixelsPerSecond(timeline, viewportWidth = TIMELINE_WIDTH) {
 }
 
 export function secondsToPixels(seconds, timeline, viewportWidth = TIMELINE_WIDTH) {
+  const range = getTimelineViewRange(timeline);
+  return (Number(seconds) - range.start) * getPixelsPerSecond(timeline, viewportWidth);
+}
+
+export function durationToPixels(seconds, timeline, viewportWidth = TIMELINE_WIDTH) {
   return Number(seconds) * getPixelsPerSecond(timeline, viewportWidth);
 }
 
 export function pixelsToSeconds(pixels, timeline, viewportWidth = TIMELINE_WIDTH) {
-  return Number(pixels) / getPixelsPerSecond(timeline, viewportWidth);
+  const range = getTimelineViewRange(timeline);
+  return range.start + Number(pixels) / getPixelsPerSecond(timeline, viewportWidth);
 }
 
 export function snapTime(time, timeline) {
@@ -59,14 +113,10 @@ export function clampProjectTime(time, timeline) {
 }
 
 export function getTimelineWidth(timeline, viewportWidth = TIMELINE_WIDTH) {
-  return Math.max(
-    viewportWidth,
-    secondsToPixels(timeline.project.duration_seconds, timeline, viewportWidth) + TIMELINE_RIGHT_PADDING,
-  );
+  return Math.max(1, Number(viewportWidth));
 }
 
 export function timeFromClientX(clientX, container, timeline, viewportWidth = TIMELINE_WIDTH) {
   const rect = container.getBoundingClientRect();
-  const scrollLeft = container.scrollLeft ?? 0;
-  return clampProjectTime(pixelsToSeconds(clientX - rect.left + scrollLeft, timeline, viewportWidth), timeline);
+  return clampProjectTime(pixelsToSeconds(clientX - rect.left, timeline, viewportWidth), timeline);
 }

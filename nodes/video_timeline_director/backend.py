@@ -20,10 +20,8 @@ def build_director_outputs(
     aspect_ratio: str,
     orientation: str,
     quality_preset: str,
-    zoom_level: float,
 ) -> tuple[dict, dict]:
     timeline, parse_validation = _parse_timeline_json(video_timeline_json)
-    timeline = normalize_video_timeline(timeline)
     apply_visible_project_fields(
         timeline,
         duration_seconds=duration_seconds,
@@ -31,8 +29,8 @@ def build_director_outputs(
         aspect_ratio=aspect_ratio,
         orientation=orientation,
         quality_preset=quality_preset,
-        zoom_level=zoom_level,
     )
+    timeline = normalize_video_timeline(timeline)
     validation = merge_validation_results(
         parse_validation,
         validate_video_timeline(timeline),
@@ -48,7 +46,6 @@ def apply_visible_project_fields(
     aspect_ratio: str,
     orientation: str,
     quality_preset: str,
-    zoom_level: float,
 ) -> dict[str, Any]:
     project = timeline.setdefault("project", {})
     project["duration_seconds"] = float(duration_seconds)
@@ -56,9 +53,6 @@ def apply_visible_project_fields(
     project["aspect_ratio"] = aspect_ratio
     project["orientation"] = orientation
     project["quality_preset"] = quality_preset
-
-    ui_state = timeline.setdefault("ui_state", {})
-    ui_state["zoom_level"] = float(zoom_level)
     return timeline
 
 

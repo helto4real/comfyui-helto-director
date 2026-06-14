@@ -85,7 +85,6 @@ export const DEFAULT_FRAME_RATE = 24.0;
 export const DEFAULT_ASPECT_RATIO = "16:9";
 export const DEFAULT_ORIENTATION = "Landscape";
 export const DEFAULT_QUALITY_PRESET = "Standard";
-export const DEFAULT_ZOOM_LEVEL = 1.0;
 
 export function createDefaultVideoTimeline() {
   return {
@@ -135,8 +134,8 @@ export function createDefaultVideoTimeline() {
       timeline_display_mode: "Sections",
       section_edit_mode: "Trim Neighbor",
       snap_mode: "Frames",
-      zoom_level: DEFAULT_ZOOM_LEVEL,
-      scroll_x: 0.0,
+      view_start_seconds: 0,
+      view_end_seconds: Math.ceil(DEFAULT_DURATION_SECONDS),
       selected_item_id: null,
       state_revision: 0,
     },

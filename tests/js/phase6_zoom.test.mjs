@@ -2,91 +2,64 @@ import assert from "node:assert/strict";
 import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
 import {
   TIMELINE_RIGHT_PADDING,
+  clampTimelineViewRange,
+  durationToPixels,
+  getTimelineViewRange,
   getTimelineWidth,
   getVisibleTimelineSeconds,
+  pixelsToSeconds,
   secondsToPixels,
 } from "../../web/timeline/geometry.js";
 import { zoomToFit } from "../../web/timeline/operations.js";
-import { setNodeZoomWidgetValue } from "../../web/timeline/renderer.js";
 
-function testLongTimelineCanFitViewport() {
+function testDefaultRangeCoversWholeProject() {
   const timeline = createDefaultVideoTimeline();
-  timeline.project.duration_seconds = 60;
-  timeline.ui_state.zoom_level = 1;
 
+  assert.deepEqual(getTimelineViewRange(timeline), { start: 0, end: 5 });
+  assert.equal(getVisibleTimelineSeconds(timeline), 5);
   assert.equal(getTimelineWidth(timeline, 720), 720);
+  assert.equal(secondsToPixels(5, timeline, 720), 720 - TIMELINE_RIGHT_PADDING);
 }
 
-function testZoomToFitResetsZoomAndScroll() {
+function testVisibleRangeMapsAbsoluteTimeRelativeToStart() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 10;
+  timeline.ui_state.view_start_seconds = 2;
+  timeline.ui_state.view_end_seconds = 6;
+
+  assert.equal(secondsToPixels(2, timeline, 500), 0);
+  assert.equal(secondsToPixels(6, timeline, 500), 500 - TIMELINE_RIGHT_PADDING);
+  assert.equal(durationToPixels(1, timeline, 500), 118);
+  assert.equal(pixelsToSeconds(236, timeline, 500), 4);
+}
+
+function testRangeClampSnapsWholeSecondsAndMinimumWidth() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+
+  assert.deepEqual(clampTimelineViewRange(timeline, 1.2, 1.4), { start: 1, end: 2 });
+  assert.deepEqual(clampTimelineViewRange(timeline, -10, 99), { start: 0, end: 5 });
+  assert.deepEqual(clampTimelineViewRange(timeline, 5, 5), { start: 4, end: 5 });
+}
+
+function testZoomToFitResetsRange() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 20;
-  timeline.ui_state.zoom_level = 3;
-  timeline.ui_state.scroll_x = 400;
+  timeline.ui_state.view_start_seconds = 3;
+  timeline.ui_state.view_end_seconds = 7;
 
   zoomToFit(timeline);
 
-  assert.equal(timeline.ui_state.zoom_level, 1);
-  assert.equal(timeline.ui_state.scroll_x, 0);
+  assert.equal(timeline.ui_state.view_start_seconds, 0);
+  assert.equal(timeline.ui_state.view_end_seconds, 20);
   assert.equal(getVisibleTimelineSeconds(timeline), 20);
   assert.equal(getTimelineWidth(timeline, 640), 640);
   assert.equal(secondsToPixels(timeline.project.duration_seconds, timeline, 640), 640 - TIMELINE_RIGHT_PADDING);
 }
 
-function testManualZoomExpandsHorizontalTimelineScale() {
-  const timeline = createDefaultVideoTimeline();
-  timeline.project.duration_seconds = 10;
-  timeline.ui_state.zoom_level = 2;
+testDefaultRangeCoversWholeProject();
+testVisibleRangeMapsAbsoluteTimeRelativeToStart();
+testRangeClampSnapsWholeSecondsAndMinimumWidth();
+testZoomToFitResetsRange();
 
-  assert.equal(getTimelineWidth(timeline, 500), 972);
-  assert.equal(secondsToPixels(1, timeline, 500), 94.4);
-}
-
-function testManualZoomRoundsVisibleRangeUpToWholeSecond() {
-  const timeline = createDefaultVideoTimeline();
-  timeline.project.duration_seconds = 5;
-  timeline.ui_state.zoom_level = 2;
-
-  assert.equal(getVisibleTimelineSeconds(timeline), 3);
-  assert.equal(secondsToPixels(3, timeline, 500), 500 - TIMELINE_RIGHT_PADDING);
-  assert.ok(Math.abs(getTimelineWidth(timeline, 500) - ((5 * (500 - TIMELINE_RIGHT_PADDING)) / 3 + TIMELINE_RIGHT_PADDING)) < 1e-9);
-}
-
-function testManualZoomClampsVisibleRange() {
-  const timeline = createDefaultVideoTimeline();
-  timeline.project.duration_seconds = 5;
-
-  timeline.ui_state.zoom_level = 20;
-  assert.equal(getVisibleTimelineSeconds(timeline), 1);
-
-  timeline.ui_state.zoom_level = 0.5;
-  assert.equal(getVisibleTimelineSeconds(timeline), 5);
-  assert.equal(getTimelineWidth(timeline, 500), 500);
-}
-
-function testZoomWidgetSyncUpdatesVisibleWidget() {
-  let callbackValue = null;
-  const node = {
-    widgets: [
-      {
-        name: "zoom_level",
-        value: 3,
-        callback(value) {
-          callbackValue = value;
-        },
-      },
-    ],
-  };
-
-  assert.equal(setNodeZoomWidgetValue(node, 1), true);
-  assert.equal(node.widgets[0].value, 1);
-  assert.equal(callbackValue, 1);
-}
-
-testLongTimelineCanFitViewport();
-testZoomToFitResetsZoomAndScroll();
-testManualZoomExpandsHorizontalTimelineScale();
-testManualZoomRoundsVisibleRangeUpToWholeSecond();
-testManualZoomClampsVisibleRange();
-testZoomWidgetSyncUpdatesVisibleWidget();
-
-console.log("phase6 zoom tests passed");
+console.log("phase6 timeline range tests passed");

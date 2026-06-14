@@ -1,5 +1,6 @@
 import { deepClone } from "./schema.js";
 import { normalizeVideoTimeline } from "./migration.js";
+import { normalizeTimelineViewRange } from "./geometry.js";
 import { validateVideoTimeline } from "./validation.js";
 import { TimelineUndoStack } from "./undo.js";
 
@@ -186,16 +187,14 @@ export function hideWidget(widget) {
 
 export function applyVisibleNodeProperties(timeline, node) {
   const project = timeline.project ??= {};
-  const uiState = timeline.ui_state ??= {};
   const duration = getWidgetNumber(node, "duration_seconds");
   const frameRate = getWidgetNumber(node, "frame_rate");
-  const zoomLevel = getWidgetNumber(node, "zoom_level");
   if (duration != null) project.duration_seconds = duration;
   if (frameRate != null) project.frame_rate = frameRate;
   project.aspect_ratio = getWidgetValue(node, "aspect_ratio", project.aspect_ratio);
   project.orientation = getWidgetValue(node, "orientation", project.orientation);
   project.quality_preset = getWidgetValue(node, "quality_preset", project.quality_preset);
-  if (zoomLevel != null) uiState.zoom_level = zoomLevel;
+  normalizeTimelineViewRange(timeline);
   return timeline;
 }
 

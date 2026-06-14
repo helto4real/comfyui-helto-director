@@ -24,12 +24,16 @@ import {
   AUDIO_LANE_HEIGHT,
   DIRECTOR_TRACK_HEIGHT,
   HANDLE_WIDTH,
+  RANGE_CONTROL_HEIGHT,
   RULER_HEIGHT,
   TIMELINE_RIGHT_PADDING,
   TIMELINE_WIDTH,
+  clampTimelineViewRange,
+  durationToPixels,
+  getProjectWholeSeconds,
   getTimelineViewportHeight,
+  getTimelineViewRange,
   getTimelineWidth,
-  getVisibleTimelineSeconds,
   secondsToPixels,
   timeFromClientX,
 } from "./geometry.js";
@@ -45,14 +49,13 @@ import {
   splitSelectedSection,
   zoomToFit,
 } from "./operations.js";
-import { findWidget } from "./state.js";
 
 const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
 const ROOT_GAP = 6;
 
 export function getTimelineWidgetHeight(timeline) {
-  return TOOLBAR_HEIGHT + getTimelineViewportHeight(timeline) + INSPECTOR_HEIGHT + ROOT_GAP * 2;
+  return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + INSPECTOR_HEIGHT + ROOT_GAP * 3;
 }
 
 export class TimelineRenderer {
@@ -65,14 +68,18 @@ export class TimelineRenderer {
     this.settingsOpen = false;
     this.openMenu = null;
     this.remeasureHandle = null;
+    this.resizeObserver = null;
+    this.observedWidth = null;
     this.viewportWidth = TIMELINE_WIDTH;
     this.container.className = "helto-timeline-director";
     installStyles(container.ownerDocument ?? globalThis.document);
     this.render(controller.timeline);
+    this.startResizeObserver();
   }
 
   destroy() {
     this.cancelViewportRemeasure();
+    this.stopResizeObserver();
     this.container.replaceChildren();
   }
 
@@ -81,7 +88,7 @@ export class TimelineRenderer {
     this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
     this.container.replaceChildren();
     const root = el("div", "htd-root");
-    root.append(this.renderToolbar(), this.renderTimeline(timeline), this.renderInspector(timeline));
+    root.append(this.renderToolbar(), this.renderRangeControl(timeline), this.renderTimeline(timeline), this.renderInspector(timeline));
     if (this.settingsOpen) root.append(this.renderProjectSettings(timeline));
     this.container.append(root);
     this.scheduleViewportRemeasure();
@@ -151,18 +158,55 @@ export class TimelineRenderer {
     return viewport;
   }
 
+  renderRangeControl(timeline) {
+    const range = getTimelineViewRange(timeline);
+    const projectSeconds = getProjectWholeSeconds(timeline);
+    const row = el("div", "htd-range-control");
+    row.title = `Visible range ${range.start}s to ${range.end}s`;
+    const leftGutter = el("div", "htd-range-gutter");
+    const bar = el("div", "htd-range-bar");
+    bar.setAttribute("aria-label", "Timeline visible range");
+    bar.setAttribute("role", "slider");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", String(projectSeconds));
+    bar.setAttribute("aria-valuetext", `${range.start}s to ${range.end}s`);
+    const active = el("div", "htd-range-active");
+    active.style.left = `${(range.start / projectSeconds) * 100}%`;
+    active.style.width = `${((range.end - range.start) / projectSeconds) * 100}%`;
+    const startHandle = el("div", "htd-range-handle htd-range-start");
+    startHandle.title = "Visible Start";
+    const endHandle = el("div", "htd-range-handle htd-range-end");
+    endHandle.title = "Visible End";
+    startHandle.addEventListener("pointerdown", (event) => this.startRangeDrag(event, "range-start", bar));
+    endHandle.addEventListener("pointerdown", (event) => this.startRangeDrag(event, "range-end", bar));
+    bar.addEventListener("pointerdown", (event) => {
+      if (event.target !== bar && event.target !== active) return;
+      const second = rangeSecondFromClientX(event.clientX, bar, timeline);
+      const startDistance = Math.abs(second - range.start);
+      const endDistance = Math.abs(second - range.end);
+      this.startRangeDrag(event, startDistance <= endDistance ? "range-start" : "range-end", bar);
+      setTimelineRangeBoundary(timeline, this.drag.mode, second);
+      this.render(timeline);
+      this.drag.bar = this.container.querySelector(".htd-range-bar") ?? this.drag.bar;
+    });
+    active.append(startHandle, endHandle);
+    bar.append(active);
+    row.append(leftGutter, bar);
+    return row;
+  }
+
   renderRuler(timeline, width) {
     const ruler = el("div", "htd-ruler");
     ruler.style.height = `${RULER_HEIGHT}px`;
-    const duration = Number(timeline.project.duration_seconds);
-    for (let second = 0; second <= Math.ceil(duration); second += 1) {
+    const range = getTimelineViewRange(timeline);
+    for (let second = range.start; second <= range.end; second += 1) {
       const tick = el("div", "htd-tick");
       tick.style.left = `${secondsToPixels(second, timeline, this.viewportWidth)}px`;
       tick.textContent = `${second}s`;
       ruler.append(tick);
     }
     const visibleEnd = el("div", "htd-project-end");
-    visibleEnd.style.left = `${secondsToPixels(getVisibleTimelineSeconds(timeline), timeline, this.viewportWidth)}px`;
+    visibleEnd.style.left = `${secondsToPixels(range.end, timeline, this.viewportWidth)}px`;
     visibleEnd.style.width = `${TIMELINE_RIGHT_PADDING}px`;
     ruler.append(visibleEnd);
     const playhead = el("div", "htd-playhead");
@@ -184,7 +228,7 @@ export class TimelineRenderer {
     for (const gap of computeGaps(timeline)) {
       const item = el("div", "htd-gap");
       item.style.left = `${secondsToPixels(gap.start_time, timeline, this.viewportWidth)}px`;
-      item.style.width = `${secondsToPixels(gap.end_time - gap.start_time, timeline, this.viewportWidth)}px`;
+      item.style.width = `${durationToPixels(gap.end_time - gap.start_time, timeline, this.viewportWidth)}px`;
       item.title = "No Guidance";
       track.append(item);
     }
@@ -199,7 +243,7 @@ export class TimelineRenderer {
     const item = el("div", `htd-item htd-section htd-${section.type.toLowerCase()}`);
     if (timeline.ui_state.selected_item_id === section.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
-    const itemWidth = Math.max(12, secondsToPixels(section.end_time - section.start_time, timeline, this.viewportWidth));
+    const itemWidth = Math.max(12, durationToPixels(section.end_time - section.start_time, timeline, this.viewportWidth));
     item.style.width = `${itemWidth}px`;
     const thumbnail = sectionThumbnailUrl(this.node, timeline, section);
     if (thumbnail) {
@@ -249,7 +293,7 @@ export class TimelineRenderer {
     if (timeline.ui_state.selected_item_id === clip.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(clip.start_time, timeline, this.viewportWidth)}px`;
     item.style.top = `${Number(clip.lane ?? 0) * AUDIO_LANE_HEIGHT + 4}px`;
-    item.style.width = `${Math.max(12, secondsToPixels(clip.end_time - clip.start_time, timeline, this.viewportWidth))}px`;
+    item.style.width = `${Math.max(12, durationToPixels(clip.end_time - clip.start_time, timeline, this.viewportWidth))}px`;
     const clipLabel = el("div", "htd-audio-label");
     clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
     item.append(clipLabel);
@@ -479,8 +523,27 @@ export class TimelineRenderer {
     target?.addEventListener("pointercancel", this.onPointerUp);
   }
 
+  startRangeDrag(event, mode, bar) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    this.controller.beginTimelineGesture();
+    const moveTarget = bar?.ownerDocument ?? this.container.ownerDocument ?? globalThis.document;
+    this.drag = { mode, bar, moveTarget };
+    moveTarget?.addEventListener("pointermove", this.onPointerMove);
+    moveTarget?.addEventListener("pointerup", this.onPointerUp);
+    moveTarget?.addEventListener("pointercancel", this.onPointerUp);
+  }
+
   onPointerMove = (event) => {
     if (!this.drag) return;
+    if (this.drag.mode === "range-start" || this.drag.mode === "range-end") {
+      const timeline = this.controller.timeline;
+      setTimelineRangeBoundary(timeline, this.drag.mode, rangeSecondFromClientX(event.clientX, this.drag.bar, timeline));
+      this.render(timeline);
+      this.drag.bar = this.container.querySelector(".htd-range-bar") ?? this.drag.bar;
+      return;
+    }
     const deltaSeconds = timeFromClientX(event.clientX, event.currentTarget.parentElement, this.controller.timeline, this.viewportWidth)
       - timeFromClientX(this.drag.startX, event.currentTarget.parentElement, this.controller.timeline, this.viewportWidth);
     const timeline = this.controller.timeline;
@@ -501,6 +564,15 @@ export class TimelineRenderer {
   };
 
   onPointerUp = (event) => {
+    if (this.drag?.mode === "range-start" || this.drag?.mode === "range-end") {
+      const moveTarget = this.drag.moveTarget;
+      moveTarget?.removeEventListener("pointermove", this.onPointerMove);
+      moveTarget?.removeEventListener("pointerup", this.onPointerUp);
+      moveTarget?.removeEventListener("pointercancel", this.onPointerUp);
+      this.drag = null;
+      this.controller.endTimelineGesture("drag end");
+      return;
+    }
     event.currentTarget?.releasePointerCapture?.(event.pointerId);
     event.currentTarget?.removeEventListener("pointermove", this.onPointerMove);
     event.currentTarget?.removeEventListener("pointerup", this.onPointerUp);
@@ -541,7 +613,6 @@ export class TimelineRenderer {
   }
 
   handleZoomToFit() {
-    setNodeZoomWidgetValue(this.node, 1.0);
     this.commitMutation((timeline) => zoomToFit(timeline), "zoom to fit");
   }
 
@@ -573,6 +644,24 @@ export class TimelineRenderer {
     }
     this.remeasureHandle = null;
   }
+
+  startResizeObserver() {
+    const ResizeObserverRef = this.container.ownerDocument?.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
+    if (!ResizeObserverRef || this.resizeObserver) return;
+    this.resizeObserver = new ResizeObserverRef((entries) => {
+      const width = Number(entries?.[0]?.contentRect?.width ?? 0);
+      if (!width || Math.abs(width - Number(this.observedWidth ?? 0)) < 1) return;
+      this.observedWidth = width;
+      this.scheduleViewportRemeasure();
+    });
+    this.resizeObserver.observe(this.container);
+  }
+
+  stopResizeObserver() {
+    this.resizeObserver?.disconnect?.();
+    this.resizeObserver = null;
+    this.observedWidth = null;
+  }
 }
 
 export function mountTimelineRenderer(node, app, controller) {
@@ -598,14 +687,6 @@ export function unmountTimelineRenderer(node) {
   delete node._timelineRendererWidget;
 }
 
-export function setNodeZoomWidgetValue(node, value) {
-  const widget = findWidget(node, "zoom_level");
-  if (!widget) return false;
-  widget.value = value;
-  widget.callback?.call(widget, value);
-  return true;
-}
-
 function computeGaps(timeline) {
   const duration = Number(timeline.project.duration_seconds);
   const sections = [...timeline.director_track.sections].sort((a, b) => a.start_time - b.start_time);
@@ -617,6 +698,23 @@ function computeGaps(timeline) {
   }
   if (cursor < duration) gaps.push({ start_time: cursor, end_time: duration });
   return gaps;
+}
+
+function rangeSecondFromClientX(clientX, bar, timeline) {
+  const rect = bar.getBoundingClientRect();
+  const projectSeconds = getProjectWholeSeconds(timeline);
+  const ratio = rect.width <= 0 ? 0 : (Number(clientX) - rect.left) / rect.width;
+  return Math.round(Math.max(0, Math.min(1, ratio)) * projectSeconds);
+}
+
+function setTimelineRangeBoundary(timeline, mode, seconds) {
+  const current = getTimelineViewRange(timeline);
+  const next = mode === "range-start"
+    ? clampTimelineViewRange(timeline, seconds, current.end)
+    : clampTimelineViewRange(timeline, current.start, seconds);
+  timeline.ui_state.view_start_seconds = next.start;
+  timeline.ui_state.view_end_seconds = next.end;
+  return next;
 }
 
 function findAudioClip(timeline, itemId) {
@@ -867,6 +965,13 @@ function installStyles(documentRef) {
     .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-menu-item:hover, .htd-menu-item.is-active { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }
+    .htd-range-control { height: ${RANGE_CONTROL_HEIGHT}px; display: flex; align-items: center; gap: 0; box-sizing: border-box; }
+    .htd-range-gutter { width: ${TIMELINE_RIGHT_PADDING}px; flex: 0 0 ${TIMELINE_RIGHT_PADDING}px; }
+    .htd-range-bar { position: relative; height: 8px; flex: 1 1 auto; margin-right: ${TIMELINE_RIGHT_PADDING}px; border-radius: 999px; background: #111722; border: 1px solid #3d4658; cursor: pointer; box-sizing: border-box; }
+    .htd-range-active { position: absolute; top: -1px; bottom: -1px; min-width: 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(123, 148, 180, 0.95), rgba(226, 194, 92, 0.82)); border: 1px solid rgba(242, 209, 107, 0.72); box-sizing: border-box; }
+    .htd-range-handle { position: absolute; top: 50%; width: 12px; height: 18px; border: 1px solid #d8dde8; border-radius: 3px; background: #202633; transform: translate(-50%, -50%); cursor: ew-resize; box-shadow: 0 1px 4px rgba(0,0,0,0.36); }
+    .htd-range-start { left: 0; }
+    .htd-range-end { left: 100%; }
     .htd-viewport { overflow: hidden; box-sizing: border-box; border: 1px solid #3d4658; border-radius: 4px; background: #111722; }
     .htd-stage { position: relative; min-height: 100%; }
     .htd-ruler { position: relative; border-bottom: 1px solid #31394a; }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from math import ceil
 from typing import Any
 
 from ..contracts.video_timeline import (
@@ -32,6 +33,7 @@ def normalize_video_timeline(timeline: Any) -> dict:
     normalized["audio_tracks"] = _normalize_audio_tracks(
         normalized.get("audio_tracks")
     )
+    _normalize_ui_state_view_range(normalized)
     return normalized
 
 
@@ -145,6 +147,28 @@ def _normalize_audio_clip(clip: dict, index: int) -> dict:
     normalized.setdefault("name", "")
     normalized.setdefault("lane", 0)
     return normalized
+
+
+def _normalize_ui_state_view_range(timeline: dict) -> None:
+    ui_state = timeline.setdefault("ui_state", {})
+    project = timeline.get("project", {})
+    try:
+        duration = float(project.get("duration_seconds", 5.0))
+    except (TypeError, ValueError):
+        duration = 5.0
+    project_seconds = max(1, ceil(max(0.25, duration)))
+    try:
+        start = round(float(ui_state.get("view_start_seconds", 0)))
+    except (TypeError, ValueError):
+        start = 0
+    try:
+        end = round(float(ui_state.get("view_end_seconds", project_seconds)))
+    except (TypeError, ValueError):
+        end = project_seconds
+    start = max(0, min(start, max(0, project_seconds - 1)))
+    end = max(start + 1, min(end, project_seconds))
+    ui_state["view_start_seconds"] = start
+    ui_state["view_end_seconds"] = end
 
 
 def _basename(path: Any) -> str:

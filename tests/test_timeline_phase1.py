@@ -30,6 +30,8 @@ def test_create_default_video_timeline_shape():
     assert timeline["project"]["settings"]["allow_gaps"] is True
     assert timeline["project"]["settings"]["auto_close_gaps"] is False
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
+    assert timeline["ui_state"]["view_start_seconds"] == 0
+    assert timeline["ui_state"]["view_end_seconds"] == 5
     assert timeline["assets"] == []
     assert timeline["director_track"]["sections"] == []
     assert timeline["audio_tracks"] == []
@@ -66,6 +68,8 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
 
     assert normalized["project"]["frame_rate"] == 24.0
     assert normalized["project"]["duration_seconds"] == 10.0
+    assert normalized["ui_state"]["view_start_seconds"] == 0
+    assert normalized["ui_state"]["view_end_seconds"] == 5
     assert section["custom_note"] == "keep me"
     assert section["image"] is None
     assert section["guide_strength"] == 1.0
