@@ -4,7 +4,11 @@ import {
   addAudioClip,
   addSection,
   autoStackAudioLanes,
+  canFitLastDirectorSectionToDuration,
   duplicateSelectedSection,
+  fitDirectorSectionsEvenlyToDuration,
+  fitLastDirectorSectionToDuration,
+  hasDirectorSectionOverflow,
   moveAudioClip,
   moveSection,
   resizeAudioClip,
@@ -133,6 +137,66 @@ function testAudioMoveAndResizeKeepSourceTrim() {
   assert.equal(validateVideoTimeline(timeline).is_valid, true);
 }
 
+function testDirectorSectionOverflowDetection() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+  addValidTextSection(timeline, 0);
+
+  assert.equal(hasDirectorSectionOverflow(timeline), false);
+
+  timeline.director_track.sections[0].end_time = 5.5;
+
+  assert.equal(hasDirectorSectionOverflow(timeline), true);
+}
+
+function testFitLastDirectorSectionTrimsOnlyFinalSection() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 6;
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 2);
+  const last = addValidTextSection(timeline, 4);
+  timeline.project.duration_seconds = 4.5;
+
+  assert.equal(canFitLastDirectorSectionToDuration(timeline), true);
+  assert.equal(fitLastDirectorSectionToDuration(timeline), true);
+
+  assert.equal(first.end_time, 1);
+  assert.equal(second.end_time, 3);
+  assert.equal(last.start_time, 4);
+  assert.equal(last.end_time, 4.5);
+  assert.equal(validateVideoTimeline(timeline).is_valid, true);
+}
+
+function testFitLastDirectorSectionNoopsWhenFinalWouldBeInvalid() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 7;
+  const last = addValidTextSection(timeline, 5);
+  timeline.project.duration_seconds = 4.5;
+
+  assert.equal(canFitLastDirectorSectionToDuration(timeline), false);
+  assert.equal(fitLastDirectorSectionToDuration(timeline), false);
+  assert.equal(last.start_time, 5);
+  assert.equal(last.end_time, 6);
+}
+
+function testFitDirectorSectionsEvenlyPreservesRelativeGaps() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 10;
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 4);
+  first.end_time = 2;
+  second.end_time = 6;
+  timeline.project.duration_seconds = 3;
+
+  assert.equal(fitDirectorSectionsEvenlyToDuration(timeline), true);
+
+  assert.equal(first.start_time, 0);
+  assert.equal(first.end_time, 1);
+  assert.equal(second.start_time, 2);
+  assert.equal(second.end_time, 3);
+  assert.equal(validateVideoTimeline(timeline).is_valid, true);
+}
+
 testNewTextSectionStartsEmpty();
 testSectionsCannotOverlapWhenMovedOrResized();
 testAddAndDuplicateReturnNullWhenNoGapFits();
@@ -141,5 +205,9 @@ testSplitAndDuplicate();
 testAudioAutoLanes();
 testRippleResizeMovesFollowingSections();
 testAudioMoveAndResizeKeepSourceTrim();
+testDirectorSectionOverflowDetection();
+testFitLastDirectorSectionTrimsOnlyFinalSection();
+testFitLastDirectorSectionNoopsWhenFinalWouldBeInvalid();
+testFitDirectorSectionsEvenlyPreservesRelativeGaps();
 
 console.log("phase4 operation tests passed");

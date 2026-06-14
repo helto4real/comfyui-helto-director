@@ -245,6 +245,42 @@ export function zoomToFit(timeline) {
   return timeline;
 }
 
+export function hasDirectorSectionOverflow(timeline) {
+  const duration = getDuration(timeline);
+  return directorSections(timeline).some((section) => Number(section.end_time) > duration);
+}
+
+export function canFitLastDirectorSectionToDuration(timeline) {
+  const duration = getDuration(timeline);
+  const last = directorSections(timeline).at(-1);
+  return Boolean(last) && Number(last.end_time) > duration && duration > Number(last.start_time);
+}
+
+export function fitLastDirectorSectionToDuration(timeline) {
+  const duration = getDuration(timeline);
+  const sections = directorSections(timeline);
+  if (!sections.length) return false;
+  const last = sections.at(-1);
+  if (!canFitLastDirectorSectionToDuration(timeline)) return false;
+  last.end_time = duration;
+  sortDirectorSections(timeline);
+  return true;
+}
+
+export function fitDirectorSectionsEvenlyToDuration(timeline) {
+  const duration = getDuration(timeline);
+  const sections = directorSections(timeline);
+  const maxEnd = Math.max(0, ...sections.map((section) => Number(section.end_time) || 0));
+  if (!sections.length || duration <= 0 || maxEnd <= 0 || maxEnd <= duration) return false;
+  const scale = duration / maxEnd;
+  for (const section of sections) {
+    section.start_time = Number(section.start_time) * scale;
+    section.end_time = Number(section.end_time) * scale;
+  }
+  sortDirectorSections(timeline);
+  return true;
+}
+
 export function findSection(timeline, itemId) {
   return timeline.director_track.sections.find((section) => section.item_id === itemId);
 }
@@ -334,6 +370,10 @@ function getFollowingSections(timeline, section) {
   return [...timeline.director_track.sections]
     .sort((a, b) => a.start_time - b.start_time)
     .filter((candidate) => candidate.item_id !== section.item_id && candidate.start_time >= section.end_time);
+}
+
+function directorSections(timeline) {
+  return [...(timeline.director_track?.sections ?? [])].sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time));
 }
 
 function findAudioClipWithTrack(timeline, itemId) {

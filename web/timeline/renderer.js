@@ -42,9 +42,13 @@ import {
 } from "./geometry.js";
 import {
   addSection,
+  canFitLastDirectorSectionToDuration,
   deleteSelectedItem,
   duplicateSelectedSection,
+  fitDirectorSectionsEvenlyToDuration,
+  fitLastDirectorSectionToDuration,
   findSection,
+  hasDirectorSectionOverflow,
   moveAudioClip,
   moveSection,
   resizeAudioClip,
@@ -119,10 +123,21 @@ export class TimelineRenderer {
 
   renderToolbar() {
     const toolbar = el("div", "htd-toolbar");
+    const hasOverflow = hasDirectorSectionOverflow(this.controller.timeline);
     const settingsButton = iconButton("settings", "Project Settings", () => {
       this.settingsOpen = true;
       this.render();
     });
+    const repairButtons = hasOverflow
+      ? [
+          iconButton("fit-last-section", "Fit Last Section", () => {
+            this.commitMutation((timeline) => fitLastDirectorSectionToDuration(timeline), "fit last section");
+          }, { disabled: !canFitLastDirectorSectionToDuration(this.controller.timeline) }),
+          iconButton("fit-all-sections", "Fit All Sections Evenly", () => {
+            this.commitMutation((timeline) => fitDirectorSectionsEvenlyToDuration(timeline), "fit all sections evenly");
+          }),
+        ]
+      : [];
     settingsButton.classList.add("htd-settings-button");
     toolbar.append(
       iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
@@ -154,6 +169,7 @@ export class TimelineRenderer {
       iconButton("split", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
       iconButton("duplicate", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
       iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete")),
+      ...repairButtons,
       toolbarSpacer(),
       iconButton("fit", "Zoom to Fit", () => this.handleZoomToFit()),
       settingsButton,
@@ -1170,9 +1186,10 @@ function deleteLabelForItemType(itemType) {
   return DELETE_MENU_LABELS[itemType] ?? "Delete Item";
 }
 
-function iconButton(iconName, title, onClick) {
+function iconButton(iconName, title, onClick, options = {}) {
   const control = button("", title, onClick);
   control.classList.add("htd-icon-button");
+  control.disabled = Boolean(options.disabled);
   control.append(createIconElement(iconName));
   return control;
 }
@@ -1270,6 +1287,8 @@ const ICONS = {
   split: `<svg viewBox="0 0 24 24"><path d="M12 4v16"/><path d="M5 7h4M5 17h4M15 7h4M15 17h4"/></svg>`,
   duplicate: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
   delete: `<svg viewBox="0 0 24 24"><path d="M6 7h12M10 7V5h4v2M9 10v7M15 10v7M8 7l1 12h6l1-12"/></svg>`,
+  "fit-last-section": `<svg viewBox="0 0 24 24"><path d="M5 6h14M5 18h14"/><path d="M15 9l4 3-4 3"/><path d="M5 12h13"/><path d="M9 9v6"/></svg>`,
+  "fit-all-sections": `<svg viewBox="0 0 24 24"><path d="M5 6h14M5 18h14"/><path d="M8 10h8v4H8z"/><path d="M5 12h3M16 12h3"/></svg>`,
   fit: `<svg viewBox="0 0 24 24"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8 8h8v8H8z"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>`,
   director: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
@@ -1335,6 +1354,7 @@ function installStyles(documentRef) {
     .htd-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
     .htd-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
+    .htd-button:disabled { opacity: 0.42; cursor: not-allowed; }
     .htd-toolbar-spacer { width: 1px; height: 18px; margin: 0 4px; background: #3d4658; opacity: 0.9; flex: 0 0 auto; }
     .htd-settings-button { margin-left: auto; }
     .htd-menu { position: relative; display: inline-flex; align-items: center; }
