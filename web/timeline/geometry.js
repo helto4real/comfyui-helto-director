@@ -25,11 +25,17 @@ export function getTimelineViewportHeight(timeline) {
   return RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + getAudioTracksHeight(timeline) + TIMELINE_VIEWPORT_BORDER_HEIGHT;
 }
 
-export function getPixelsPerSecond(timeline, viewportWidth = TIMELINE_WIDTH) {
+export function getVisibleTimelineSeconds(timeline) {
   const duration = Math.max(0.25, Number(timeline?.project?.duration_seconds ?? 5));
   const zoom = Math.max(0.1, Number(timeline?.ui_state?.zoom_level ?? 1));
+  const projectSeconds = Math.max(1, Math.ceil(duration));
+  return clamp(Math.ceil(duration / zoom), 1, projectSeconds);
+}
+
+export function getPixelsPerSecond(timeline, viewportWidth = TIMELINE_WIDTH) {
+  const visibleSeconds = getVisibleTimelineSeconds(timeline);
   const fittedWidth = Math.max(1, Number(viewportWidth) - TIMELINE_RIGHT_PADDING);
-  return Math.max(MIN_PIXELS_PER_SECOND, (fittedWidth / duration) * zoom);
+  return Math.max(MIN_PIXELS_PER_SECOND, fittedWidth / visibleSeconds);
 }
 
 export function secondsToPixels(seconds, timeline, viewportWidth = TIMELINE_WIDTH) {

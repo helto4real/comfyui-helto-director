@@ -29,6 +29,7 @@ import {
   TIMELINE_WIDTH,
   getTimelineViewportHeight,
   getTimelineWidth,
+  getVisibleTimelineSeconds,
   secondsToPixels,
   timeFromClientX,
 } from "./geometry.js";
@@ -63,6 +64,7 @@ export class TimelineRenderer {
     this.drag = null;
     this.settingsOpen = false;
     this.openMenu = null;
+    this.remeasureHandle = null;
     this.viewportWidth = TIMELINE_WIDTH;
     this.container.className = "helto-timeline-director";
     installStyles(container.ownerDocument ?? globalThis.document);
@@ -70,6 +72,7 @@ export class TimelineRenderer {
   }
 
   destroy() {
+    this.cancelViewportRemeasure();
     this.container.replaceChildren();
   }
 
@@ -81,6 +84,7 @@ export class TimelineRenderer {
     root.append(this.renderToolbar(), this.renderTimeline(timeline), this.renderInspector(timeline));
     if (this.settingsOpen) root.append(this.renderProjectSettings(timeline));
     this.container.append(root);
+    this.scheduleViewportRemeasure();
   }
 
   renderToolbar() {
@@ -157,10 +161,10 @@ export class TimelineRenderer {
       tick.textContent = `${second}s`;
       ruler.append(tick);
     }
-    const projectEnd = el("div", "htd-project-end");
-    projectEnd.style.left = `${secondsToPixels(duration, timeline, this.viewportWidth)}px`;
-    projectEnd.style.width = `${TIMELINE_RIGHT_PADDING}px`;
-    ruler.append(projectEnd);
+    const visibleEnd = el("div", "htd-project-end");
+    visibleEnd.style.left = `${secondsToPixels(getVisibleTimelineSeconds(timeline), timeline, this.viewportWidth)}px`;
+    visibleEnd.style.width = `${TIMELINE_RIGHT_PADDING}px`;
+    ruler.append(visibleEnd);
     const playhead = el("div", "htd-playhead");
     playhead.style.left = `${secondsToPixels(timeline.ui_state.playhead_time ?? 0, timeline, this.viewportWidth)}px`;
     ruler.append(playhead);
@@ -544,6 +548,30 @@ export class TimelineRenderer {
   measureViewportWidth() {
     const viewport = this.container.querySelector?.(".htd-viewport");
     return Math.max(1, viewport?.clientWidth || this.container.clientWidth || TIMELINE_WIDTH);
+  }
+
+  scheduleViewportRemeasure() {
+    if (this.remeasureHandle != null) return;
+    const windowRef = this.container.ownerDocument?.defaultView ?? globalThis;
+    const requestFrame = windowRef.requestAnimationFrame ?? ((callback) => windowRef.setTimeout(callback, 0));
+    this.remeasureHandle = requestFrame(() => {
+      this.remeasureHandle = null;
+      const measuredWidth = this.measureViewportWidth();
+      if (Math.abs(measuredWidth - this.viewportWidth) < 1) return;
+      this.viewportWidth = measuredWidth;
+      this.render(this.controller.timeline);
+    });
+  }
+
+  cancelViewportRemeasure() {
+    if (this.remeasureHandle == null) return;
+    const windowRef = this.container.ownerDocument?.defaultView ?? globalThis;
+    if (windowRef.cancelAnimationFrame) {
+      windowRef.cancelAnimationFrame(this.remeasureHandle);
+    } else {
+      windowRef.clearTimeout?.(this.remeasureHandle);
+    }
+    this.remeasureHandle = null;
   }
 }
 

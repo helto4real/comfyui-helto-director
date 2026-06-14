@@ -48,6 +48,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("aria-label"), true);
   assert.equal(rendererSource.includes("htd-project-end"), true);
   assert.equal(rendererSource.includes("TIMELINE_RIGHT_PADDING"), true);
+  assert.equal(rendererSource.includes("getVisibleTimelineSeconds(timeline)"), true);
+  assert.equal(rendererSource.includes("scheduleViewportRemeasure"), true);
   assert.equal(rendererSource.includes('trackLabel("director", "Director")'), true);
   assert.equal(rendererSource.includes('trackLabel("audio", "Audio")'), true);
   assert.equal(rendererSource.includes("width: ${TIMELINE_RIGHT_PADDING}px"), true);
