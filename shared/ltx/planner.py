@@ -250,6 +250,8 @@ def _build_media_plan(timeline: dict[str, Any], section_entries: list[dict[str, 
             "source_in": section.get("source_in"),
             "source_out": section.get("source_out"),
             "timing_mode": section.get("timing_mode"),
+            "video_guidance_range": section.get("video_guidance_range"),
+            "video_guidance_frame_count": section.get("video_guidance_frame_count"),
         })
     return media
 

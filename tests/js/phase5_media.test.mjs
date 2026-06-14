@@ -49,6 +49,14 @@ function testMissingAssetReferenceIsInvalid() {
   assert.equal(validation.errors[0].code, "VIDEO_SECTION_MEDIA_ASSET_NOT_FOUND");
 }
 
+function testNewVideoSectionUsesTailGuidanceDefaults() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Video", 0);
+
+  assert.equal(section.video_guidance_range, "Last Frames");
+  assert.equal(section.video_guidance_frame_count, 17);
+}
+
 function testEmbeddedMediaIsRejected() {
   const timeline = createDefaultVideoTimeline();
   timeline.assets.push({
@@ -68,6 +76,7 @@ function testEmbeddedMediaIsRejected() {
 testMediaAttachmentCreatesAssetReference();
 testAudioAttachmentAndWaveformSeed();
 testMissingAssetReferenceIsInvalid();
+testNewVideoSectionUsesTailGuidanceDefaults();
 testEmbeddedMediaIsRejected();
 
 console.log("phase5 media tests passed");

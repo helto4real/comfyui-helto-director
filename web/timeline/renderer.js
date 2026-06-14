@@ -8,6 +8,8 @@ import {
   SECTION_EDIT_MODES,
   SNAP_MODES,
   TIMELINE_DISPLAY_MODES,
+  VIDEO_GUIDANCE_FRAME_COUNTS,
+  VIDEO_GUIDANCE_RANGES,
   VIDEO_TIMING_MODES,
 } from "./schema.js";
 import {
@@ -373,10 +375,14 @@ export class TimelineRenderer {
           this.renderInspectorCompactField("Guide Strength:", this.renderGuideStrengthField(selected), "is-strength"),
           this.renderInspectorCompactField("Crop Mode:", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
           this.renderInspectorCompactField("Timing Mode:", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing")),
+          this.renderInspectorCompactField("Guidance Range:", this.renderIconSelectField(selected, "video_guidance_range", "Guidance Range", VIDEO_GUIDANCE_RANGES, "guide-range")),
         ),
         this.renderInspectorControlRow(
           this.renderInspectorCompactField("Source In:", this.renderNumberField(selected, "source_in", "Source In", { min: 0, step: 0.05 })),
           this.renderInspectorCompactField("Source Out:", this.renderNumberField(selected, "source_out", "Source Out", { min: 0, step: 0.05, allowNull: true })),
+          selected.video_guidance_range === "Last Frames"
+            ? this.renderInspectorCompactField("Guide Frames:", this.renderIconSelectField(selected, "video_guidance_frame_count", "Guide Frames", VIDEO_GUIDANCE_FRAME_COUNTS, "guide-frames"))
+            : null,
         ),
         this.renderPromptRow(selected),
       );
@@ -1269,6 +1275,8 @@ const ICONS = {
   director: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   crop: `<svg viewBox="0 0 24 24"><path d="M6 3v12a3 3 0 0 0 3 3h12"/><path d="M3 6h12a3 3 0 0 1 3 3v12"/><path d="M9 9h6v6H9z"/></svg>`,
   timing: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`,
+  "guide-range": `<svg viewBox="0 0 24 24"><path d="M5 7h14M5 17h14"/><path d="M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
+  "guide-frames": `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="12" rx="2"/><path d="M8 10h4M8 14h4"/><path d="M17 8l3-2v12l-3-2"/></svg>`,
 };
 
 function settingRow(title) {

@@ -104,6 +104,8 @@ function normalizeSection(section, index) {
     normalized.source_in ??= 0.0;
     normalized.source_out ??= null;
     normalized.timing_mode ??= "Fit to Section";
+    normalized.video_guidance_range ??= "Last Frames";
+    normalized.video_guidance_frame_count ??= 17;
   }
   return normalized;
 }

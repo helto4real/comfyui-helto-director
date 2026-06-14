@@ -14,6 +14,8 @@ from ..contracts.video_timeline import (
     DEFAULT_AUDIO_VOLUME,
     DEFAULT_IMAGE_GUIDE_STRENGTH,
     DEFAULT_VIDEO_GUIDE_STRENGTH,
+    DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT,
+    DEFAULT_VIDEO_GUIDANCE_RANGE,
     DEFAULT_VIDEO_TIMING_MODE,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
@@ -108,6 +110,8 @@ def _normalize_section(section: dict, index: int) -> dict:
         normalized.setdefault("source_in", 0.0)
         normalized.setdefault("source_out", None)
         normalized.setdefault("timing_mode", DEFAULT_VIDEO_TIMING_MODE)
+        normalized.setdefault("video_guidance_range", DEFAULT_VIDEO_GUIDANCE_RANGE)
+        normalized.setdefault("video_guidance_frame_count", DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT)
     return normalized
 
 

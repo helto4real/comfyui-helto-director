@@ -10,6 +10,8 @@ import sys
 import wave
 from pathlib import Path
 
+import av
+import numpy as np
 import pytest
 import torch
 from PIL import Image
@@ -18,9 +20,17 @@ from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_AUDIO,
     ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
     QUALITY_PRESET_QUICK_DRAFT,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
+    SECTION_TYPE_VIDEO,
+    VIDEO_GUIDANCE_RANGE_FULL_SOURCE,
+    VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+    VIDEO_TIMING_FIT_TO_SECTION,
+    VIDEO_TIMING_FREEZE_LAST_FRAME,
+    VIDEO_TIMING_LOOP,
+    VIDEO_TIMING_USE_SOURCE_TIMING,
 )
 from shared.ltx import build_ltx_runtime_outputs, build_ltx_timeline_plan, create_ltx_timeline_config
 from shared.timeline import create_default_video_timeline
@@ -235,6 +245,25 @@ def _write_test_wav(path: Path, duration=1.0, frequency=440.0, amplitude=0.6):
             output.writeframes(struct.pack("<h", value))
 
 
+def _write_test_video(path: Path, frame_count=12, fps=12, width=64, height=36):
+    with av.open(str(path), "w") as container:
+        stream = container.add_stream("mpeg4", rate=fps)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        for index in range(frame_count):
+            value = int(round(index / max(1, frame_count - 1) * 255))
+            array = np.zeros((height, width, 3), dtype=np.uint8)
+            array[:, :, 0] = value
+            array[:, :, 1] = 32
+            array[:, :, 2] = 255 - value
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+
 def _audio_plan(path: Path):
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 1.0
@@ -276,6 +305,50 @@ def _audio_plan(path: Path):
                     "lane": 0,
                 }
             ],
+        }
+    )
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+    return plan
+
+
+def _video_plan(
+    path: Path,
+    *,
+    timing_mode=VIDEO_TIMING_FIT_TO_SECTION,
+    source_in=0.0,
+    source_out=None,
+    duration=1.0,
+    guidance_range=VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+    guidance_frame_count=17,
+):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = duration
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["assets"].append(
+        {
+            "asset_id": "video_001",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": str(path),
+            "name": path.name,
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_VIDEO,
+            "start_time": 0.0,
+            "end_time": duration,
+            "video": {"asset_id": "video_001"},
+            "prompt": "source video guidance",
+            "guide_strength": 0.6,
+            "source_in": source_in,
+            "source_out": source_out,
+            "timing_mode": timing_mode,
+            "video_guidance_range": guidance_range,
+            "video_guidance_frame_count": guidance_frame_count,
         }
     )
     plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
@@ -338,6 +411,10 @@ def _image_audio_timeline(image_path: Path, audio_path: Path):
         }
     )
     return timeline
+
+
+def _frame_red_means(frames: torch.Tensor) -> torch.Tensor:
+    return frames[:, :, :, 0].mean(dim=(1, 2))
 
 
 def test_ltx_runtime_node_schema_io_order():
@@ -507,6 +584,22 @@ def test_missing_audio_media_path_fails_clearly(tmp_path):
         build_ltx_runtime_outputs(**_runtime_args(plan))
 
 
+def test_missing_video_media_path_fails_clearly(tmp_path):
+    plan = _video_plan(tmp_path / "missing.mp4")
+
+    with pytest.raises(FileNotFoundError, match="Media file not found"):
+        build_ltx_runtime_outputs(**_runtime_args(plan))
+
+
+def test_video_media_without_video_stream_fails_clearly(tmp_path):
+    audio_path = tmp_path / "audio_only.wav"
+    _write_test_wav(audio_path)
+    plan = _video_plan(audio_path)
+
+    with pytest.raises(ValueError, match="no video stream"):
+        build_ltx_runtime_outputs(**_runtime_args(plan))
+
+
 def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     image_path = tmp_path / "guide.png"
     Image.new("RGB", (64, 64), (255, 32, 128)).save(image_path)
@@ -521,6 +614,170 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.5
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.5
     assert runtime_debug["summary"]["applied_guides"] == 1
+
+
+def test_video_section_creates_source_guide_data_and_outputs(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _video_plan(video_path, source_in=0.25, source_out=0.75)
+
+    _, positive, negative, video_latent, _, _, guide_data, source_images, source_audio, source_fps, source_count, runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    metadata = guide_data["reference_images"][0]
+    assert guide_data["strengths"] == [0.6]
+    assert guide_data["images"][0].shape[0] == 17
+    assert metadata["section_type"] == SECTION_TYPE_VIDEO
+    assert metadata["source_fps"] == pytest.approx(12.0)
+    assert metadata["decoded_frame_count"] == 12
+    assert metadata["trimmed_frame_count"] == 6
+    assert metadata["guidance_range"] == VIDEO_GUIDANCE_RANGE_LAST_FRAMES
+    assert metadata["guidance_frame_count"] == 17
+    assert metadata["guidance_source_range"]["start_frame"] == 3
+    assert metadata["guidance_source_range"]["end_frame_exclusive"] == 9
+    assert metadata["requested_frame_count"] == 24
+    assert metadata["selected_frame_count"] == 17
+    assert metadata["source_range"]["start_frame"] == 3
+    assert metadata["source_range"]["end_frame_exclusive"] == 9
+    assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert video_latent["samples"].shape[2] > guide_data["clean_latent_frames"]
+    assert source_images.shape[0] == 6
+    assert source_audio["waveform"].shape[-1] == math.ceil(6 / 12 * 44100)
+    assert source_fps == pytest.approx(12.0)
+    assert source_count == 6
+    assert runtime_debug["summary"]["applied_guides"] == 1
+
+
+@pytest.mark.parametrize(
+    ("timing_mode", "expected_count"),
+    [
+        (VIDEO_TIMING_FIT_TO_SECTION, 17),
+        (VIDEO_TIMING_USE_SOURCE_TIMING, 9),
+        (VIDEO_TIMING_LOOP, 17),
+        (VIDEO_TIMING_FREEZE_LAST_FRAME, 17),
+    ],
+)
+def test_video_timing_modes_select_deterministic_guide_frames(tmp_path, timing_mode, expected_count):
+    video_path = tmp_path / f"{timing_mode.replace(' ', '_')}.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _video_plan(video_path, timing_mode=timing_mode)
+
+    *_, guide_data, _source_images, _source_audio, _source_fps, _source_count, _runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    guide_frames = guide_data["images"][0]
+    metadata = guide_data["reference_images"][0]
+    red_means = _frame_red_means(guide_frames)
+    assert guide_frames.shape[0] == expected_count
+    assert metadata["timing_mode"] == timing_mode
+    assert metadata["guidance_range"] == VIDEO_GUIDANCE_RANGE_LAST_FRAMES
+    assert metadata["selected_frame_count"] == expected_count
+    if timing_mode == VIDEO_TIMING_USE_SOURCE_TIMING:
+        assert metadata["requested_frame_count"] == 12
+        assert torch.all(red_means[1:] >= red_means[:-1] - 0.02)
+    elif timing_mode == VIDEO_TIMING_LOOP:
+        assert metadata["requested_frame_count"] == 24
+        assert torch.isclose(red_means[0], red_means[12], atol=0.08)
+    elif timing_mode == VIDEO_TIMING_FREEZE_LAST_FRAME:
+        assert metadata["requested_frame_count"] == 24
+        assert torch.isclose(red_means[-1], red_means[-2], atol=0.03)
+        assert red_means[-1] > red_means[0]
+    else:
+        assert metadata["requested_frame_count"] == 24
+        assert red_means[-1] > red_means[0]
+
+
+def test_use_source_timing_caps_video_guide_to_section_frame_count(tmp_path):
+    video_path = tmp_path / "long_source.mp4"
+    _write_test_video(video_path, frame_count=30, fps=30)
+    plan = _video_plan(video_path, timing_mode=VIDEO_TIMING_USE_SOURCE_TIMING, duration=0.5)
+
+    *_, guide_data, source_images, _source_audio, source_fps, source_count, _runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    metadata = guide_data["reference_images"][0]
+    assert metadata["decoded_frame_count"] == 30
+    assert metadata["trimmed_frame_count"] == 30
+    assert metadata["requested_frame_count"] == 12
+    assert metadata["selected_frame_count"] == 9
+    assert guide_data["images"][0].shape[0] == 9
+    assert source_images.shape[0] == 30
+    assert source_fps == pytest.approx(30.0)
+    assert source_count == 30
+
+
+def test_full_source_range_preserves_video_guide_timing_behavior(tmp_path):
+    video_path = tmp_path / "full_source.mp4"
+    _write_test_video(video_path, frame_count=30, fps=30)
+    plan = _video_plan(
+        video_path,
+        timing_mode=VIDEO_TIMING_USE_SOURCE_TIMING,
+        duration=0.5,
+        guidance_range=VIDEO_GUIDANCE_RANGE_FULL_SOURCE,
+    )
+
+    *_, guide_data, source_images, _source_audio, _source_fps, source_count, _runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    metadata = guide_data["reference_images"][0]
+    assert metadata["guidance_range"] == VIDEO_GUIDANCE_RANGE_FULL_SOURCE
+    assert metadata["guidance_source_range"]["start_frame"] == 0
+    assert metadata["guidance_source_range"]["end_frame_exclusive"] == 30
+    assert metadata["requested_frame_count"] == 12
+    assert metadata["selected_frame_count"] == 9
+    assert guide_data["images"][0].shape[0] == 9
+    assert source_images.shape[0] == 30
+    assert source_count == 30
+
+
+def test_last_frames_guidance_selects_tail_after_source_trim(tmp_path):
+    video_path = tmp_path / "tail_source.mp4"
+    _write_test_video(video_path, frame_count=30, fps=30)
+    plan = _video_plan(video_path, source_in=0.2, source_out=0.8, guidance_frame_count=9)
+
+    *_, guide_data, source_images, _source_audio, _source_fps, source_count, _runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    metadata = guide_data["reference_images"][0]
+    assert metadata["source_range"]["start_frame"] == 6
+    assert metadata["source_range"]["end_frame_exclusive"] == 24
+    assert metadata["guidance_range"] == VIDEO_GUIDANCE_RANGE_LAST_FRAMES
+    assert metadata["guidance_frame_count"] == 9
+    assert metadata["guidance_source_range"]["start_frame"] == 15
+    assert metadata["guidance_source_range"]["end_frame_exclusive"] == 24
+    assert metadata["requested_frame_count"] == 24
+    assert metadata["selected_frame_count"] == 17
+    assert guide_data["images"][0].shape[0] == 17
+    assert source_images.shape[0] == 18
+    assert source_count == 18
+
+
+def test_non_ltx_frame_count_tail_guidance_clamps_to_compatible_window(tmp_path):
+    video_path = tmp_path / "tail_count.mp4"
+    _write_test_video(video_path, frame_count=20, fps=20)
+    plan = _video_plan(
+        video_path,
+        timing_mode=VIDEO_TIMING_USE_SOURCE_TIMING,
+        guidance_frame_count=10,
+    )
+
+    *_, guide_data, _source_images, _source_audio, _source_fps, _source_count, _runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    metadata = guide_data["reference_images"][0]
+    assert metadata["guidance_frame_count"] == 10
+    assert metadata["guidance_source_range"]["start_frame"] == 10
+    assert metadata["guidance_source_range"]["end_frame_exclusive"] == 20
+    assert metadata["requested_frame_count"] == 10
+    assert metadata["selected_frame_count"] == 9
+    assert guide_data["images"][0].shape[0] == 9
 
 
 def test_connected_negative_conditioning_is_used_and_receives_guides(tmp_path):

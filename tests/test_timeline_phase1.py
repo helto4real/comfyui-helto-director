@@ -3,10 +3,14 @@ import json
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
+    DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT,
+    DEFAULT_VIDEO_GUIDANCE_RANGE,
     GLOBAL_PROMPT_POSITION_SUFFIX,
     SCHEMA_VERSION,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
+    SECTION_TYPE_VIDEO,
     VIDEO_TIMELINE_TYPE,
 )
 from shared.timeline import (
@@ -74,6 +78,34 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
     assert section["custom_note"] == "keep me"
     assert section["image"] is None
     assert section["guide_strength"] == 1.0
+
+
+def test_video_section_normalization_defaults_to_tail_guidance():
+    timeline = create_default_video_timeline()
+    timeline["assets"].append(
+        {
+            "asset_id": "video_001",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/source.mp4",
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_VIDEO,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "video": {"asset_id": "video_001"},
+            "prompt": "extend",
+        }
+    )
+
+    normalized = normalize_video_timeline(timeline)
+    section = normalized["director_track"]["sections"][0]
+
+    assert section["video_guidance_range"] == DEFAULT_VIDEO_GUIDANCE_RANGE
+    assert section["video_guidance_frame_count"] == DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT
 
 
 def test_normalization_fills_asset_defaults():

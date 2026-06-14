@@ -162,6 +162,9 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("setLiveItemField(timeline, item, field, nextValue)"), true);
   assert.equal(rendererSource.includes('this.renderInspectorCompactField("Crop Mode:", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop"))'), true);
   assert.equal(rendererSource.includes('this.renderInspectorCompactField("Timing Mode:", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing"))'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Guidance Range:", this.renderIconSelectField(selected, "video_guidance_range", "Guidance Range", VIDEO_GUIDANCE_RANGES, "guide-range"))'), true);
+  assert.equal(rendererSource.includes('selected.video_guidance_range === "Last Frames"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Guide Frames:", this.renderIconSelectField(selected, "video_guidance_frame_count", "Guide Frames", VIDEO_GUIDANCE_FRAME_COUNTS, "guide-frames"))'), true);
   assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source In:"'), true);
   assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source Out:"'), true);
   assert.equal(rendererSource.includes("is-section-inspector"), true);
@@ -177,6 +180,10 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("Attach"), false);
   assert.equal(rendererSource.includes("Choose"), false);
   assert.equal(rendererSource.includes("Clear"), false);
+
+  const migrationSource = readFileSync(new URL("../../web/timeline/migration.js", import.meta.url), "utf8");
+  assert.equal(migrationSource.includes('normalized.video_guidance_range ??= "Last Frames"'), true);
+  assert.equal(migrationSource.includes("normalized.video_guidance_frame_count ??= 17"), true);
 }
 
 function testDeleteContextMenuIsAvailableOnTimelineItems() {

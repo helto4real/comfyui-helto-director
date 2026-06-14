@@ -282,6 +282,8 @@ function createSection(type, start, end) {
     section.source_in = 0.0;
     section.source_out = null;
     section.timing_mode = "Fit to Section";
+    section.video_guidance_range = "Last Frames";
+    section.video_guidance_frame_count = 17;
   } else {
     section.prompt = "";
   }

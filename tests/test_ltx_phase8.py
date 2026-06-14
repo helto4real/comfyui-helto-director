@@ -6,8 +6,11 @@ from pathlib import Path
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
+    SECTION_TYPE_VIDEO,
+    VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
 )
 from shared.ltx import build_ltx_timeline_plan, create_ltx_timeline_config
 from shared.timeline import create_default_video_timeline
@@ -130,6 +133,37 @@ def test_ltx_planner_builds_serializable_plan_with_gaps_prompts_and_media():
     assert plan["media_plan"][0]["ltx_role"] == "Section Guides"
     assert validation["is_valid"] is True
     assert debug["summary"]["planned_ranges"] == 3
+
+
+def test_ltx_planner_passes_video_guidance_fields_to_media_plan():
+    timeline = create_default_video_timeline()
+    timeline["assets"].append(
+        {
+            "asset_id": "video_001",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/source.mp4",
+            "name": "source.mp4",
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_VIDEO,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "video": {"asset_id": "video_001"},
+            "prompt": "extend",
+            "video_guidance_range": VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+            "video_guidance_frame_count": 17,
+        }
+    )
+
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+
+    assert validation["is_valid"] is True
+    assert plan["media_plan"][0]["video_guidance_range"] == VIDEO_GUIDANCE_RANGE_LAST_FRAMES
+    assert plan["media_plan"][0]["video_guidance_frame_count"] == 17
 
 
 def test_ltx_planner_propagates_invalid_director_timeline_without_crash():

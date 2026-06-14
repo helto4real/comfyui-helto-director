@@ -92,11 +92,12 @@ def decode_audio_file(path_value: str) -> torch.Tensor:
     return waveform.contiguous()
 
 
-def decode_source_video_audio(path_value: str, duration_seconds: float) -> dict[str, Any]:
+def decode_source_video_audio(path_value: str, duration_seconds: float, source_in: float = 0.0, source_out: Any = None) -> dict[str, Any]:
     try:
         waveform = decode_audio_file(path_value)
     except Exception:
         return empty_audio(duration_seconds)
+    waveform = trim_audio(waveform, source_in, source_out, duration_seconds)
     expected_samples = max(1, int(math.ceil(max(0.0, duration_seconds) * TARGET_SAMPLE_RATE)))
     if waveform.shape[-1] < expected_samples:
         pad = torch.zeros((waveform.shape[0], expected_samples - waveform.shape[-1]), dtype=waveform.dtype)

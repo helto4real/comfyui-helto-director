@@ -46,6 +46,21 @@ export const VIDEO_TIMING_MODES = [
   "Freeze Last Frame",
 ];
 
+export const VIDEO_GUIDANCE_RANGES = [
+  "Last Frames",
+  "Full Source Range",
+];
+
+export const VIDEO_GUIDANCE_FRAME_COUNTS = [
+  1,
+  9,
+  17,
+  25,
+  33,
+  49,
+  65,
+];
+
 export const TIMELINE_DISPLAY_MODES = [
   "Sections",
   "Media",
