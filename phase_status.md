@@ -16,4 +16,6 @@
 
 We are now refining the UI before moving phase 9 LTX 2.3 runtime and WAN 2.2 planning/runtime into later phases. The current focus is on improving the timeline interactions, media attachment UX, and cache performance to ensure a solid foundation for the more complex planning and runtime execution in the next phases.
 
+UI preference for further edits: use compact icon buttons and icon menu controls for node buttons/selection controls where practical, matching the timeline toolbar style. Keep full English labels in tooltips, aria labels, and dropdown menu items rather than putting bulky text controls in the node body.
+
 LTX 2.3 runtime and WAN 2.2 planning/runtime are intentionally left for later phases.

@@ -13,11 +13,25 @@ import {
 } from "../../web/timeline/operations.js";
 import { detectDirectorGaps, validateVideoTimeline } from "../../web/timeline/validation.js";
 
+function addValidTextSection(timeline, startTime) {
+  const section = addSection(timeline, "Text", startTime);
+  section.prompt = "Text prompt";
+  return section;
+}
+
+function testNewTextSectionStartsEmpty() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Text", 0);
+
+  assert.equal(section.prompt, "");
+  assert.equal(validateVideoTimeline(timeline).is_valid, false);
+}
+
 function testSectionsCannotOverlapWhenMovedOrResized() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 5;
-  const first = addSection(timeline, "Text", 0);
-  const second = addSection(timeline, "Text", 2);
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 2);
 
   moveSection(timeline, second.item_id, 0.5);
   assert.equal(second.start_time, first.end_time);
@@ -30,7 +44,7 @@ function testSectionsCannotOverlapWhenMovedOrResized() {
 function testAddAndDuplicateReturnNullWhenNoGapFits() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 1;
-  const section = addSection(timeline, "Text", 0);
+  const section = addValidTextSection(timeline, 0);
   timeline.ui_state.selected_item_id = section.item_id;
 
   assert.equal(addSection(timeline, "Text", 0), null);
@@ -42,7 +56,7 @@ function testAddAndDuplicateReturnNullWhenNoGapFits() {
 function testGapsRemainAllowedAndDetected() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 4;
-  addSection(timeline, "Text", 1);
+  addValidTextSection(timeline, 1);
 
   const gaps = detectDirectorGaps(timeline);
   assert.equal(gaps.length, 2);
@@ -52,7 +66,7 @@ function testGapsRemainAllowedAndDetected() {
 function testSplitAndDuplicate() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 6;
-  const section = addSection(timeline, "Text", 0);
+  const section = addValidTextSection(timeline, 0);
   timeline.ui_state.selected_item_id = section.item_id;
 
   const split = splitSelectedSection(timeline, 0.5);
@@ -82,9 +96,9 @@ function testRippleResizeMovesFollowingSections() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 5;
   timeline.ui_state.section_edit_mode = "Ripple Edit";
-  const first = addSection(timeline, "Text", 0);
-  const second = addSection(timeline, "Text", 1);
-  const third = addSection(timeline, "Text", 2.5);
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 1);
+  const third = addValidTextSection(timeline, 2.5);
 
   resizeSection(timeline, first.item_id, "end", 1.5);
 
@@ -119,6 +133,7 @@ function testAudioMoveAndResizeKeepSourceTrim() {
   assert.equal(validateVideoTimeline(timeline).is_valid, true);
 }
 
+testNewTextSectionStartsEmpty();
 testSectionsCannotOverlapWhenMovedOrResized();
 testAddAndDuplicateReturnNullWhenNoGapFits();
 testGapsRemainAllowedAndDetected();

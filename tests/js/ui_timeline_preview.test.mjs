@@ -32,7 +32,7 @@ function testSelectedPromptUsesFiveRowInspector() {
   });
   timeline.ui_state.selected_item_id = "section_001";
 
-  assert.equal(getTimelineWidgetHeight(timeline), 364);
+  assert.equal(getTimelineWidgetHeight(timeline), 456);
 }
 
 function testAudioLanesExpandViewportToContent() {
@@ -92,9 +92,39 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("input.placeholder = options.placeholder ?? title"), true);
   assert.equal(rendererSource.includes("rows: 5"), true);
   assert.equal(rendererSource.includes('scheduleDebouncedCommit("prompt typing", { rerender: false })'), true);
-  assert.equal(rendererSource.includes("htd-inspector.has-prompt"), true);
-  assert.equal(rendererSource.includes("PROMPT_INSPECTOR_HEIGHT"), true);
+  assert.equal(rendererSource.includes('this.renderInspectorRow("Prompt", control, "is-prompt")'), false);
+  assert.equal(rendererSource.includes('el("div", "htd-inspector-row is-prompt")'), true);
+  assert.equal(rendererSource.includes("htd-inspector.has-selection"), true);
+  assert.equal(rendererSource.includes("INSPECTOR_EDITOR_HEIGHT"), true);
   assert.equal(rendererSource.includes("resize: none"), true);
+  assert.equal(rendererSource.includes('inspectorTitle("Image Section")'), true);
+  assert.equal(rendererSource.includes('inspectorTitle("Video Section")'), true);
+  assert.equal(rendererSource.includes('inspectorTitle("Audio Clip")'), true);
+  assert.equal(rendererSource.includes("renderInspectorControlRow"), true);
+  assert.equal(rendererSource.includes("renderInspectorCompactField"), true);
+  assert.equal(rendererSource.includes("renderIconSelectField"), true);
+  assert.equal(rendererSource.includes('placement: "above"'), true);
+  assert.equal(rendererSource.includes(".htd-menu.opens-above .htd-menu-list"), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Guide Strength", this.renderGuideStrengthField(selected), "is-strength")'), true);
+  assert.equal(rendererSource.includes('slider.type = "range"'), true);
+  assert.equal(rendererSource.includes("clampNumber(value, 0, 1, 1)"), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Crop Mode", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop"))'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Timing Mode", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing"))'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source In"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source Out"'), true);
+  assert.equal(rendererSource.includes("is-section-inspector"), true);
+  assert.equal(rendererSource.includes("is-audio-inspector"), true);
+  assert.equal(rendererSource.includes('this.renderInspectorRow("Volume"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorRow("Fade In"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorRow("Fade Out"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorRow("Enabled"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorRow("Locked"'), true);
+  assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selected.image, "Image")'), false);
+  assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selected.video, "Video")'), false);
+  assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selectedAudio.audio, "Audio")'), true);
+  assert.equal(rendererSource.includes("Attach"), false);
+  assert.equal(rendererSource.includes("Choose"), false);
+  assert.equal(rendererSource.includes("Clear"), false);
 }
 
 testTimelineHeightIsTripled();

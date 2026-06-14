@@ -53,7 +53,7 @@ import {
 
 const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
-const PROMPT_INSPECTOR_HEIGHT = 96;
+const INSPECTOR_EDITOR_HEIGHT = 188;
 const ROOT_GAP = 6;
 
 export function getTimelineWidgetHeight(timeline) {
@@ -317,44 +317,71 @@ export class TimelineRenderer {
     const inspector = el("div", "htd-inspector");
     const selected = timeline.director_track.sections.find((section) => section.item_id === timeline.ui_state.selected_item_id);
     const selectedAudio = findAudioClip(timeline, timeline.ui_state.selected_item_id);
-    inspector.classList.toggle("has-prompt", shouldRenderPromptInput(timeline, selected));
+    inspector.classList.toggle("has-selection", Boolean(selected || selectedAudio));
     if (!selected && !selectedAudio) return inspector;
 
+    const panel = el("div", "htd-inspector-panel");
     if (selected?.type === ASSET_TYPE_IMAGE) {
-      inspector.append(
-        this.renderPromptInput(selected),
-        this.renderNumberField(selected, "guide_strength", "Strength", { min: 0, max: 1, step: 0.05 }),
-        this.renderSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES),
+      panel.classList.add("is-section-inspector");
+      panel.append(
+        inspectorTitle("Image Section"),
+        this.renderInspectorControlRow(
+          this.renderInspectorCompactField("Guide Strength", this.renderGuideStrengthField(selected), "is-strength"),
+          this.renderInspectorCompactField("Crop Mode", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
+        ),
+        this.renderPromptRow(selected),
       );
     } else if (selected?.type === ASSET_TYPE_VIDEO) {
-      inspector.append(
-        this.renderPromptInput(selected),
-        this.renderNumberField(selected, "guide_strength", "Strength", { min: 0, max: 1, step: 0.05 }),
-        this.renderSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES),
-        this.renderSelectField(selected, "timing_mode", "Timing", VIDEO_TIMING_MODES),
-        this.renderNumberField(selected, "source_in", "In", { min: 0, step: 0.05 }),
-        this.renderNumberField(selected, "source_out", "Out", { min: 0, step: 0.05, allowNull: true }),
+      panel.classList.add("is-section-inspector");
+      panel.append(
+        inspectorTitle("Video Section"),
+        this.renderInspectorControlRow(
+          this.renderInspectorCompactField("Guide Strength", this.renderGuideStrengthField(selected), "is-strength"),
+          this.renderInspectorCompactField("Crop Mode", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
+          this.renderInspectorCompactField("Timing Mode", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing")),
+        ),
+        this.renderInspectorControlRow(
+          this.renderInspectorCompactField("Source In", this.renderNumberField(selected, "source_in", "Source In", { min: 0, step: 0.05 })),
+          this.renderInspectorCompactField("Source Out", this.renderNumberField(selected, "source_out", "Source Out", { min: 0, step: 0.05, allowNull: true })),
+        ),
+        this.renderPromptRow(selected),
       );
     } else if (selected?.type === "Text") {
-      inspector.append(this.renderPromptInput(selected));
+      panel.classList.add("is-section-inspector");
+      panel.append(
+        inspectorTitle("Text Section"),
+        this.renderPromptRow(selected),
+      );
     } else if (selectedAudio) {
-      inspector.append(
-        this.renderTextField(selectedAudio, "name", "Name"),
-        this.renderNumberField(selectedAudio, "volume", "Volume", { min: 0, max: 400, step: 1 }),
-        this.renderNumberField(selectedAudio, "source_in", "In", { min: 0, step: 0.05 }),
-        this.renderNumberField(selectedAudio, "source_out", "Out", { min: 0, step: 0.05, allowNull: true }),
-        this.renderNumberField(selectedAudio, "fade_in", "Fade In", { min: 0, step: 0.05 }),
-        this.renderNumberField(selectedAudio, "fade_out", "Fade Out", { min: 0, step: 0.05 }),
-        this.renderCheckboxField(selectedAudio, "enabled", "On"),
-        this.renderCheckboxField(selectedAudio, "locked", "Lock"),
+      panel.classList.add("is-audio-inspector");
+      panel.append(
+        inspectorTitle("Audio Clip"),
+        this.renderInspectorRow("Name", this.renderTextField(selectedAudio, "name", "Name")),
+        this.renderInspectorRow("Volume", this.renderNumberField(selectedAudio, "volume", "Volume", { min: 0, max: 400, step: 1 })),
+        this.renderInspectorRow("Source In", this.renderNumberField(selectedAudio, "source_in", "Source In", { min: 0, step: 0.05 })),
+        this.renderInspectorRow("Source Out", this.renderNumberField(selectedAudio, "source_out", "Source Out", { min: 0, step: 0.05, allowNull: true })),
+        this.renderInspectorRow("Fade In", this.renderNumberField(selectedAudio, "fade_in", "Fade In", { min: 0, step: 0.05 })),
+        this.renderInspectorRow("Fade Out", this.renderNumberField(selectedAudio, "fade_out", "Fade Out", { min: 0, step: 0.05 })),
+        this.renderInspectorRow("Enabled", this.renderCheckboxField(selectedAudio, "enabled", "Enabled")),
+        this.renderInspectorRow("Locked", this.renderCheckboxField(selectedAudio, "locked", "Locked")),
+        this.renderMediaSummary(timeline, selectedAudio.audio, "Audio"),
       );
     }
+    inspector.append(panel);
     return inspector;
+  }
+
+  renderPromptRow(item) {
+    const control = this.renderPromptInput(item);
+    if (!control) return this.container.ownerDocument.createDocumentFragment();
+    const row = el("div", "htd-inspector-row is-prompt");
+    row.append(control);
+    return row;
   }
 
   renderPromptInput(item) {
     if (!shouldRenderPromptInput(this.controller.timeline, item)) {
-      return this.container.ownerDocument.createDocumentFragment();
+      return null;
     }
     return this.renderTextField(item, "prompt", "Prompt", {
       className: "htd-prompt",
@@ -363,6 +390,78 @@ export class TimelineRenderer {
       placeholder: "Write your prompt here...",
       rows: 5,
     });
+  }
+
+  renderInspectorRow(label, control, className = "") {
+    const row = el("div", `htd-inspector-row ${className}`.trim());
+    const rowLabel = el("span", "htd-inspector-label");
+    rowLabel.textContent = label;
+    row.append(rowLabel, control);
+    return row;
+  }
+
+  renderInspectorControlRow(...fields) {
+    const row = el("div", "htd-inspector-control-row");
+    row.append(...fields.filter(Boolean));
+    return row;
+  }
+
+  renderInspectorCompactField(label, control, className = "") {
+    const field = el("div", `htd-inspector-compact-field ${className}`.trim());
+    const fieldLabel = el("span", "htd-inspector-compact-label");
+    fieldLabel.textContent = label;
+    field.append(fieldLabel, control);
+    return field;
+  }
+
+  renderGuideStrengthField(item) {
+    const wrapper = el("div", "htd-strength-control");
+    const slider = el("input", "htd-strength-slider");
+    const number = el("input", "htd-number htd-strength-number");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "1";
+    slider.step = "0.05";
+    slider.title = "Guide Strength";
+    slider.setAttribute("aria-label", "Guide Strength");
+    number.type = "number";
+    number.min = "0";
+    number.max = "1";
+    number.step = "0.05";
+    number.title = "Guide Strength";
+    number.setAttribute("aria-label", "Guide Strength");
+
+    const setControlValues = (value) => {
+      const strength = clampNumber(value, 0, 1, 1);
+      slider.value = String(strength);
+      number.value = strength.toFixed(2);
+      return strength;
+    };
+
+    setControlValues(item.guide_strength);
+    slider.addEventListener("input", () => {
+      const strength = setControlValues(slider.value);
+      item.guide_strength = strength;
+      this.controller.scheduleDebouncedCommit("settings change", { delayMs: 80 });
+    });
+    number.addEventListener("change", () => {
+      const strength = setControlValues(number.value);
+      this.commitMutation(() => { item.guide_strength = strength; }, "settings change");
+    });
+    wrapper.append(slider, number);
+    return wrapper;
+  }
+
+  renderMediaSummary(timeline, reference, fallbackType) {
+    const asset = resolveMediaReference(timeline, reference);
+    const row = el("div", "htd-inspector-row htd-media-summary");
+    const rowLabel = el("span", "htd-inspector-label");
+    rowLabel.textContent = "Media";
+    const value = el("span", "htd-media-value");
+    value.textContent = asset ? mediaLabel(timeline, reference, fallbackType) : `No ${fallbackType.toLowerCase()} selected`;
+    value.title = asset?.path ?? value.textContent;
+    row.append(rowLabel, value);
+    return row;
   }
 
   renderTextField(item, field, title, options = {}) {
@@ -403,6 +502,28 @@ export class TimelineRenderer {
   renderSelectField(item, field, title, options) {
     return selectControl(title, item[field], options, (value) => {
       this.commitMutation(() => { item[field] = value; }, "settings change");
+    });
+  }
+
+  renderIconSelectField(item, field, title, options, iconName) {
+    const value = item[field] ?? options[0] ?? "";
+    return iconMenuControl({
+      id: `inspector-${field}-${item.item_id}`,
+      title,
+      iconName,
+      value,
+      options,
+      placement: "above",
+      open: this.openMenu === `inspector-${field}-${item.item_id}`,
+      onToggle: () => {
+        const id = `inspector-${field}-${item.item_id}`;
+        this.openMenu = this.openMenu === id ? null : id;
+        this.render();
+      },
+      onChange: (nextValue) => {
+        this.openMenu = null;
+        this.commitMutation(() => { item[field] = nextValue; }, "settings change");
+      },
     });
   }
 
@@ -729,7 +850,8 @@ function findAudioClip(timeline, itemId) {
 
 function getInspectorHeight(timeline) {
   const selected = timeline?.director_track?.sections?.find((section) => section.item_id === timeline?.ui_state?.selected_item_id);
-  return shouldRenderPromptInput(timeline, selected) ? PROMPT_INSPECTOR_HEIGHT : INSPECTOR_HEIGHT;
+  const selectedAudio = findAudioClip(timeline, timeline?.ui_state?.selected_item_id);
+  return selected || selectedAudio ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
 }
 
 function shouldRenderPromptInput(timeline, item) {
@@ -827,6 +949,18 @@ function effectivePromptLabel(timeline, section) {
   return globalPrompt.position === "Suffix" ? `${prompt}, ${globalText}` : `${globalText}, ${prompt}`;
 }
 
+function inspectorTitle(text) {
+  const title = el("div", "htd-inspector-title");
+  title.textContent = text;
+  return title;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, numeric));
+}
+
 function iconButton(iconName, title, onClick) {
   const control = button("", title, onClick);
   control.classList.add("htd-icon-button");
@@ -841,8 +975,9 @@ function toggleIconButton(iconName, title, active, onClick) {
   return control;
 }
 
-function iconMenuControl({ id, title, iconName, value, options, open, onToggle, onChange }) {
+function iconMenuControl({ id, title, iconName, value, options, placement = "below", open, onToggle, onChange }) {
   const wrapper = el("div", "htd-menu");
+  wrapper.classList.toggle("opens-above", placement === "above");
   const menuButton = iconButton(iconName, `${title}: ${value}`, onToggle);
   menuButton.classList.add("htd-menu-button");
   menuButton.setAttribute("aria-haspopup", "menu");
@@ -921,6 +1056,8 @@ const ICONS = {
   fit: `<svg viewBox="0 0 24 24"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8 8h8v8H8z"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M4.8 7.5l2.6 1.5M16.6 15l2.6 1.5M19.2 7.5 16.6 9M7.4 15l-2.6 1.5"/></svg>`,
   director: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
+  crop: `<svg viewBox="0 0 24 24"><path d="M6 3v12a3 3 0 0 0 3 3h12"/><path d="M3 6h12a3 3 0 0 1 3 3v12"/><path d="M9 9h6v6H9z"/></svg>`,
+  timing: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`,
 };
 
 function settingRow(title) {
@@ -977,6 +1114,7 @@ function installStyles(documentRef) {
     .htd-menu-button { width: 34px; min-width: 34px; }
     .htd-menu-button::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.78; }
     .htd-menu-list { position: absolute; top: 28px; left: 0; z-index: 30; min-width: 132px; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 8px 20px rgba(0,0,0,0.42); }
+    .htd-menu.opens-above .htd-menu-list { top: auto; bottom: 28px; }
     .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-menu-item:hover, .htd-menu-item.is-active { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }
@@ -1015,11 +1153,30 @@ function installStyles(documentRef) {
     .htd-left { left: 0; }
     .htd-right { right: 0; }
     .is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }
-    .htd-inspector { min-height: ${INSPECTOR_HEIGHT}px; display: flex; align-items: center; gap: 5px; overflow-x: auto; overflow-y: hidden; }
-    .htd-inspector.has-prompt { min-height: ${PROMPT_INSPECTOR_HEIGHT}px; align-items: flex-start; }
-    .htd-prompt { min-width: 100px; flex: 1 1 auto; height: 86px; min-height: 86px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 6px 8px; line-height: 1.3; resize: none; }
-    .htd-field { min-width: 70px; max-width: 140px; flex: 1 1 80px; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
+    .htd-inspector { min-height: ${INSPECTOR_HEIGHT}px; overflow: visible; box-sizing: border-box; }
+    .htd-inspector.has-selection { min-height: ${INSPECTOR_EDITOR_HEIGHT}px; }
+    .htd-inspector-panel { height: 100%; min-height: ${INSPECTOR_EDITOR_HEIGHT}px; box-sizing: border-box; padding: 7px; border: 1px solid #30394c; border-radius: 4px; background: rgba(17, 23, 34, 0.48); overflow: visible; }
+    .htd-inspector-panel.is-section-inspector { display: flex; flex-direction: column; gap: 6px; align-content: start; }
+    .htd-inspector-panel.is-audio-inspector { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)); grid-auto-rows: min-content; gap: 6px 8px; align-content: start; }
+    .htd-inspector-title { grid-column: 1 / -1; color: #eef2f7; font-weight: 600; line-height: 16px; }
+    .htd-inspector-row { min-width: 0; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
+    .htd-inspector-row.is-prompt { flex: 1 1 auto; flex-direction: column; align-items: stretch; }
+    .htd-inspector-label { flex: 0 0 78px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
+    .htd-inspector-row.is-prompt .htd-inspector-label { flex: 0 0 auto; }
+    .htd-inspector-control-row { min-height: 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+    .htd-inspector-compact-field { min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: #c7d0df; }
+    .htd-inspector-compact-field.is-strength { flex: 1 1 320px; }
+    .htd-inspector-compact-label { flex: 0 0 auto; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
+    .htd-inspector-compact-field .htd-menu { flex: 0 0 auto; }
+    .htd-prompt { width: 100%; min-width: 0; flex: 1 1 auto; height: 86px; min-height: 86px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 6px 8px; line-height: 1.3; resize: none; }
+    .htd-field { min-width: 0; width: 100%; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
     .htd-number { width: 64px; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 6px; }
+    .htd-strength-control { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 6px; }
+    .htd-strength-slider { min-width: 70px; flex: 1 1 auto; accent-color: #d6b65a; }
+    .htd-strength-number { flex: 0 0 58px; width: 58px; }
+    .htd-media-summary { grid-column: span 2; }
+    .htd-inspector-panel.is-section-inspector .htd-media-summary { min-height: 24px; }
+    .htd-media-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-settings-overlay { position: absolute; inset: 0; z-index: 20; display: flex; align-items: stretch; justify-content: center; background: rgba(8, 11, 17, 0.82); padding: 10px; box-sizing: border-box; }
     .htd-settings-modal { width: min(760px, 100%); min-height: 0; border: 1px solid #465064; border-radius: 6px; background: #121925; box-shadow: 0 12px 34px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
     .htd-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #30394c; }

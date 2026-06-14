@@ -283,7 +283,7 @@ function createSection(type, start, end) {
     section.source_out = null;
     section.timing_mode = "Fit to Section";
   } else {
-    section.prompt = "Text";
+    section.prompt = "";
   }
   return section;
 }
