@@ -333,8 +333,8 @@ export class TimelineRenderer {
       panel.append(
         inspectorTitle("Image Section"),
         this.renderInspectorControlRow(
-          this.renderInspectorCompactField("Guide Strength", this.renderGuideStrengthField(selected), "is-strength"),
-          this.renderInspectorCompactField("Crop Mode", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
+          this.renderInspectorCompactField("Guide Strength:", this.renderGuideStrengthField(selected), "is-strength"),
+          this.renderInspectorCompactField("Crop Mode:", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
         ),
         this.renderPromptRow(selected),
       );
@@ -343,13 +343,13 @@ export class TimelineRenderer {
       panel.append(
         inspectorTitle("Video Section"),
         this.renderInspectorControlRow(
-          this.renderInspectorCompactField("Guide Strength", this.renderGuideStrengthField(selected), "is-strength"),
-          this.renderInspectorCompactField("Crop Mode", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
-          this.renderInspectorCompactField("Timing Mode", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing")),
+          this.renderInspectorCompactField("Guide Strength:", this.renderGuideStrengthField(selected), "is-strength"),
+          this.renderInspectorCompactField("Crop Mode:", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
+          this.renderInspectorCompactField("Timing Mode:", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing")),
         ),
         this.renderInspectorControlRow(
-          this.renderInspectorCompactField("Source In", this.renderNumberField(selected, "source_in", "Source In", { min: 0, step: 0.05 })),
-          this.renderInspectorCompactField("Source Out", this.renderNumberField(selected, "source_out", "Source Out", { min: 0, step: 0.05, allowNull: true })),
+          this.renderInspectorCompactField("Source In:", this.renderNumberField(selected, "source_in", "Source In", { min: 0, step: 0.05 })),
+          this.renderInspectorCompactField("Source Out:", this.renderNumberField(selected, "source_out", "Source Out", { min: 0, step: 0.05, allowNull: true })),
         ),
         this.renderPromptRow(selected),
       );
@@ -448,12 +448,14 @@ export class TimelineRenderer {
     setControlValues(item.guide_strength);
     slider.addEventListener("input", () => {
       const strength = setControlValues(slider.value);
-      item.guide_strength = strength;
+      setLiveItemField(this.controller.timeline, item, "guide_strength", strength);
       this.controller.scheduleDebouncedCommit("settings change", { delayMs: 80 });
     });
     number.addEventListener("change", () => {
       const strength = setControlValues(number.value);
-      this.commitMutation(() => { item.guide_strength = strength; }, "settings change");
+      this.commitMutation((timeline) => {
+        setLiveItemField(timeline, item, "guide_strength", strength);
+      }, "settings change");
     });
     wrapper.append(slider, number);
     return wrapper;
@@ -504,8 +506,8 @@ export class TimelineRenderer {
     input.value = item[field] == null ? "" : String(item[field]);
     input.addEventListener("change", () => {
       const raw = input.value.trim();
-      this.commitMutation(() => {
-        item[field] = raw === "" && options.allowNull ? null : Number(raw);
+      this.commitMutation((timeline) => {
+        setLiveItemField(timeline, item, field, raw === "" && options.allowNull ? null : Number(raw));
       }, "settings change");
     });
     return input;
@@ -513,7 +515,9 @@ export class TimelineRenderer {
 
   renderSelectField(item, field, title, options) {
     return selectControl(title, item[field], options, (value) => {
-      this.commitMutation(() => { item[field] = value; }, "settings change");
+      this.commitMutation((timeline) => {
+        setLiveItemField(timeline, item, field, value);
+      }, "settings change");
     });
   }
 
@@ -525,7 +529,8 @@ export class TimelineRenderer {
       iconName,
       value,
       options,
-      placement: "above",
+      placement: "above-end",
+      showValue: true,
       open: this.openMenu === `inspector-${field}-${item.item_id}`,
       onToggle: () => {
         const id = `inspector-${field}-${item.item_id}`;
@@ -534,14 +539,19 @@ export class TimelineRenderer {
       },
       onChange: (nextValue) => {
         this.openMenu = null;
-        this.commitMutation(() => { item[field] = nextValue; }, "settings change");
+        this.commitMutation((timeline) => {
+          setLiveItemField(timeline, item, field, nextValue);
+        }, "settings change");
       },
     });
   }
 
   renderCheckboxField(item, field, title) {
     return toggleButton(title, title, Boolean(item[field]), () => {
-      this.commitMutation(() => { item[field] = !item[field]; }, "settings change");
+      this.commitMutation((timeline) => {
+        const liveItem = resolveLiveTimelineItem(timeline, item) ?? item;
+        liveItem[field] = !Boolean(liveItem[field]);
+      }, "settings change");
     });
   }
 
@@ -993,9 +1003,16 @@ function toggleIconButton(iconName, title, active, onClick) {
   return control;
 }
 
-function iconMenuControl({ id, title, iconName, value, options, placement = "below", open, onToggle, onChange }) {
+function iconMenuControl({ id, title, iconName, value, options, placement = "below", showValue = false, open, onToggle, onChange }) {
   const wrapper = el("div", "htd-menu");
-  wrapper.classList.toggle("opens-above", placement === "above");
+  wrapper.classList.toggle("opens-above", placement === "above" || placement === "above-end");
+  wrapper.classList.toggle("align-end", placement === "above-end");
+  if (showValue) {
+    const valueLabel = el("span", "htd-menu-value");
+    valueLabel.textContent = value;
+    valueLabel.title = `${title}: ${value}`;
+    wrapper.append(valueLabel);
+  }
   const menuButton = iconButton(iconName, `${title}: ${value}`, onToggle);
   menuButton.classList.add("htd-menu-button");
   menuButton.setAttribute("aria-haspopup", "menu");
@@ -1128,11 +1145,13 @@ function installStyles(documentRef) {
     .htd-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
     .htd-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
-    .htd-menu { position: relative; display: inline-flex; }
+    .htd-menu { position: relative; display: inline-flex; align-items: center; }
     .htd-menu-button { width: 34px; min-width: 34px; }
     .htd-menu-button::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.78; }
+    .htd-menu-value { min-width: 0; max-width: 118px; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: center; color: #eef2f7; }
     .htd-menu-list { position: absolute; top: 28px; left: 0; z-index: 30; min-width: 132px; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 8px 20px rgba(0,0,0,0.42); }
     .htd-menu.opens-above .htd-menu-list { top: auto; bottom: 28px; }
+    .htd-menu.align-end .htd-menu-list { right: 0; left: auto; }
     .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-menu-item:hover, .htd-menu-item.is-active { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }

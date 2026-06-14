@@ -70,6 +70,26 @@ function testPromptEditsUpdateLiveSectionAfterStateReplacement() {
   assert.equal(staleSectionReference.prompt, "first debounce chunk");
 }
 
+function testInspectorControlsUpdateLiveSectionAfterStateReplacement() {
+  const timeline = createDefaultVideoTimeline();
+  const liveSection = {
+    item_id: "section_001",
+    type: "Image",
+    start_time: 0,
+    end_time: 1,
+    prompt: "",
+    crop_mode: "Project Default",
+  };
+  const staleSectionReference = { ...liveSection };
+  timeline.director_track.sections.push(liveSection);
+
+  const updated = setLiveItemField(timeline, staleSectionReference, "crop_mode", "Crop");
+
+  assert.equal(updated, liveSection);
+  assert.equal(timeline.director_track.sections[0].crop_mode, "Crop");
+  assert.equal(staleSectionReference.crop_mode, "Project Default");
+}
+
 function testSectionPreviewUsesContainedRepeatedFrames() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
@@ -124,15 +144,20 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("renderInspectorControlRow"), true);
   assert.equal(rendererSource.includes("renderInspectorCompactField"), true);
   assert.equal(rendererSource.includes("renderIconSelectField"), true);
-  assert.equal(rendererSource.includes('placement: "above"'), true);
+  assert.equal(rendererSource.includes('placement: "above-end"'), true);
+  assert.equal(rendererSource.includes("showValue: true"), true);
   assert.equal(rendererSource.includes(".htd-menu.opens-above .htd-menu-list"), true);
-  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Guide Strength", this.renderGuideStrengthField(selected), "is-strength")'), true);
+  assert.equal(rendererSource.includes(".htd-menu.align-end .htd-menu-list"), true);
+  assert.equal(rendererSource.includes("htd-menu-value"), true);
+  assert.equal(rendererSource.includes("margin-right: 6px"), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Guide Strength:", this.renderGuideStrengthField(selected), "is-strength")'), true);
   assert.equal(rendererSource.includes('slider.type = "range"'), true);
   assert.equal(rendererSource.includes("clampNumber(value, 0, 1, 1)"), true);
-  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Crop Mode", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop"))'), true);
-  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Timing Mode", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing"))'), true);
-  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source In"'), true);
-  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source Out"'), true);
+  assert.equal(rendererSource.includes("setLiveItemField(timeline, item, field, nextValue)"), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Crop Mode:", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop"))'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Timing Mode:", this.renderIconSelectField(selected, "timing_mode", "Timing Mode", VIDEO_TIMING_MODES, "timing"))'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source In:"'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Source Out:"'), true);
   assert.equal(rendererSource.includes("is-section-inspector"), true);
   assert.equal(rendererSource.includes("is-audio-inspector"), true);
   assert.equal(rendererSource.includes('this.renderInspectorRow("Volume"'), true);
@@ -152,6 +177,7 @@ testTimelineHeightIsTripled();
 testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
+testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testSectionPreviewUsesContainedRepeatedFrames();
 
 console.log("timeline preview UI tests passed");
