@@ -117,11 +117,17 @@ export class TimelineRenderer {
 
   renderToolbar() {
     const toolbar = el("div", "htd-toolbar");
+    const settingsButton = iconButton("settings", "Project Settings", () => {
+      this.settingsOpen = true;
+      this.render();
+    });
+    settingsButton.classList.add("htd-settings-button");
     toolbar.append(
       iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
       iconButton("image", "Add Image Section", () => this.openMediaPicker(ASSET_TYPE_IMAGE)),
       iconButton("video", "Add Video Section", () => this.openMediaPicker(ASSET_TYPE_VIDEO)),
       iconButton("audio", "Add Audio Clip", () => this.openMediaPicker(ASSET_TYPE_AUDIO)),
+      toolbarSpacer(),
       this.renderToolbarMenu("display", "Display Mode", "layers", this.controller.timeline.ui_state.timeline_display_mode, TIMELINE_DISPLAY_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.timeline_display_mode = value; }, "settings change");
       }),
@@ -131,19 +137,19 @@ export class TimelineRenderer {
       this.renderToolbarMenu("snap", "Snap Mode", "magnet", this.controller.timeline.ui_state.snap_mode, SNAP_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.snap_mode = value; }, "settings change");
       }),
+      toolbarSpacer(),
       toggleIconButton("global", "Use Global Prompt", this.controller.timeline.project.global_prompt.enabled, () => {
         this.commitMutation((timeline) => {
           timeline.project.global_prompt.enabled = !timeline.project.global_prompt.enabled;
         }, "settings change");
       }),
+      toolbarSpacer(),
       iconButton("split", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
       iconButton("duplicate", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
       iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete")),
+      toolbarSpacer(),
       iconButton("fit", "Zoom to Fit", () => this.handleZoomToFit()),
-      iconButton("settings", "Project Settings", () => {
-        this.settingsOpen = true;
-        this.render();
-      }),
+      settingsButton,
     );
     return toolbar;
   }
@@ -1253,7 +1259,7 @@ const ICONS = {
   duplicate: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
   delete: `<svg viewBox="0 0 24 24"><path d="M6 7h12M10 7V5h4v2M9 10v7M15 10v7M8 7l1 12h6l1-12"/></svg>`,
   fit: `<svg viewBox="0 0 24 24"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8 8h8v8H8z"/></svg>`,
-  settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M4.8 7.5l2.6 1.5M16.6 15l2.6 1.5M19.2 7.5 16.6 9M7.4 15l-2.6 1.5"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>`,
   director: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   crop: `<svg viewBox="0 0 24 24"><path d="M6 3v12a3 3 0 0 0 3 3h12"/><path d="M3 6h12a3 3 0 0 1 3 3v12"/><path d="M9 9h6v6H9z"/></svg>`,
   timing: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`,
@@ -1265,6 +1271,12 @@ function settingRow(title) {
   labelText.textContent = title;
   row.append(labelText);
   return row;
+}
+
+function toolbarSpacer() {
+  const spacer = el("div", "htd-toolbar-spacer");
+  spacer.setAttribute("aria-hidden", "true");
+  return spacer;
 }
 
 function getPath(root, path) {
@@ -1309,6 +1321,8 @@ function installStyles(documentRef) {
     .htd-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
     .htd-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
+    .htd-toolbar-spacer { width: 1px; height: 18px; margin: 0 4px; background: #3d4658; opacity: 0.9; flex: 0 0 auto; }
+    .htd-settings-button { margin-left: auto; }
     .htd-menu { position: relative; display: inline-flex; align-items: center; }
     .htd-menu-button { width: 34px; min-width: 34px; }
     .htd-menu-button::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.78; }

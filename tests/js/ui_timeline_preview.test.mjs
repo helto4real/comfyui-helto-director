@@ -201,6 +201,17 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes(".htd-context-menu { position: fixed;"), true);
 }
 
+function testToolbarUsesGroupedIconControls() {
+  const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+  const toolbarSpacers = rendererSource.match(/toolbarSpacer\(\)/g) ?? [];
+
+  assert.equal(toolbarSpacers.length >= 4, true);
+  assert.equal(rendererSource.includes('settingsButton.classList.add("htd-settings-button")'), true);
+  assert.equal(rendererSource.includes(".htd-toolbar-spacer {"), true);
+  assert.equal(rendererSource.includes(".htd-settings-button { margin-left: auto; }"), true);
+  assert.equal(rendererSource.includes('settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5'), true);
+}
+
 function testRendererUsesRealWaveformsOnly() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
@@ -271,6 +282,7 @@ testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testSectionPreviewUsesContainedRepeatedFrames();
 testDeleteContextMenuIsAvailableOnTimelineItems();
+testToolbarUsesGroupedIconControls();
 testRendererUsesRealWaveformsOnly();
 testWaveformHelpersAdaptAndTrimPeaks();
 
