@@ -18,6 +18,8 @@ AUDIO_EXTENSIONS = {".aac", ".aiff", ".flac", ".m4a", ".mp3", ".ogg", ".opus", "
 
 DEFAULT_THUMBNAIL_SIZE = 320
 DEFAULT_WAVEFORM_PEAKS = 96
+MIN_WAVEFORM_PEAKS = 16
+MAX_WAVEFORM_PEAKS = 512
 
 
 def cache_root() -> Path:
@@ -86,7 +88,7 @@ def make_thumbnail(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE) -> 
 
 
 def make_waveform(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS) -> dict[str, Any]:
-    peaks = _clamp_int(peaks, 16, 512)
+    peaks = _clamp_int(peaks, MIN_WAVEFORM_PEAKS, MAX_WAVEFORM_PEAKS)
     out = waveform_cache_path(media_path, peaks)
     if out.exists():
         return json.loads(out.read_text(encoding="utf-8"))

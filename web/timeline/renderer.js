@@ -11,10 +11,10 @@ import {
   VIDEO_TIMING_MODES,
 } from "./schema.js";
 import {
-  createWaveformBars,
   mediaLabel,
   resolveMediaReference,
 } from "./media.js";
+import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS } from "./media_cache.js";
 import {
   addPickedMediaItem,
   replacePickedSectionMedia,
@@ -315,11 +315,13 @@ export class TimelineRenderer {
     if (timeline.ui_state.selected_item_id === clip.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(clip.start_time, timeline, this.viewportWidth)}px`;
     item.style.top = `${Number(clip.lane ?? 0) * AUDIO_LANE_HEIGHT + 4}px`;
-    item.style.width = `${Math.max(12, durationToPixels(clip.end_time - clip.start_time, timeline, this.viewportWidth))}px`;
+    item.style.height = `${AUDIO_LANE_HEIGHT - 8}px`;
+    const itemWidth = Math.max(12, durationToPixels(clip.end_time - clip.start_time, timeline, this.viewportWidth));
+    item.style.width = `${itemWidth}px`;
     const clipLabel = el("div", "htd-audio-label");
     clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
+    if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));
     item.append(clipLabel);
-    if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip));
     item.title = "Audio";
     item.addEventListener("pointerdown", (event) => this.startAudioDrag(event, clip, "audio-move"));
     item.addEventListener("contextmenu", (event) => this.showItemContextMenu(event, clip.item_id, "Audio Clip"));
@@ -979,16 +981,92 @@ function shouldShowWaveform(timeline) {
   );
 }
 
-function renderWaveform(node, timeline, clip) {
+function renderWaveform(node, timeline, clip, itemWidth) {
   const waveform = el("div", "htd-waveform");
+  waveform.setAttribute("aria-label", "Audio waveform");
+  waveform.setAttribute("role", "img");
   const asset = resolveMediaReference(timeline, clip.audio);
-  const bars = node?._timelineMediaCache?.getWaveform(asset?.asset_id) ?? createWaveformBars(asset?.asset_id ?? asset?.path ?? clip.item_id);
+  if (!asset?.asset_id) {
+    waveform.classList.add("is-empty");
+    return waveform;
+  }
+
+  const peakCount = waveformPeakCountForWidth(itemWidth);
+  let payload = node?._timelineMediaCache?.requestWaveform?.(asset, peakCount) ?? node?._timelineMediaCache?.getWaveform?.(asset.asset_id, peakCount);
+  const detailPeakCount = waveformPeakRequestForClip(itemWidth, clip, payload?.duration_seconds);
+  if (detailPeakCount !== peakCount) {
+    payload = node?._timelineMediaCache?.requestWaveform?.(asset, detailPeakCount) ?? payload;
+  }
+
+  const bars = waveformPeaksForClip(payload, clip, peakCount);
+  if (!bars.length) {
+    waveform.classList.add("is-loading");
+    return waveform;
+  }
   for (const value of bars) {
     const bar = el("span", "htd-waveform-bar");
     bar.style.height = `${Math.round(value * 100)}%`;
     waveform.append(bar);
   }
   return waveform;
+}
+
+export function waveformPeakCountForWidth(width) {
+  const numericWidth = Number(width);
+  if (!Number.isFinite(numericWidth)) return MIN_WAVEFORM_PEAKS;
+  return Math.max(MIN_WAVEFORM_PEAKS, Math.min(MAX_WAVEFORM_PEAKS, Math.ceil(numericWidth / 2)));
+}
+
+export function waveformPeakRequestForClip(width, clip, durationSeconds) {
+  const visiblePeakCount = waveformPeakCountForWidth(width);
+  const sourceRange = waveformSourceRange(clip, durationSeconds);
+  if (!sourceRange) return visiblePeakCount;
+  const ratio = Math.max(0.01, (sourceRange.end - sourceRange.start) / sourceRange.duration);
+  return Math.max(visiblePeakCount, Math.min(MAX_WAVEFORM_PEAKS, Math.ceil(visiblePeakCount / ratio)));
+}
+
+export function waveformPeaksForClip(payload, clip, targetCount = null) {
+  const peaks = Array.isArray(payload?.peaks) ? payload.peaks : [];
+  if (!peaks.length) return [];
+  const sourceRange = waveformSourceRange(clip, payload?.duration_seconds);
+  if (!sourceRange) return applyWaveformVolume(resamplePeaks(peaks, targetCount), clip);
+  const startIndex = Math.max(0, Math.min(peaks.length - 1, Math.floor((sourceRange.start / sourceRange.duration) * peaks.length)));
+  const endIndex = Math.max(startIndex + 1, Math.min(peaks.length, Math.ceil((sourceRange.end / sourceRange.duration) * peaks.length)));
+  return applyWaveformVolume(resamplePeaks(peaks.slice(startIndex, endIndex), targetCount), clip);
+}
+
+function waveformSourceRange(clip, durationSeconds) {
+  const duration = Number(durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  const sourceIn = clampNumber(clip?.source_in ?? 0, 0, duration, 0);
+  const hasExplicitSourceOut = clip?.source_out != null && clip?.source_out !== "";
+  const explicitSourceOut = Number(clip?.source_out);
+  const clipDuration = Math.max(0, Number(clip?.end_time ?? 0) - Number(clip?.start_time ?? 0));
+  const inferredSourceOut = clipDuration > 0 ? sourceIn + clipDuration : duration;
+  const sourceOut = hasExplicitSourceOut && Number.isFinite(explicitSourceOut) ? explicitSourceOut : inferredSourceOut;
+  const end = clampNumber(sourceOut, sourceIn, duration, duration);
+  return { start: sourceIn, end, duration };
+}
+
+function resamplePeaks(peaks, targetCount) {
+  const count = Number(targetCount);
+  if (!Number.isFinite(count) || count <= 0 || peaks.length === count) return peaks;
+  const target = Math.max(1, Math.round(count));
+  if (peaks.length === 1) return Array.from({ length: target }, () => peaks[0]);
+  const values = [];
+  for (let index = 0; index < target; index += 1) {
+    const start = Math.floor((index / target) * peaks.length);
+    const end = Math.max(start + 1, Math.ceil(((index + 1) / target) * peaks.length));
+    values.push(Math.max(...peaks.slice(start, end)));
+  }
+  return values;
+}
+
+function applyWaveformVolume(peaks, clip) {
+  const rawVolume = Number(clip?.volume ?? 100);
+  const multiplier = Number.isFinite(rawVolume) ? Math.max(0, rawVolume) / 100 : 1;
+  if (multiplier === 1) return peaks;
+  return peaks.map((value) => Math.max(0, Math.min(1, Number(value) * multiplier)));
 }
 
 function sectionThumbnailUrl(node, timeline, section) {
@@ -1269,10 +1347,12 @@ function installStyles(documentRef) {
     .htd-image { background: #4f7b52; }
     .htd-video { background: #7a5b35; }
     .htd-audio-track { min-height: ${AUDIO_LANE_HEIGHT}px; }
-    .htd-audio-clip { padding: 4px 10px; background: #6c4a8f; border: 1px solid rgba(255,255,255,0.25); display: flex; flex-direction: column; gap: 3px; cursor: grab; }
-    .htd-audio-label { overflow: hidden; text-overflow: ellipsis; }
-    .htd-waveform { height: 12px; display: flex; align-items: center; gap: 1px; opacity: 0.88; }
-    .htd-waveform-bar { flex: 1 1 1px; min-width: 1px; background: rgba(255,255,255,0.72); border-radius: 1px; }
+    .htd-audio-clip { position: absolute; padding: 0; background: #6c4a8f; border: 1px solid rgba(255,255,255,0.25); cursor: grab; }
+    .htd-audio-label { position: absolute; z-index: 3; top: 2px; left: 6px; right: 10px; font-size: 6px; line-height: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #f4edf8; text-shadow: 0 1px 2px rgba(0,0,0,0.82); pointer-events: none; }
+    .htd-waveform { position: absolute; z-index: 1; inset: 4px 9px; min-width: 0; display: flex; align-items: center; gap: 1px; opacity: 0.92; }
+    .htd-waveform::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid rgba(255,255,255,0.22); pointer-events: none; }
+    .htd-waveform.is-loading, .htd-waveform.is-empty { border-radius: 2px; background: repeating-linear-gradient(90deg, rgba(255,255,255,0.12) 0 2px, rgba(255,255,255,0.04) 2px 6px); opacity: 0.55; }
+    .htd-waveform-bar { flex: 1 1 1px; min-width: 1px; background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(216,221,232,0.52)); border-radius: 1px; }
     .htd-handle { position: absolute; z-index: 4; top: 0; bottom: 0; cursor: ew-resize; background: rgba(255,255,255,0.16); touch-action: none; user-select: none; }
     .htd-left { left: 0; }
     .htd-right { right: 0; }

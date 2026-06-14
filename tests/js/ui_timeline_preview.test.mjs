@@ -8,7 +8,13 @@ import {
   TIMELINE_VIEWPORT_BORDER_HEIGHT,
   getTimelineViewportHeight,
 } from "../../web/timeline/geometry.js";
-import { getTimelineWidgetHeight, setLiveItemField } from "../../web/timeline/renderer.js";
+import {
+  getTimelineWidgetHeight,
+  setLiveItemField,
+  waveformPeakCountForWidth,
+  waveformPeakRequestForClip,
+  waveformPeaksForClip,
+} from "../../web/timeline/renderer.js";
 
 function testTimelineHeightIsTripled() {
   const timeline = createDefaultVideoTimeline();
@@ -190,6 +196,69 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes("htd-context-menu-item"), true);
 }
 
+function testRendererUsesRealWaveformsOnly() {
+  const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+
+  assert.equal(rendererSource.includes("createWaveformBars"), false);
+  assert.equal(rendererSource.includes("requestWaveform?.(asset, peakCount)"), true);
+  assert.equal(rendererSource.includes("waveformPeakRequestForClip"), true);
+  assert.equal(rendererSource.includes("waveformPeaksForClip"), true);
+  assert.equal(rendererSource.includes("is-loading"), true);
+  assert.equal(rendererSource.includes("if (shouldShowWaveform(timeline))"), true);
+  assert.equal(rendererSource.includes("item.style.height = `${AUDIO_LANE_HEIGHT - 8}px`;"), true);
+  assert.equal(rendererSource.includes('if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));\n    item.append(clipLabel);'), true);
+  assert.equal(rendererSource.includes(".htd-audio-label { position: absolute; z-index: 3;"), true);
+  assert.equal(rendererSource.includes(".htd-waveform { position: absolute; z-index: 1; inset: 4px 9px;"), true);
+}
+
+function testWaveformHelpersAdaptAndTrimPeaks() {
+  const payload = {
+    duration_seconds: 10,
+    peaks: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+  };
+
+  assert.equal(waveformPeakCountForWidth(8), 16);
+  assert.equal(waveformPeakCountForWidth(2000), 512);
+  assert.equal(waveformPeakRequestForClip(100, {
+    start_time: 0,
+    end_time: 2,
+    source_in: 2,
+    source_out: 4,
+  }, 10), 250);
+  assert.deepEqual(waveformPeaksForClip(payload, {
+    start_time: 0,
+    end_time: 2,
+    source_in: 2,
+    source_out: 5,
+  }), [0.2, 0.3, 0.4]);
+  assert.deepEqual(waveformPeaksForClip(payload, {
+    start_time: 0,
+    end_time: 2,
+    source_in: 3,
+    source_out: null,
+  }), [0.3, 0.4]);
+  assert.deepEqual(waveformPeaksForClip(payload, {
+    start_time: 0,
+    end_time: 2,
+    source_in: 2,
+    source_out: 5,
+  }, 6), [0.2, 0.2, 0.3, 0.3, 0.4, 0.4]);
+  assert.deepEqual(waveformPeaksForClip(payload, {
+    start_time: 0,
+    end_time: 2,
+    source_in: 2,
+    source_out: 5,
+    volume: 50,
+  }), [0.1, 0.15, 0.2]);
+  assert.deepEqual(waveformPeaksForClip(payload, {
+    start_time: 0,
+    end_time: 2,
+    source_in: 5,
+    source_out: 8,
+    volume: 200,
+  }), [1, 1, 1]);
+}
+
 testTimelineHeightIsTripled();
 testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
@@ -197,5 +266,7 @@ testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testSectionPreviewUsesContainedRepeatedFrames();
 testDeleteContextMenuIsAvailableOnTimelineItems();
+testRendererUsesRealWaveformsOnly();
+testWaveformHelpersAdaptAndTrimPeaks();
 
 console.log("timeline preview UI tests passed");

@@ -5,6 +5,9 @@ import {
 } from "./schema.js";
 
 const ROUTE_PREFIX = "/helto_director/media";
+export const MIN_WAVEFORM_PEAKS = 16;
+export const MAX_WAVEFORM_PEAKS = 512;
+export const DEFAULT_WAVEFORM_PEAKS = 96;
 
 export class TimelineMediaCache {
   constructor(node, app) {
@@ -35,9 +38,6 @@ export class TimelineMediaCache {
       if ((asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && timeline.project.display.show_thumbnails) {
         this.thumbnailUrls.set(asset.asset_id, thumbnailUrl(asset));
       }
-      if (asset.type === ASSET_TYPE_AUDIO && timeline.project.display.show_audio_waveforms) {
-        this.loadWaveform(asset);
-      }
     }
   }
 
@@ -45,24 +45,40 @@ export class TimelineMediaCache {
     return this.thumbnailUrls.get(assetId) ?? null;
   }
 
-  getWaveform(assetId) {
-    return this.waveforms.get(assetId) ?? null;
+  getWaveform(assetId, peaks = DEFAULT_WAVEFORM_PEAKS) {
+    return this.waveforms.get(waveformKey(assetId, peaks)) ?? null;
   }
 
-  async loadWaveform(asset) {
-    if (this.waveforms.has(asset.asset_id) || this.pendingWaveforms.has(asset.asset_id)) return;
-    this.pendingWaveforms.add(asset.asset_id);
+  requestWaveform(asset, peaks = DEFAULT_WAVEFORM_PEAKS) {
+    if (!asset?.asset_id || !asset.path) return null;
+    const peakCount = clampWaveformPeaks(peaks);
+    const key = waveformKey(asset.asset_id, peakCount);
+    const cached = this.waveforms.get(key) ?? null;
+    if (!cached) this.loadWaveform(asset, peakCount);
+    return cached;
+  }
+
+  async loadWaveform(asset, peaks = DEFAULT_WAVEFORM_PEAKS) {
+    const peakCount = clampWaveformPeaks(peaks);
+    const key = waveformKey(asset.asset_id, peakCount);
+    if (this.waveforms.has(key) || this.pendingWaveforms.has(key)) return;
+    this.pendingWaveforms.add(key);
     try {
-      const response = await fetch(waveformUrl(asset));
+      const response = await fetch(waveformUrl(asset, peakCount));
       if (!response.ok) return;
       const payload = await response.json();
       if (this.destroyed) return;
-      this.waveforms.set(asset.asset_id, payload.peaks ?? []);
+      this.waveforms.set(key, {
+        duration_seconds: payload.duration_seconds ?? null,
+        sample_rate: payload.sample_rate ?? null,
+        channels: payload.channels ?? 0,
+        peaks: Array.isArray(payload.peaks) ? payload.peaks : [],
+      });
       this.node?._timelineRenderer?.render?.();
     } catch (error) {
       console.warn("Helto Director waveform cache failed", error);
     } finally {
-      this.pendingWaveforms.delete(asset.asset_id);
+      this.pendingWaveforms.delete(key);
     }
   }
 }
@@ -72,7 +88,8 @@ export function mountTimelineMediaCache(node, app) {
   const cache = new TimelineMediaCache(node, app);
   node._timelineMediaCache = cache;
   node.getTimelineThumbnailUrl = (assetId) => cache.getThumbnailUrl(assetId);
-  node.getTimelineWaveform = (assetId) => cache.getWaveform(assetId);
+  node.getTimelineWaveform = (assetId, peaks) => cache.getWaveform(assetId, peaks);
+  node.requestTimelineWaveform = (asset, peaks) => cache.requestWaveform(asset, peaks);
   return cache;
 }
 
@@ -86,7 +103,17 @@ export function thumbnailUrl(asset, maxSize = 320) {
 }
 
 export function waveformUrl(asset, peaks = 96) {
-  return `${ROUTE_PREFIX}/waveform?${paramsFor(asset, { peaks })}`;
+  return `${ROUTE_PREFIX}/waveform?${paramsFor(asset, { peaks: clampWaveformPeaks(peaks) })}`;
+}
+
+export function clampWaveformPeaks(peaks) {
+  const value = Number(peaks);
+  if (!Number.isFinite(value)) return DEFAULT_WAVEFORM_PEAKS;
+  return Math.max(MIN_WAVEFORM_PEAKS, Math.min(MAX_WAVEFORM_PEAKS, Math.round(value)));
+}
+
+function waveformKey(assetId, peaks) {
+  return `${assetId}:${clampWaveformPeaks(peaks)}`;
 }
 
 function paramsFor(asset, extra = {}) {

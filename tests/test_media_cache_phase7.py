@@ -5,6 +5,8 @@ import folder_paths
 from PIL import Image
 
 from shared.media_cache import (
+    MAX_WAVEFORM_PEAKS,
+    MIN_WAVEFORM_PEAKS,
     cache_root,
     make_thumbnail,
     make_waveform,
@@ -41,6 +43,28 @@ def test_waveform_cache_writes_peak_json_under_comfy_temp(tmp_path):
         assert len(waveform["peaks"]) == 32
         assert all(0.0 <= value <= 1.0 for value in waveform["peaks"])
         assert any(value > 0.0 for value in waveform["peaks"])
+    finally:
+        folder_paths.set_temp_directory(original_temp)
+
+
+def test_waveform_peak_count_is_clamped_and_cache_keyed(tmp_path):
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        audio_path = tmp_path / "tone.wav"
+        write_test_wav(audio_path)
+
+        tiny = make_waveform(audio_path, peaks=1)
+        huge = make_waveform(audio_path, peaks=9999)
+        mid = make_waveform(audio_path, peaks=64)
+
+        assert len(tiny["peaks"]) == MIN_WAVEFORM_PEAKS
+        assert len(huge["peaks"]) == MAX_WAVEFORM_PEAKS
+        assert len(mid["peaks"]) == 64
+        assert tiny["cache_key"] != huge["cache_key"]
+        assert tiny["cache_key"] != mid["cache_key"]
+        assert all(0.0 <= value <= 1.0 for value in huge["peaks"])
+        assert any(value > 0.0 for value in huge["peaks"])
     finally:
         folder_paths.set_temp_directory(original_temp)
 
