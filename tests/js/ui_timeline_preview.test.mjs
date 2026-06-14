@@ -43,6 +43,14 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('backgroundSize = "cover"'), false);
   assert.equal(rendererSource.includes(".htd-viewport { overflow: hidden;"), true);
   assert.equal(rendererSource.includes("viewport.scrollLeft"), false);
+  assert.equal(rendererSource.includes("iconButton(\"text\", \"Add Text Section\""), true);
+  assert.equal(rendererSource.includes("iconMenuControl"), true);
+  assert.equal(rendererSource.includes("aria-label"), true);
+  assert.equal(rendererSource.includes("htd-project-end"), true);
+  assert.equal(rendererSource.includes("TIMELINE_RIGHT_PADDING"), true);
+  assert.equal(rendererSource.includes('trackLabel("director", "Director")'), true);
+  assert.equal(rendererSource.includes('trackLabel("audio", "Audio")'), true);
+  assert.equal(rendererSource.includes("width: ${TIMELINE_RIGHT_PADDING}px"), true);
   assert.equal(rendererSource.includes("htd-section-preview"), true);
   assert.equal(rendererSource.includes("renderSectionPreview"), true);
   assert.equal(rendererSource.includes("object-fit: contain"), true);

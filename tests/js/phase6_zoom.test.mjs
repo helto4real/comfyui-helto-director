@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
-import { getTimelineWidth, secondsToPixels } from "../../web/timeline/geometry.js";
+import {
+  TIMELINE_RIGHT_PADDING,
+  getTimelineWidth,
+  secondsToPixels,
+} from "../../web/timeline/geometry.js";
 import { zoomToFit } from "../../web/timeline/operations.js";
 import { setNodeZoomWidgetValue } from "../../web/timeline/renderer.js";
 
@@ -23,6 +27,7 @@ function testZoomToFitResetsZoomAndScroll() {
   assert.equal(timeline.ui_state.zoom_level, 1);
   assert.equal(timeline.ui_state.scroll_x, 0);
   assert.equal(getTimelineWidth(timeline, 640), 640);
+  assert.equal(secondsToPixels(timeline.project.duration_seconds, timeline, 640), 640 - TIMELINE_RIGHT_PADDING);
 }
 
 function testManualZoomExpandsHorizontalTimelineScale() {
@@ -30,8 +35,8 @@ function testManualZoomExpandsHorizontalTimelineScale() {
   timeline.project.duration_seconds = 10;
   timeline.ui_state.zoom_level = 2;
 
-  assert.equal(getTimelineWidth(timeline, 500), 1000);
-  assert.equal(secondsToPixels(1, timeline, 500), 100);
+  assert.equal(getTimelineWidth(timeline, 500), 972);
+  assert.equal(secondsToPixels(1, timeline, 500), 94.4);
 }
 
 function testZoomWidgetSyncUpdatesVisibleWidget() {

@@ -25,6 +25,7 @@ import {
   DIRECTOR_TRACK_HEIGHT,
   HANDLE_WIDTH,
   RULER_HEIGHT,
+  TIMELINE_RIGHT_PADDING,
   TIMELINE_WIDTH,
   getTimelineViewportHeight,
   getTimelineWidth,
@@ -61,6 +62,7 @@ export class TimelineRenderer {
     this.container = container;
     this.drag = null;
     this.settingsOpen = false;
+    this.openMenu = null;
     this.viewportWidth = TIMELINE_WIDTH;
     this.container.className = "helto-timeline-director";
     installStyles(container.ownerDocument ?? globalThis.document);
@@ -84,34 +86,53 @@ export class TimelineRenderer {
   renderToolbar() {
     const toolbar = el("div", "htd-toolbar");
     toolbar.append(
-      button("T", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
-      button("I", "Add Image Section", () => this.openMediaPicker(ASSET_TYPE_IMAGE)),
-      button("V", "Add Video Section", () => this.openMediaPicker(ASSET_TYPE_VIDEO)),
-      button("A", "Add Audio Clip", () => this.openMediaPicker(ASSET_TYPE_AUDIO)),
-      selectControl("Timeline Display Mode", this.controller.timeline.ui_state.timeline_display_mode, TIMELINE_DISPLAY_MODES, (value) => {
+      iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
+      iconButton("image", "Add Image Section", () => this.openMediaPicker(ASSET_TYPE_IMAGE)),
+      iconButton("video", "Add Video Section", () => this.openMediaPicker(ASSET_TYPE_VIDEO)),
+      iconButton("audio", "Add Audio Clip", () => this.openMediaPicker(ASSET_TYPE_AUDIO)),
+      this.renderToolbarMenu("display", "Display Mode", "layers", this.controller.timeline.ui_state.timeline_display_mode, TIMELINE_DISPLAY_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.timeline_display_mode = value; }, "settings change");
       }),
-      selectControl("Section Edit Mode", this.controller.timeline.ui_state.section_edit_mode, SECTION_EDIT_MODES, (value) => {
+      this.renderToolbarMenu("edit", "Edit Mode", "trim", this.controller.timeline.ui_state.section_edit_mode, SECTION_EDIT_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.section_edit_mode = value; }, "settings change");
       }),
-      selectControl("Snap Mode", this.controller.timeline.ui_state.snap_mode, SNAP_MODES, (value) => {
+      this.renderToolbarMenu("snap", "Snap Mode", "magnet", this.controller.timeline.ui_state.snap_mode, SNAP_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.snap_mode = value; }, "settings change");
       }),
-      toggleButton("GP", "Use Global Prompt", this.controller.timeline.project.global_prompt.enabled, () => {
+      toggleIconButton("global", "Use Global Prompt", this.controller.timeline.project.global_prompt.enabled, () => {
         this.commitMutation((timeline) => {
           timeline.project.global_prompt.enabled = !timeline.project.global_prompt.enabled;
         }, "settings change");
       }),
-      button("S", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
-      button("D", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
-      button("X", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete")),
-      button("Fit", "Zoom to Fit", () => this.handleZoomToFit()),
-      button("Set", "Project Settings", () => {
+      iconButton("split", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
+      iconButton("duplicate", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
+      iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete")),
+      iconButton("fit", "Zoom to Fit", () => this.handleZoomToFit()),
+      iconButton("settings", "Project Settings", () => {
         this.settingsOpen = true;
         this.render();
       }),
     );
     return toolbar;
+  }
+
+  renderToolbarMenu(id, title, iconName, value, options, onChange) {
+    return iconMenuControl({
+      id,
+      title,
+      iconName,
+      value,
+      options,
+      open: this.openMenu === id,
+      onToggle: () => {
+        this.openMenu = this.openMenu === id ? null : id;
+        this.render();
+      },
+      onChange: (nextValue) => {
+        this.openMenu = null;
+        onChange(nextValue);
+      },
+    });
   }
 
   renderTimeline(timeline) {
@@ -136,6 +157,10 @@ export class TimelineRenderer {
       tick.textContent = `${second}s`;
       ruler.append(tick);
     }
+    const projectEnd = el("div", "htd-project-end");
+    projectEnd.style.left = `${secondsToPixels(duration, timeline, this.viewportWidth)}px`;
+    projectEnd.style.width = `${TIMELINE_RIGHT_PADDING}px`;
+    ruler.append(projectEnd);
     const playhead = el("div", "htd-playhead");
     playhead.style.left = `${secondsToPixels(timeline.ui_state.playhead_time ?? 0, timeline, this.viewportWidth)}px`;
     ruler.append(playhead);
@@ -150,7 +175,7 @@ export class TimelineRenderer {
   renderDirectorTrack(timeline) {
     const track = el("div", "htd-track htd-director-track");
     track.style.height = `${DIRECTOR_TRACK_HEIGHT}px`;
-    track.append(label("Director"));
+    track.append(trackLabel("director", "Director"));
 
     for (const gap of computeGaps(timeline)) {
       const item = el("div", "htd-gap");
@@ -208,7 +233,7 @@ export class TimelineRenderer {
       const maxLane = Math.max(0, ...trackData.clips.map((clip) => Number(clip.lane ?? 0)));
       const track = el("div", "htd-track htd-audio-track");
       track.style.height = `${(maxLane + 1) * AUDIO_LANE_HEIGHT}px`;
-      track.append(label("Audio"));
+      track.append(trackLabel("audio", "Audio"));
       for (const clip of trackData.clips) track.append(this.renderAudioClip(timeline, clip));
       wrapper.append(track);
     }
@@ -661,11 +686,53 @@ function effectivePromptLabel(timeline, section) {
   return globalPrompt.position === "Suffix" ? `${prompt}, ${globalText}` : `${globalText}, ${prompt}`;
 }
 
+function iconButton(iconName, title, onClick) {
+  const control = button("", title, onClick);
+  control.classList.add("htd-icon-button");
+  control.append(createIconElement(iconName));
+  return control;
+}
+
+function toggleIconButton(iconName, title, active, onClick) {
+  const control = iconButton(iconName, title, onClick);
+  control.classList.toggle("is-active", Boolean(active));
+  control.setAttribute("aria-pressed", active ? "true" : "false");
+  return control;
+}
+
+function iconMenuControl({ id, title, iconName, value, options, open, onToggle, onChange }) {
+  const wrapper = el("div", "htd-menu");
+  const menuButton = iconButton(iconName, `${title}: ${value}`, onToggle);
+  menuButton.classList.add("htd-menu-button");
+  menuButton.setAttribute("aria-haspopup", "menu");
+  menuButton.setAttribute("aria-expanded", open ? "true" : "false");
+  wrapper.append(menuButton);
+  if (open) {
+    const menu = el("div", "htd-menu-list");
+    menu.setAttribute("role", "menu");
+    menu.id = `htd-menu-${id}`;
+    for (const optionValue of options) {
+      const item = el("button", "htd-menu-item");
+      item.type = "button";
+      item.textContent = optionValue;
+      item.title = optionValue;
+      item.setAttribute("role", "menuitemradio");
+      item.setAttribute("aria-checked", optionValue === value ? "true" : "false");
+      item.classList.toggle("is-active", optionValue === value);
+      item.addEventListener("click", () => onChange(optionValue));
+      menu.append(item);
+    }
+    wrapper.append(menu);
+  }
+  return wrapper;
+}
+
 function button(text, title, onClick) {
   const control = el("button", "htd-button");
   control.type = "button";
   control.textContent = text;
   control.title = title;
+  control.setAttribute("aria-label", title);
   control.addEventListener("click", onClick);
   return control;
 }
@@ -691,6 +758,30 @@ function selectControl(title, value, options, onChange) {
   return select;
 }
 
+function createIconElement(name) {
+  const icon = el("span", "htd-icon");
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = ICONS[name] ?? ICONS.settings;
+  return icon;
+}
+
+const ICONS = {
+  text: `<svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v12M8 18h8"/></svg>`,
+  image: `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m7 16 4-4 3 3 2-2 3 3"/><circle cx="15.5" cy="9.5" r="1.5"/></svg>`,
+  video: `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="12" rx="2"/><path d="m16 10 4-2v8l-4-2z"/></svg>`,
+  audio: `<svg viewBox="0 0 24 24"><path d="M6 15V9M10 18V6M14 16V8M18 14v-4"/></svg>`,
+  layers: `<svg viewBox="0 0 24 24"><path d="m12 4 8 4-8 4-8-4z"/><path d="m4 12 8 4 8-4"/><path d="m4 16 8 4 8-4"/></svg>`,
+  trim: `<svg viewBox="0 0 24 24"><path d="M6 5v14M18 5v14M6 12h12"/><path d="m9 9-3 3 3 3M15 9l3 3-3 3"/></svg>`,
+  magnet: `<svg viewBox="0 0 24 24"><path d="M7 5v7a5 5 0 0 0 10 0V5"/><path d="M7 9h4M13 9h4"/></svg>`,
+  global: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/></svg>`,
+  split: `<svg viewBox="0 0 24 24"><path d="M12 4v16"/><path d="M5 7h4M5 17h4M15 7h4M15 17h4"/></svg>`,
+  duplicate: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
+  delete: `<svg viewBox="0 0 24 24"><path d="M6 7h12M10 7V5h4v2M9 10v7M15 10v7M8 7l1 12h6l1-12"/></svg>`,
+  fit: `<svg viewBox="0 0 24 24"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8 8h8v8H8z"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M4.8 7.5l2.6 1.5M16.6 15l2.6 1.5M19.2 7.5 16.6 9M7.4 15l-2.6 1.5"/></svg>`,
+  director: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
+};
+
 function settingRow(title) {
   const row = el("label", "htd-setting-row");
   const labelText = el("span", "htd-setting-label");
@@ -714,9 +805,11 @@ function setPath(root, path, value) {
   current[path.at(-1)] = value;
 }
 
-function label(text) {
+function trackLabel(iconName, title) {
   const item = el("div", "htd-track-label");
-  item.textContent = text;
+  item.title = title;
+  item.setAttribute("aria-label", title);
+  item.append(createIconElement(iconName));
   return item;
 }
 
@@ -733,17 +826,27 @@ function installStyles(documentRef) {
   style.textContent = `
     .helto-timeline-director { overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
     .htd-root { position: relative; height: 100%; display: flex; flex-direction: column; gap: 6px; }
-    .htd-toolbar { display: flex; gap: 4px; align-items: center; min-height: 28px; overflow-x: auto; overflow-y: hidden; }
+    .htd-toolbar { position: relative; z-index: 15; display: flex; gap: 4px; align-items: center; min-height: 28px; overflow: visible; }
     .htd-button { min-width: 28px; height: 24px; padding: 0 7px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; cursor: pointer; white-space: nowrap; }
+    .htd-icon-button { width: 28px; min-width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+    .htd-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
+    .htd-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
+    .htd-menu { position: relative; display: inline-flex; }
+    .htd-menu-button { width: 34px; min-width: 34px; }
+    .htd-menu-button::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; opacity: 0.78; }
+    .htd-menu-list { position: absolute; top: 28px; left: 0; z-index: 30; min-width: 132px; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 8px 20px rgba(0,0,0,0.42); }
+    .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
+    .htd-menu-item:hover, .htd-menu-item.is-active { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }
     .htd-viewport { overflow: hidden; box-sizing: border-box; border: 1px solid #3d4658; border-radius: 4px; background: #111722; }
     .htd-stage { position: relative; min-height: 100%; }
     .htd-ruler { position: relative; border-bottom: 1px solid #31394a; }
-    .htd-tick { position: absolute; top: 3px; height: 20px; border-left: 1px solid #394255; padding-left: 4px; color: #9ba8bd; }
-    .htd-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #e4c15c; pointer-events: none; }
+    .htd-tick { position: absolute; z-index: 2; top: 3px; height: 20px; border-left: 1px solid #394255; padding-left: 4px; color: #9ba8bd; }
+    .htd-project-end { position: absolute; z-index: 1; top: 0; bottom: 0; border-left: 1px solid rgba(226, 194, 92, 0.66); background: linear-gradient(90deg, rgba(226,194,92,0.12), rgba(226,194,92,0.03), rgba(17,23,34,0)); pointer-events: none; }
+    .htd-playhead { position: absolute; z-index: 3; top: 0; bottom: 0; width: 2px; background: #e4c15c; pointer-events: none; }
     .htd-track { position: relative; border-bottom: 1px solid #273043; }
-    .htd-track-label { position: sticky; left: 0; z-index: 5; width: 56px; height: 100%; display: flex; align-items: center; padding-left: 6px; background: rgba(17, 23, 34, 0.92); color: #9ba8bd; }
+    .htd-track-label { position: sticky; left: 0; z-index: 5; width: ${TIMELINE_RIGHT_PADDING}px; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(17, 23, 34, 0.92); color: #9ba8bd; }
     .htd-item, .htd-gap { position: absolute; top: 5px; height: calc(100% - 10px); border-radius: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; box-sizing: border-box; }
     .htd-gap { border: 1px dashed #3d4658; background: rgba(80, 88, 105, 0.16); }
     .htd-section { padding: 0; border: 1px solid rgba(255,255,255,0.28); cursor: grab; }
