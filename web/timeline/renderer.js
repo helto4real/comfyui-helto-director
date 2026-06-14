@@ -53,10 +53,11 @@ import {
 
 const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
+const PROMPT_INSPECTOR_HEIGHT = 96;
 const ROOT_GAP = 6;
 
 export function getTimelineWidgetHeight(timeline) {
-  return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + INSPECTOR_HEIGHT + ROOT_GAP * 3;
+  return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
 }
 
 export class TimelineRenderer {
@@ -316,6 +317,7 @@ export class TimelineRenderer {
     const inspector = el("div", "htd-inspector");
     const selected = timeline.director_track.sections.find((section) => section.item_id === timeline.ui_state.selected_item_id);
     const selectedAudio = findAudioClip(timeline, timeline.ui_state.selected_item_id);
+    inspector.classList.toggle("has-prompt", shouldRenderPromptInput(timeline, selected));
     if (!selected && !selectedAudio) return inspector;
 
     if (selected?.type === ASSET_TYPE_IMAGE) {
@@ -351,21 +353,28 @@ export class TimelineRenderer {
   }
 
   renderPromptInput(item) {
-    if (this.controller.timeline.project.privacy.mode || this.controller.timeline.project.privacy.hide_text_prompts) {
+    if (!shouldRenderPromptInput(this.controller.timeline, item)) {
       return this.container.ownerDocument.createDocumentFragment();
     }
-    return this.renderTextField(item, "prompt", "Prompt", { className: "htd-prompt", debounced: true });
+    return this.renderTextField(item, "prompt", "Prompt", {
+      className: "htd-prompt",
+      debounced: true,
+      multiline: true,
+      placeholder: "Write your prompt here...",
+      rows: 5,
+    });
   }
 
   renderTextField(item, field, title, options = {}) {
-    const input = el("input", options.className ?? "htd-field");
+    const input = options.multiline ? el("textarea", options.className ?? "htd-field") : el("input", options.className ?? "htd-field");
+    if (options.rows != null) input.rows = options.rows;
     input.value = item[field] ?? "";
-    input.placeholder = title;
+    input.placeholder = options.placeholder ?? title;
     input.title = title;
     input.addEventListener("input", () => {
       item[field] = input.value;
       if (options.debounced) {
-        this.controller.scheduleDebouncedCommit("prompt typing");
+        this.controller.scheduleDebouncedCommit("prompt typing", { rerender: false });
       } else {
         this.controller.scheduleDebouncedCommit("settings change", { delayMs: 150 });
       }
@@ -718,6 +727,20 @@ function findAudioClip(timeline, itemId) {
   return null;
 }
 
+function getInspectorHeight(timeline) {
+  const selected = timeline?.director_track?.sections?.find((section) => section.item_id === timeline?.ui_state?.selected_item_id);
+  return shouldRenderPromptInput(timeline, selected) ? PROMPT_INSPECTOR_HEIGHT : INSPECTOR_HEIGHT;
+}
+
+function shouldRenderPromptInput(timeline, item) {
+  return Boolean(
+    item &&
+    "prompt" in item &&
+    !timeline?.project?.privacy?.mode &&
+    !timeline?.project?.privacy?.hide_text_prompts,
+  );
+}
+
 function shouldShowWaveform(timeline) {
   return Boolean(
     timeline.project.display.show_audio_waveforms &&
@@ -992,8 +1015,9 @@ function installStyles(documentRef) {
     .htd-left { left: 0; }
     .htd-right { right: 0; }
     .is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }
-    .htd-inspector { min-height: 34px; display: flex; align-items: center; gap: 5px; overflow-x: auto; overflow-y: hidden; }
-    .htd-prompt { min-width: 100px; flex: 1 1 auto; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
+    .htd-inspector { min-height: ${INSPECTOR_HEIGHT}px; display: flex; align-items: center; gap: 5px; overflow-x: auto; overflow-y: hidden; }
+    .htd-inspector.has-prompt { min-height: ${PROMPT_INSPECTOR_HEIGHT}px; align-items: flex-start; }
+    .htd-prompt { min-width: 100px; flex: 1 1 auto; height: 86px; min-height: 86px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 6px 8px; line-height: 1.3; resize: none; }
     .htd-field { min-width: 70px; max-width: 140px; flex: 1 1 80px; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
     .htd-number { width: 64px; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 6px; }
     .htd-settings-overlay { position: absolute; inset: 0; z-index: 20; display: flex; align-items: stretch; justify-content: center; background: rgba(8, 11, 17, 0.82); padding: 10px; box-sizing: border-box; }

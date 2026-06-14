@@ -21,6 +21,20 @@ function testTimelineHeightIsTripled() {
   assert.equal(getTimelineWidgetHeight(timeline), 302);
 }
 
+function testSelectedPromptUsesFiveRowInspector() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.director_track.sections.push({
+    item_id: "section_001",
+    type: "Text",
+    start_time: 0,
+    end_time: 1,
+    prompt: "hello",
+  });
+  timeline.ui_state.selected_item_id = "section_001";
+
+  assert.equal(getTimelineWidgetHeight(timeline), 364);
+}
+
 function testAudioLanesExpandViewportToContent() {
   const timeline = createDefaultVideoTimeline();
   timeline.audio_tracks.push({
@@ -73,9 +87,18 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("object-fit: contain"), true);
   assert.equal(rendererSource.includes("touch-action: none"), true);
   assert.equal(rendererSource.includes("user-select: none"), true);
+  assert.equal(rendererSource.includes('el("textarea", options.className ?? "htd-field")'), true);
+  assert.equal(rendererSource.includes('placeholder: "Write your prompt here..."'), true);
+  assert.equal(rendererSource.includes("input.placeholder = options.placeholder ?? title"), true);
+  assert.equal(rendererSource.includes("rows: 5"), true);
+  assert.equal(rendererSource.includes('scheduleDebouncedCommit("prompt typing", { rerender: false })'), true);
+  assert.equal(rendererSource.includes("htd-inspector.has-prompt"), true);
+  assert.equal(rendererSource.includes("PROMPT_INSPECTOR_HEIGHT"), true);
+  assert.equal(rendererSource.includes("resize: none"), true);
 }
 
 testTimelineHeightIsTripled();
+testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
 testSectionPreviewUsesContainedRepeatedFrames();
 
