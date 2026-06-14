@@ -321,6 +321,7 @@ def _video_plan(
     duration=1.0,
     guidance_range=VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
     guidance_frame_count=17,
+    prompt="source video guidance",
 ):
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = duration
@@ -342,7 +343,7 @@ def _video_plan(
             "start_time": 0.0,
             "end_time": duration,
             "video": {"asset_id": "video_001"},
-            "prompt": "source video guidance",
+            "prompt": prompt,
             "guide_strength": 0.6,
             "source_in": source_in,
             "source_out": source_out,
@@ -598,6 +599,23 @@ def test_video_media_without_video_stream_fails_clearly(tmp_path):
 
     with pytest.raises(ValueError, match="no video stream"):
         build_ltx_runtime_outputs(**_runtime_args(plan))
+
+
+def test_video_section_does_not_require_prompt_for_guidance(tmp_path):
+    video_path = tmp_path / "promptless_source.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _video_plan(video_path, prompt="")
+
+    runtime_model, positive, negative, _video_latent, _audio_latent, _combined_audio, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    assert runtime_model.object_patches == {}
+    assert positive[0][1]["text"] == ""
+    assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert guide_data["reference_images"][0]["section_type"] == SECTION_TYPE_VIDEO
+    assert runtime_debug["prompt_relay"]["local_prompts"] == []
+    assert runtime_debug["summary"]["applied_guides"] == 1
 
 
 def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):

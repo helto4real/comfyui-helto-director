@@ -38,7 +38,7 @@ def build_ltx_runtime_outputs(
     latent = clone_latent(optional_latent) if optional_latent is not None else empty_ltx_video_latent(width, height, clean_latent_frames)
     prompt_inputs = _prompt_relay_inputs(plan)
     prompt_relay = plan.get("model_specific", {}).get("ltx", {}).get("prompt_relay", {})
-    if prompt_relay.get("enabled", True):
+    if prompt_relay.get("enabled", True) and prompt_inputs["local_prompts"]:
         runtime_model, positive, prompt_debug = encode_prompt_relay(
             model,
             clip,
@@ -49,7 +49,7 @@ def build_ltx_runtime_outputs(
             float(prompt_relay.get("epsilon", 0.15)),
         )
     else:
-        prompt = ", ".join(prompt_inputs["local_prompts"])
+        prompt = _plain_prompt(prompt_inputs)
         positive = clip.encode_from_tokens_scheduled(clip.tokenize(prompt))
         runtime_model = model
         prompt_debug = {"full_prompt": prompt, "local_prompts": prompt_inputs["local_prompts"], "latent_lengths": []}
@@ -167,7 +167,7 @@ def _prompt_relay_inputs(plan: dict[str, Any]) -> dict[str, Any]:
         effective_prompt = str(prompt.get("effective_prompt") or "").strip()
         local_prompt = raw_prompt or effective_prompt
         if not local_prompt:
-            raise ValueError(f"LTX runtime section {section.get('item_id')} is missing an effective prompt.")
+            continue
         local_prompts.append(local_prompt)
         pixel_lengths.append(int(section.get("frame_count") or 1))
     return {
@@ -175,6 +175,13 @@ def _prompt_relay_inputs(plan: dict[str, Any]) -> dict[str, Any]:
         "local_prompts": local_prompts,
         "pixel_lengths": pixel_lengths,
     }
+
+
+def _plain_prompt(prompt_inputs: dict[str, Any]) -> str:
+    local_prompts = [str(prompt).strip() for prompt in prompt_inputs.get("local_prompts", []) if str(prompt).strip()]
+    if local_prompts:
+        return ", ".join(local_prompts)
+    return str(prompt_inputs.get("global_prompt") or "").strip()
 
 
 def _resolve_negative_conditioning(negative, positive):
