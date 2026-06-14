@@ -47,6 +47,8 @@ def build_ltx_runtime_outputs(
             prompt_inputs["local_prompts"],
             prompt_inputs["pixel_lengths"],
             float(prompt_relay.get("epsilon", 0.15)),
+            frame_ranges=prompt_inputs["frame_ranges"],
+            prompt_sections=prompt_inputs["prompt_sections"],
         )
     else:
         prompt = _plain_prompt(prompt_inputs)
@@ -159,22 +161,59 @@ def _prompt_relay_inputs(plan: dict[str, Any]) -> dict[str, Any]:
     global_prompt = str(project_global.get("prompt") or "") if project_global.get("enabled") else ""
     local_prompts: list[str] = []
     pixel_lengths: list[int] = []
-    for section in plan.get("section_plan", []):
+    frame_ranges: list[dict[str, int]] = []
+    prompt_sections: list[dict[str, Any]] = []
+    sections = plan.get("section_plan", [])
+    for index, section in enumerate(sections):
         if section.get("type") == "Gap" or section.get("role") == "No Guidance":
             continue
         prompt = prompts_by_id.get(section.get("item_id"), {})
         raw_prompt = str(prompt.get("raw_prompt") or "").strip()
         effective_prompt = str(prompt.get("effective_prompt") or "").strip()
         local_prompt = raw_prompt or effective_prompt
+        if not raw_prompt and section.get("type") in {"Image", "Video"}:
+            local_prompt = _next_prompt_after_section(sections, prompts_by_id, index) or effective_prompt
         if not local_prompt:
             continue
+        frame_count = int(section.get("frame_count") or 0)
+        if frame_count <= 0:
+            continue
         local_prompts.append(local_prompt)
-        pixel_lengths.append(int(section.get("frame_count") or 1))
+        pixel_lengths.append(frame_count)
+        frame_ranges.append({
+            "start_frame": int(section.get("start_frame") or 0),
+            "end_frame_exclusive": int(section.get("end_frame_exclusive") or 0),
+        })
+        prompt_sections.append({
+            "item_id": section.get("item_id"),
+            "type": section.get("type"),
+            "start_frame": int(section.get("start_frame") or 0),
+            "end_frame_exclusive": int(section.get("end_frame_exclusive") or 0),
+            "frame_count": frame_count,
+        })
     return {
         "global_prompt": global_prompt,
         "local_prompts": local_prompts,
         "pixel_lengths": pixel_lengths,
+        "frame_ranges": frame_ranges,
+        "prompt_sections": prompt_sections,
     }
+
+
+def _next_prompt_after_section(sections: list[dict[str, Any]], prompts_by_id: dict[Any, dict[str, Any]], index: int) -> str:
+    section = sections[index]
+    section_end = int(section.get("end_frame_exclusive") or section.get("start_frame") or 0)
+    for candidate in sections[index + 1:]:
+        if int(candidate.get("start_frame") or 0) < section_end:
+            continue
+        prompt = prompts_by_id.get(candidate.get("item_id"), {})
+        raw_prompt = str(prompt.get("raw_prompt") or "").strip()
+        effective_prompt = str(prompt.get("effective_prompt") or "").strip()
+        if raw_prompt:
+            return raw_prompt
+        if effective_prompt and candidate.get("type") != "Gap" and candidate.get("role") != "No Guidance":
+            return effective_prompt
+    return ""
 
 
 def _plain_prompt(prompt_inputs: dict[str, Any]) -> str:

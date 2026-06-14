@@ -53,6 +53,7 @@ function testNewVideoSectionUsesTailGuidanceDefaults() {
   const timeline = createDefaultVideoTimeline();
   const section = addSection(timeline, "Video", 0);
 
+  assert.equal(section.prompt, "");
   assert.equal(section.video_guidance_range, "Last Frames");
   assert.equal(section.video_guidance_frame_count, 17);
 }

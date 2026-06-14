@@ -77,7 +77,7 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
     return mask_fn
 
 
-def build_segments(token_ranges, segment_lengths, epsilon=1e-3, relay_options=None):
+def build_segments(token_ranges, segment_lengths=None, epsilon=1e-3, relay_options=None, segment_ranges=None):
     sigma = 1.0 / math.log(1.0 / epsilon) if 0 < epsilon < 1 else 0.1448
     options = relay_options or {}
     video_strength = options.get("video_strength", 1.0)
@@ -89,11 +89,17 @@ def build_segments(token_ranges, segment_lengths, epsilon=1e-3, relay_options=No
 
     segments = []
     frame_cursor = 0
-    for (token_start, token_end), length in zip(token_ranges, segment_lengths):
-        if length <= 0:
+    if segment_ranges is None:
+        segment_ranges = []
+        for length in segment_lengths or []:
+            segment_ranges.append((frame_cursor, frame_cursor + length))
             frame_cursor += length
+
+    for (token_start, token_end), (start, end) in zip(token_ranges, segment_ranges):
+        length = end - start
+        if length <= 0:
             continue
-        midpoint = (2 * frame_cursor + length) // 2
+        midpoint = (start + end) // 2
         base_window = max(length // 2 - 2, 0)
         segments.append({
             "local_token_idx": torch.arange(token_start, token_end),
@@ -105,7 +111,6 @@ def build_segments(token_ranges, segment_lengths, epsilon=1e-3, relay_options=No
             "sigma_audio": sigma_audio,
             "strength_audio": audio_strength,
         })
-        frame_cursor += length
     return segments
 
 
@@ -191,7 +196,35 @@ def convert_pixel_lengths_to_latent_lengths(pixel_lengths: list[int], temporal_s
     return result
 
 
-def encode_prompt_relay(model: Any, clip: Any, latent: dict[str, Any], global_prompt: str, local_prompts: list[str], pixel_lengths: list[int], epsilon: float):
+def convert_frame_ranges_to_latent_ranges(frame_ranges: list[dict[str, int]], temporal_stride: int, latent_frames: int) -> list[tuple[int, int]]:
+    if not frame_ranges:
+        return []
+    stride = max(1, int(temporal_stride))
+    max_latents = max(1, int(latent_frames))
+    latent_ranges = []
+    for frame_range in frame_ranges:
+        start_frame = max(0, int(frame_range.get("start_frame") or 0))
+        end_frame = max(start_frame, int(frame_range.get("end_frame_exclusive") or start_frame))
+        if end_frame <= start_frame:
+            latent_ranges.append((0, 0))
+            continue
+        start = min(max_latents - 1, start_frame // stride)
+        end = min(max_latents, ((end_frame - 1) // stride) + 1)
+        latent_ranges.append((start, max(start + 1, end)))
+    return latent_ranges
+
+
+def encode_prompt_relay(
+    model: Any,
+    clip: Any,
+    latent: dict[str, Any],
+    global_prompt: str,
+    local_prompts: list[str],
+    pixel_lengths: list[int],
+    epsilon: float,
+    frame_ranges: list[dict[str, int]] | None = None,
+    prompt_sections: list[dict[str, Any]] | None = None,
+):
     if not local_prompts:
         raise ValueError("LTX runtime requires at least one non-gap section prompt.")
     if any(not str(prompt or "").strip() for prompt in local_prompts):
@@ -203,19 +236,33 @@ def encode_prompt_relay(model: Any, clip: Any, latent: dict[str, Any], global_pr
     samples = latent["samples"]
     latent_frames = samples.shape[2]
     tokens_per_frame = max(1, (samples.shape[3] // patch_size[1]) * (samples.shape[4] // patch_size[2]))
-    latent_lengths = convert_pixel_lengths_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames) if pixel_lengths else None
+    if frame_ranges:
+        latent_ranges = convert_frame_ranges_to_latent_ranges(frame_ranges, temporal_stride, latent_frames)
+        latent_lengths = [end - start for start, end in latent_ranges]
+    else:
+        latent_lengths = convert_pixel_lengths_to_latent_lengths(pixel_lengths, temporal_stride, latent_frames) if pixel_lengths else None
+        effective_lengths = distribute_segment_lengths(len(local_prompts), latent_frames, latent_lengths)
+        cursor = 0
+        latent_ranges = []
+        for length in effective_lengths:
+            latent_ranges.append((cursor, cursor + length))
+            cursor += length
 
     raw_tokenizer = get_raw_tokenizer(clip)
     full_prompt, token_ranges = map_token_indices(raw_tokenizer, global_prompt, local_prompts)
     conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(full_prompt))
-    effective_lengths = distribute_segment_lengths(len(local_prompts), latent_frames, latent_lengths)
-    relay_segments = build_segments(token_ranges, effective_lengths, epsilon)
+    relay_segments = build_segments(token_ranges, epsilon=epsilon, segment_ranges=latent_ranges)
     mask_fn = create_mask_fn(relay_segments, tokens_per_frame, latent_frames)
     patched = apply_ltx_patches(model, mask_fn)
     return patched, conditioning, {
         "full_prompt": full_prompt,
         "local_prompts": local_prompts,
         "pixel_lengths": pixel_lengths,
-        "latent_lengths": effective_lengths,
+        "latent_lengths": latent_lengths,
+        "latent_ranges": [
+            {"start": int(start), "end": int(end), "length": int(end - start)}
+            for start, end in latent_ranges
+        ],
+        "prompt_sections": prompt_sections or [],
         "token_ranges": token_ranges,
     }

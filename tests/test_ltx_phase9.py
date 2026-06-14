@@ -357,6 +357,81 @@ def _video_plan(
     return plan
 
 
+def _prompt_timing_plan_with_media_gap(media_path: Path, media_type: str):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 3.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["assets"].append(
+        {
+            "asset_id": "media_001",
+            "type": media_type,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": str(media_path),
+            "name": media_path.name,
+        }
+    )
+    media_field = "image" if media_type == ASSET_TYPE_IMAGE else "video"
+    middle_section = {
+        "item_id": "section_002",
+        "type": SECTION_TYPE_IMAGE if media_type == ASSET_TYPE_IMAGE else SECTION_TYPE_VIDEO,
+        "start_time": 1.0,
+        "end_time": 2.0,
+        media_field: {"asset_id": "media_001"},
+        "prompt": "",
+        "guide_strength": 0.5,
+    }
+    if media_type == ASSET_TYPE_VIDEO:
+        middle_section.update({
+            "source_in": 0.0,
+            "source_out": None,
+            "timing_mode": VIDEO_TIMING_FIT_TO_SECTION,
+            "video_guidance_range": VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+            "video_guidance_frame_count": 17,
+        })
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "opening prompt",
+            },
+            middle_section,
+            {
+                "item_id": "section_003",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 2.0,
+                "end_time": 3.0,
+                "prompt": "ending prompt",
+            },
+        ]
+    )
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+    return plan
+
+
+def _gap_then_text_plan():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "prompt": "late prompt",
+        }
+    )
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+    return plan
+
+
 def _image_audio_timeline(image_path: Path, audio_path: Path):
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 1.0
@@ -616,6 +691,130 @@ def test_video_section_does_not_require_prompt_for_guidance(tmp_path):
     assert guide_data["reference_images"][0]["section_type"] == SECTION_TYPE_VIDEO
     assert runtime_debug["prompt_relay"]["local_prompts"] == []
     assert runtime_debug["summary"]["applied_guides"] == 1
+
+
+def test_promptless_video_before_text_preserves_late_prompt_timing(tmp_path):
+    video_path = tmp_path / "source_then_text.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["assets"].append(
+        {
+            "asset_id": "video_001",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": str(video_path),
+            "name": video_path.name,
+        }
+    )
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_001",
+                "type": SECTION_TYPE_VIDEO,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "video": {"asset_id": "video_001"},
+                "prompt": "",
+                "guide_strength": 0.6,
+                "source_in": 0.0,
+                "source_out": None,
+                "timing_mode": VIDEO_TIMING_USE_SOURCE_TIMING,
+                "video_guidance_range": VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+                "video_guidance_frame_count": 17,
+            },
+            {
+                "item_id": "section_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "future city continuation",
+            },
+        ]
+    )
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+
+    runtime_model, positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert len(runtime_model.object_patches) == 4
+    assert positive[0][1]["text"] == " future city continuation future city continuation"
+    assert runtime_debug["prompt_relay"]["local_prompts"] == ["future city continuation", "future city continuation"]
+    assert [entry["item_id"] for entry in runtime_debug["prompt_relay"]["prompt_sections"]] == ["section_001", "section_002"]
+    assert runtime_debug["prompt_relay"]["latent_ranges"][0]["start"] == 0
+    assert runtime_debug["prompt_relay"]["latent_ranges"][1]["start"] >= 3
+
+
+def test_promptless_image_between_text_sections_borrows_next_prompt_and_preserves_timing(tmp_path):
+    image_path = tmp_path / "middle.png"
+    Image.new("RGB", (64, 64), (20, 80, 180)).save(image_path)
+    plan = _prompt_timing_plan_with_media_gap(image_path, ASSET_TYPE_IMAGE)
+
+    runtime_model, _positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert len(runtime_model.object_patches) == 4
+    assert runtime_debug["prompt_relay"]["local_prompts"] == ["opening prompt", "ending prompt", "ending prompt"]
+    assert [entry["item_id"] for entry in runtime_debug["prompt_relay"]["prompt_sections"]] == [
+        "section_001",
+        "section_002",
+        "section_003",
+    ]
+    first_range, image_range, ending_range = runtime_debug["prompt_relay"]["latent_ranges"]
+    assert image_range["start"] >= first_range["end"]
+    assert ending_range["start"] >= image_range["end"]
+
+
+def test_promptless_image_with_global_prompt_stays_in_prompt_relay(tmp_path):
+    image_path = tmp_path / "global_image.png"
+    Image.new("RGB", (64, 64), (20, 80, 180)).save(image_path)
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["project"]["global_prompt"]["enabled"] = True
+    timeline["project"]["global_prompt"]["prompt"] = "cinematic lighting"
+    timeline["assets"].append(
+        {
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": str(image_path),
+            "name": image_path.name,
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_IMAGE,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "image": {"asset_id": "image_001"},
+            "prompt": "",
+            "guide_strength": 0.5,
+        }
+    )
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+
+    runtime_model, positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert len(runtime_model.object_patches) == 4
+    assert positive[0][1]["text"] == "cinematic lighting cinematic lighting"
+    assert runtime_debug["prompt_relay"]["local_prompts"] == ["cinematic lighting"]
+    assert runtime_debug["prompt_relay"]["prompt_sections"][0]["item_id"] == "section_001"
+
+
+def test_timeline_gap_before_text_preserves_late_prompt_timing():
+    plan = _gap_then_text_plan()
+
+    runtime_model, _positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert len(runtime_model.object_patches) == 4
+    assert runtime_debug["prompt_relay"]["local_prompts"] == ["late prompt"]
+    assert runtime_debug["prompt_relay"]["prompt_sections"][0]["item_id"] == "section_001"
+    assert runtime_debug["prompt_relay"]["latent_ranges"][0]["start"] >= 3
 
 
 def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
