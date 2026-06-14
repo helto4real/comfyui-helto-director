@@ -26,6 +26,7 @@ import {
   HANDLE_WIDTH,
   RULER_HEIGHT,
   TIMELINE_WIDTH,
+  getTimelineViewportHeight,
   getTimelineWidth,
   secondsToPixels,
   timeFromClientX,
@@ -44,7 +45,13 @@ import {
 } from "./operations.js";
 import { findWidget } from "./state.js";
 
-export const TIMELINE_WIDGET_HEIGHT = 360;
+const TOOLBAR_HEIGHT = 28;
+const INSPECTOR_HEIGHT = 34;
+const ROOT_GAP = 6;
+
+export function getTimelineWidgetHeight(timeline) {
+  return TOOLBAR_HEIGHT + getTimelineViewportHeight(timeline) + INSPECTOR_HEIGHT + ROOT_GAP * 2;
+}
 
 export class TimelineRenderer {
   constructor(node, app, controller, container) {
@@ -66,6 +73,7 @@ export class TimelineRenderer {
 
   render(timeline = this.controller.timeline) {
     this.viewportWidth = this.measureViewportWidth();
+    this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
     this.container.replaceChildren();
     const root = el("div", "htd-root");
     root.append(this.renderToolbar(), this.renderTimeline(timeline), this.renderInspector(timeline));
@@ -108,10 +116,7 @@ export class TimelineRenderer {
 
   renderTimeline(timeline) {
     const viewport = el("div", "htd-viewport");
-    viewport.scrollLeft = timeline.ui_state.scroll_x ?? 0;
-    viewport.addEventListener("scroll", () => {
-      this.controller.timeline.ui_state.scroll_x = viewport.scrollLeft;
-    });
+    viewport.style.height = `${getTimelineViewportHeight(timeline)}px`;
 
     const width = getTimelineWidth(timeline, this.viewportWidth);
     const stage = el("div", "htd-stage");
@@ -165,15 +170,18 @@ export class TimelineRenderer {
     const item = el("div", `htd-item htd-section htd-${section.type.toLowerCase()}`);
     if (timeline.ui_state.selected_item_id === section.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
-    item.style.width = `${Math.max(12, secondsToPixels(section.end_time - section.start_time, timeline, this.viewportWidth))}px`;
+    const itemWidth = Math.max(12, secondsToPixels(section.end_time - section.start_time, timeline, this.viewportWidth));
+    item.style.width = `${itemWidth}px`;
     const thumbnail = sectionThumbnailUrl(this.node, timeline, section);
     if (thumbnail) {
-      item.style.backgroundImage = `linear-gradient(rgba(17,23,34,0.32), rgba(17,23,34,0.32)), url("${thumbnail}")`;
-      item.style.backgroundSize = "cover";
-      item.style.backgroundPosition = "center";
+      item.classList.add("has-preview");
+      item.append(renderSectionPreview(timeline, thumbnail, itemWidth));
     }
-    item.textContent = sectionLabel(timeline, section);
-    item.title = sectionLabel(timeline, section);
+    const labelText = sectionLabel(timeline, section);
+    const labelElement = el("span", "htd-section-label");
+    labelElement.textContent = labelText;
+    item.append(labelElement);
+    item.title = labelText;
     item.addEventListener("pointerdown", (event) => this.startSectionDrag(event, section, "move"));
     if (section.type === ASSET_TYPE_IMAGE || section.type === ASSET_TYPE_VIDEO) {
       item.addEventListener("dblclick", (event) => {
@@ -517,12 +525,13 @@ export class TimelineRenderer {
 export function mountTimelineRenderer(node, app, controller) {
   if (node._timelineRenderer) return node._timelineRenderer;
   const container = document.createElement("div");
+  const widgetHeight = () => getTimelineWidgetHeight(controller.timeline);
   const widget = node.addDOMWidget?.("video_timeline_director", "VideoTimelineDirector", container, {
     serialize: false,
     hideOnZoom: false,
-    getMinHeight: () => TIMELINE_WIDGET_HEIGHT,
-    getMaxHeight: () => TIMELINE_WIDGET_HEIGHT,
-    getHeight: () => TIMELINE_WIDGET_HEIGHT,
+    getMinHeight: widgetHeight,
+    getMaxHeight: widgetHeight,
+    getHeight: widgetHeight,
   });
   const renderer = new TimelineRenderer(node, app, controller, container);
   node._timelineRenderer = renderer;
@@ -587,11 +596,46 @@ function renderWaveform(node, timeline, clip) {
 }
 
 function sectionThumbnailUrl(node, timeline, section) {
-  if (timeline.project.privacy.mode || timeline.project.privacy.hide_media_previews) return null;
+  if (
+    timeline.project.privacy.mode ||
+    timeline.project.privacy.hide_media_previews ||
+    timeline.project.display.show_thumbnails === false
+  ) {
+    return null;
+  }
   const reference = section.type === "Image" ? section.image : section.type === "Video" ? section.video : null;
   const asset = resolveMediaReference(timeline, reference);
   if (!asset?.asset_id) return null;
   return node?._timelineMediaCache?.getThumbnailUrl(asset.asset_id) ?? null;
+}
+
+function renderSectionPreview(timeline, thumbnail, itemWidth) {
+  const preview = el("div", "htd-section-preview");
+  preview.setAttribute("aria-hidden", "true");
+  const previewHeight = Math.max(1, DIRECTOR_TRACK_HEIGHT - 10);
+  const baseTileWidth = Math.max(36, Math.round(previewHeight * projectPreviewAspect(timeline)));
+  const tileWidth = Math.max(12, Math.min(baseTileWidth, itemWidth));
+  const repeatCount = Math.min(96, Math.max(1, Math.ceil(itemWidth / tileWidth)));
+  for (let index = 0; index < repeatCount; index += 1) {
+    const frame = el("div", "htd-section-preview-frame");
+    frame.style.width = `${tileWidth}px`;
+    const image = preview.ownerDocument.createElement("img");
+    image.src = thumbnail;
+    image.alt = "";
+    image.draggable = false;
+    frame.append(image);
+    preview.append(frame);
+  }
+  return preview;
+}
+
+function projectPreviewAspect(timeline) {
+  const aspectText = String(timeline?.project?.aspect_ratio ?? "16:9");
+  const match = aspectText.match(/^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$/);
+  const width = Math.max(0.01, Number(match?.[1] ?? 16));
+  const height = Math.max(0.01, Number(match?.[2] ?? 9));
+  const landscapeAspect = width / height;
+  return timeline?.project?.orientation === "Portrait" ? 1 / landscapeAspect : landscapeAspect;
 }
 
 function sectionLabel(timeline, section) {
@@ -687,13 +731,13 @@ function installStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-timeline-director-style";
   style.textContent = `
-    .helto-timeline-director { height: ${TIMELINE_WIDGET_HEIGHT}px; overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
+    .helto-timeline-director { overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
     .htd-root { position: relative; height: 100%; display: flex; flex-direction: column; gap: 6px; }
     .htd-toolbar { display: flex; gap: 4px; align-items: center; min-height: 28px; overflow-x: auto; overflow-y: hidden; }
     .htd-button { min-width: 28px; height: 24px; padding: 0 7px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; cursor: pointer; white-space: nowrap; }
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }
-    .htd-viewport { overflow-x: auto; overflow-y: hidden; border: 1px solid #3d4658; border-radius: 4px; background: #111722; height: 245px; }
+    .htd-viewport { overflow: hidden; box-sizing: border-box; border: 1px solid #3d4658; border-radius: 4px; background: #111722; }
     .htd-stage { position: relative; min-height: 100%; }
     .htd-ruler { position: relative; border-bottom: 1px solid #31394a; }
     .htd-tick { position: absolute; top: 3px; height: 20px; border-left: 1px solid #394255; padding-left: 4px; color: #9ba8bd; }
@@ -702,7 +746,11 @@ function installStyles(documentRef) {
     .htd-track-label { position: sticky; left: 0; z-index: 5; width: 56px; height: 100%; display: flex; align-items: center; padding-left: 6px; background: rgba(17, 23, 34, 0.92); color: #9ba8bd; }
     .htd-item, .htd-gap { position: absolute; top: 5px; height: calc(100% - 10px); border-radius: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; box-sizing: border-box; }
     .htd-gap { border: 1px dashed #3d4658; background: rgba(80, 88, 105, 0.16); }
-    .htd-section { padding: 8px 10px; border: 1px solid rgba(255,255,255,0.28); cursor: grab; }
+    .htd-section { padding: 0; border: 1px solid rgba(255,255,255,0.28); cursor: grab; }
+    .htd-section-label { position: absolute; z-index: 3; top: 8px; left: 10px; right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,0.82); pointer-events: none; }
+    .htd-section-preview { position: absolute; inset: 0; z-index: 1; display: flex; align-items: stretch; gap: 2px; overflow: hidden; background: rgba(6,10,16,0.34); pointer-events: none; }
+    .htd-section-preview-frame { flex: 0 0 auto; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(4,7,11,0.28); }
+    .htd-section-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .htd-text { background: #365d8f; }
     .htd-image { background: #4f7b52; }
     .htd-video { background: #7a5b35; }
@@ -711,7 +759,7 @@ function installStyles(documentRef) {
     .htd-audio-label { overflow: hidden; text-overflow: ellipsis; }
     .htd-waveform { height: 12px; display: flex; align-items: center; gap: 1px; opacity: 0.88; }
     .htd-waveform-bar { flex: 1 1 1px; min-width: 1px; background: rgba(255,255,255,0.72); border-radius: 1px; }
-    .htd-handle { position: absolute; top: 0; bottom: 0; cursor: ew-resize; background: rgba(255,255,255,0.16); }
+    .htd-handle { position: absolute; z-index: 4; top: 0; bottom: 0; cursor: ew-resize; background: rgba(255,255,255,0.16); }
     .htd-left { left: 0; }
     .htd-right { right: 0; }
     .is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }

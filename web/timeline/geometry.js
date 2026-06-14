@@ -1,13 +1,27 @@
 export const DEFAULT_PIXELS_PER_SECOND = 96;
 export const MIN_PIXELS_PER_SECOND = 1;
 export const TIMELINE_WIDTH = 960;
-export const DIRECTOR_TRACK_HEIGHT = 44;
+export const DIRECTOR_TRACK_HEIGHT = 132;
 export const AUDIO_LANE_HEIGHT = 34;
 export const RULER_HEIGHT = 28;
 export const HANDLE_WIDTH = 8;
+export const TIMELINE_VIEWPORT_BORDER_HEIGHT = 2;
 
 export function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+export function getAudioTracksHeight(timeline) {
+  const tracks = timeline?.audio_tracks?.length ? timeline.audio_tracks : [{ clips: [] }];
+  return tracks.reduce((total, track) => {
+    const clips = Array.isArray(track?.clips) ? track.clips : [];
+    const maxLane = Math.max(0, ...clips.map((clip) => Number(clip?.lane ?? 0)));
+    return total + (maxLane + 1) * AUDIO_LANE_HEIGHT;
+  }, 0);
+}
+
+export function getTimelineViewportHeight(timeline) {
+  return RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + getAudioTracksHeight(timeline) + TIMELINE_VIEWPORT_BORDER_HEIGHT;
 }
 
 export function getPixelsPerSecond(timeline, viewportWidth = TIMELINE_WIDTH) {

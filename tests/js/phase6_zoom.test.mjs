@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
-import { getTimelineWidth } from "../../web/timeline/geometry.js";
+import { getTimelineWidth, secondsToPixels } from "../../web/timeline/geometry.js";
 import { zoomToFit } from "../../web/timeline/operations.js";
 import { setNodeZoomWidgetValue } from "../../web/timeline/renderer.js";
 
@@ -25,6 +25,15 @@ function testZoomToFitResetsZoomAndScroll() {
   assert.equal(getTimelineWidth(timeline, 640), 640);
 }
 
+function testManualZoomExpandsHorizontalTimelineScale() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 10;
+  timeline.ui_state.zoom_level = 2;
+
+  assert.equal(getTimelineWidth(timeline, 500), 1000);
+  assert.equal(secondsToPixels(1, timeline, 500), 100);
+}
+
 function testZoomWidgetSyncUpdatesVisibleWidget() {
   let callbackValue = null;
   const node = {
@@ -46,6 +55,7 @@ function testZoomWidgetSyncUpdatesVisibleWidget() {
 
 testLongTimelineCanFitViewport();
 testZoomToFitResetsZoomAndScroll();
+testManualZoomExpandsHorizontalTimelineScale();
 testZoomWidgetSyncUpdatesVisibleWidget();
 
 console.log("phase6 zoom tests passed");
