@@ -56,6 +56,12 @@ const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
 const INSPECTOR_EDITOR_HEIGHT = 188;
 const ROOT_GAP = 6;
+const DELETE_MENU_LABELS = {
+  Image: "Delete Image",
+  Video: "Delete Video",
+  Text: "Delete Text",
+  "Audio Clip": "Delete Audio Clip",
+};
 
 export function getTimelineWidgetHeight(timeline) {
   return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
@@ -76,10 +82,14 @@ export class TimelineRenderer {
     this.drag = null;
     this.settingsOpen = false;
     this.openMenu = null;
+    this.contextMenuElement = null;
+    this.contextMenuDocument = null;
     this.remeasureHandle = null;
     this.resizeObserver = null;
     this.observedWidth = null;
     this.viewportWidth = TIMELINE_WIDTH;
+    this.onContextMenuPointerDown = (event) => this.handleContextMenuPointerDown(event);
+    this.onContextMenuKeyDown = (event) => this.handleContextMenuKeyDown(event);
     this.container.className = "helto-timeline-director";
     installStyles(container.ownerDocument ?? globalThis.document);
     this.render(controller.timeline);
@@ -87,12 +97,14 @@ export class TimelineRenderer {
   }
 
   destroy() {
+    this.closeContextMenu({ rerender: false });
     this.cancelViewportRemeasure();
     this.stopResizeObserver();
     this.container.replaceChildren();
   }
 
   render(timeline = this.controller.timeline) {
+    this.closeContextMenu({ rerender: false });
     this.viewportWidth = this.measureViewportWidth();
     this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
     this.container.replaceChildren();
@@ -265,6 +277,7 @@ export class TimelineRenderer {
     item.append(labelElement);
     item.title = labelText;
     item.addEventListener("pointerdown", (event) => this.startSectionDrag(event, section, "move"));
+    item.addEventListener("contextmenu", (event) => this.showItemContextMenu(event, section.item_id, section.type));
     if (section.type === ASSET_TYPE_IMAGE || section.type === ASSET_TYPE_VIDEO) {
       item.addEventListener("dblclick", (event) => {
         event.preventDefault();
@@ -309,6 +322,7 @@ export class TimelineRenderer {
     if (shouldShowWaveform(timeline)) item.append(renderWaveform(this.node, timeline, clip));
     item.title = "Audio";
     item.addEventListener("pointerdown", (event) => this.startAudioDrag(event, clip, "audio-move"));
+    item.addEventListener("contextmenu", (event) => this.showItemContextMenu(event, clip.item_id, "Audio Clip"));
 
     const leftHandle = el("div", "htd-handle htd-left");
     leftHandle.style.width = `${HANDLE_WIDTH}px`;
@@ -657,6 +671,10 @@ export class TimelineRenderer {
   }
 
   startItemDrag(event, dragState) {
+    if (event.button != null && event.button !== 0) {
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const target = event.currentTarget.closest(".htd-item");
@@ -727,6 +745,68 @@ export class TimelineRenderer {
 
   commitMutation(mutator, reason, options = {}) {
     this.controller.updateTimeline(mutator, reason, options);
+  }
+
+  showItemContextMenu(event, itemId, itemType) {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closeContextMenu({ rerender: false });
+    this.openMenu = null;
+    this.commitMutation((timeline) => selectItem(timeline, itemId), "select", { pushUndo: false });
+
+    const root = this.container.querySelector(".htd-root") ?? this.container;
+    const menu = this.renderItemContextMenu(itemId, deleteLabelForItemType(itemType), event.clientX, event.clientY, root);
+    root.append(menu);
+    this.contextMenuElement = menu;
+    this.contextMenuDocument = this.container.ownerDocument ?? globalThis.document;
+    this.contextMenuDocument?.addEventListener?.("pointerdown", this.onContextMenuPointerDown, true);
+    this.contextMenuDocument?.addEventListener?.("keydown", this.onContextMenuKeyDown, true);
+  }
+
+  renderItemContextMenu(itemId, label, clientX, clientY, root) {
+    const menu = el("div", "htd-context-menu");
+    const rect = root.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 0, height: 0 };
+    const left = clampNumber(Number(clientX) - Number(rect.left), 4, Math.max(4, Number(rect.width) - 150), 4);
+    const top = clampNumber(Number(clientY) - Number(rect.top), 4, Math.max(4, Number(rect.height) - 32), 4);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.setAttribute("role", "menu");
+    menu.dataset.itemId = itemId;
+
+    const item = el("button", "htd-context-menu-item");
+    item.type = "button";
+    item.textContent = label;
+    item.title = label;
+    item.setAttribute("role", "menuitem");
+    item.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeContextMenu({ rerender: false });
+      this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete");
+    });
+    menu.append(item);
+    return menu;
+  }
+
+  closeContextMenu(options = {}) {
+    this.contextMenuDocument?.removeEventListener?.("pointerdown", this.onContextMenuPointerDown, true);
+    this.contextMenuDocument?.removeEventListener?.("keydown", this.onContextMenuKeyDown, true);
+    this.contextMenuDocument = null;
+    this.contextMenuElement?.remove?.();
+    this.contextMenuElement = null;
+    if (options.rerender) this.render();
+  }
+
+  handleContextMenuPointerDown(event) {
+    if (this.contextMenuElement?.contains?.(event.target)) return;
+    this.closeContextMenu({ rerender: false });
+  }
+
+  handleContextMenuKeyDown(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    this.closeContextMenu({ rerender: false });
   }
 
   async openMediaPicker(assetType, options = {}) {
@@ -989,6 +1069,10 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, numeric));
 }
 
+function deleteLabelForItemType(itemType) {
+  return DELETE_MENU_LABELS[itemType] ?? "Delete Item";
+}
+
 function iconButton(iconName, title, onClick) {
   const control = button("", title, onClick);
   control.classList.add("htd-icon-button");
@@ -1154,6 +1238,9 @@ function installStyles(documentRef) {
     .htd-menu.align-end .htd-menu-list { right: 0; left: auto; }
     .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-menu-item:hover, .htd-menu-item.is-active { background: #293244; color: #f7f9fc; }
+    .htd-context-menu { position: absolute; z-index: 35; min-width: 132px; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 8px 20px rgba(0,0,0,0.42); }
+    .htd-context-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
+    .htd-context-menu-item:hover { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }
     .htd-range-control { height: ${RANGE_CONTROL_HEIGHT}px; display: flex; align-items: center; gap: 0; box-sizing: border-box; }
     .htd-range-gutter { width: ${TIMELINE_RIGHT_PADDING}px; flex: 0 0 ${TIMELINE_RIGHT_PADDING}px; }

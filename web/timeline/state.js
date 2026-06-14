@@ -1,6 +1,7 @@
 import { deepClone } from "./schema.js";
 import { normalizeVideoTimeline } from "./migration.js";
 import { normalizeTimelineViewRange } from "./geometry.js";
+import { deleteSelectedItem } from "./operations.js";
 import { validateVideoTimeline } from "./validation.js";
 import { TimelineUndoStack } from "./undo.js";
 
@@ -129,11 +130,27 @@ export class TimelineStateController {
     return true;
   }
 
+  deleteSelectedTimelineItem() {
+    if (!this.timeline?.ui_state?.selected_item_id) return false;
+    const previousState = deepClone(this.timeline);
+    if (!deleteSelectedItem(this.timeline)) {
+      this.timeline = previousState;
+      return false;
+    }
+    this.commitTimelineChange("delete", { previousState });
+    return true;
+  }
+
   handleKeyDown(event) {
-    if (!isUndoRedoEvent(event) || isTextInputEvent(event) || !isNodeActive(this.node, this.app)) {
+    if (isTextInputEvent(event) || !isNodeActive(this.node, this.app)) {
       return;
     }
-    const didChange = isRedoEvent(event) ? this.redoTimelineChange() : this.undoTimelineChange();
+    let didChange = false;
+    if (isDeleteEvent(event)) {
+      didChange = this.deleteSelectedTimelineItem();
+    } else if (isUndoRedoEvent(event)) {
+      didChange = isRedoEvent(event) ? this.redoTimelineChange() : this.undoTimelineChange();
+    }
     if (didChange) {
       event.preventDefault?.();
       event.stopPropagation?.();
@@ -163,6 +180,7 @@ export function mountTimelineState(node, app, options = {}) {
   node.endTimelineGesture = (reason) => controller.endTimelineGesture(reason);
   node.undoTimelineChange = () => controller.undoTimelineChange();
   node.redoTimelineChange = () => controller.redoTimelineChange();
+  node.deleteSelectedTimelineItem = () => controller.deleteSelectedTimelineItem();
   return controller;
 }
 
@@ -232,6 +250,10 @@ function getWidgetNumber(node, name) {
 function isUndoRedoEvent(event) {
   const key = String(event.key ?? "").toLowerCase();
   return (event.ctrlKey || event.metaKey) && (key === "z" || key === "y");
+}
+
+function isDeleteEvent(event) {
+  return event.key === "Delete" || event.key === "Backspace";
 }
 
 function isRedoEvent(event) {

@@ -173,11 +173,29 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("Clear"), false);
 }
 
+function testDeleteContextMenuIsAvailableOnTimelineItems() {
+  const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+  const contextMenuRegistrations = rendererSource.match(/addEventListener\("contextmenu"/g) ?? [];
+
+  assert.equal(contextMenuRegistrations.length >= 2, true);
+  assert.equal(rendererSource.includes('this.showItemContextMenu(event, section.item_id, section.type)'), true);
+  assert.equal(rendererSource.includes('this.showItemContextMenu(event, clip.item_id, "Audio Clip")'), true);
+  assert.equal(rendererSource.includes('Image: "Delete Image"'), true);
+  assert.equal(rendererSource.includes('Video: "Delete Video"'), true);
+  assert.equal(rendererSource.includes('Text: "Delete Text"'), true);
+  assert.equal(rendererSource.includes('"Audio Clip": "Delete Audio Clip"'), true);
+  assert.equal(rendererSource.includes("deleteLabelForItemType"), true);
+  assert.equal(rendererSource.includes("deleteSelectedItem(timeline)"), true);
+  assert.equal(rendererSource.includes("htd-context-menu"), true);
+  assert.equal(rendererSource.includes("htd-context-menu-item"), true);
+}
+
 testTimelineHeightIsTripled();
 testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testSectionPreviewUsesContainedRepeatedFrames();
+testDeleteContextMenuIsAvailableOnTimelineItems();
 
 console.log("timeline preview UI tests passed");

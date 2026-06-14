@@ -61,6 +61,22 @@ function longMultilinePrompt() {
   ].join("\n");
 }
 
+function createKeyEvent(key, target = null) {
+  const event = {
+    key,
+    target,
+    defaultPrevented: false,
+    propagationStopped: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+    stopPropagation() {
+      this.propagationStopped = true;
+    },
+  };
+  return event;
+}
+
 async function testCommitUpdatesHiddenWidgetAndMarksGraphDirty() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
@@ -198,6 +214,76 @@ async function testGestureMouseupCommitBoundary() {
   assert.equal(getHiddenTimeline(node).ui_state.view_end_seconds, 5);
 }
 
+async function testDeleteKeyRemovesSelectedItem() {
+  const node = createNode();
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    timeline.director_track.sections.push({
+      item_id: "section_001",
+      type: "Text",
+      start_time: 0,
+      end_time: 1,
+      prompt: "delete me",
+    });
+    timeline.ui_state.selected_item_id = "section_001";
+  }, "add");
+
+  const event = createKeyEvent("Delete");
+  controller.handleKeyDown(event);
+
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 0);
+  assert.equal(getHiddenTimeline(node).ui_state.selected_item_id, null);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+}
+
+async function testDeleteKeyIsIgnoredWhileTyping() {
+  const node = createNode();
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    timeline.director_track.sections.push({
+      item_id: "section_001",
+      type: "Text",
+      start_time: 0,
+      end_time: 1,
+      prompt: "keep me",
+    });
+    timeline.ui_state.selected_item_id = "section_001";
+  }, "add");
+
+  const event = createKeyEvent("Delete", { tagName: "textarea" });
+  controller.handleKeyDown(event);
+
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 1);
+  assert.equal(getHiddenTimeline(node).director_track.sections[0].prompt, "keep me");
+  assert.equal(event.defaultPrevented, false);
+}
+
+async function testUndoRestoresDeleteKeyRemoval() {
+  const node = createNode();
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    timeline.director_track.sections.push({
+      item_id: "section_001",
+      type: "Text",
+      start_time: 0,
+      end_time: 1,
+      prompt: "restore me",
+    });
+    timeline.ui_state.selected_item_id = "section_001";
+  }, "add");
+
+  controller.handleKeyDown(createKeyEvent("Delete"));
+
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 0);
+  assert.equal(controller.undoTimelineChange(), true);
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 1);
+  assert.equal(getHiddenTimeline(node).director_track.sections[0].prompt, "restore me");
+}
+
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();
 await testLongMultilinePromptSurvivesCommit();
 await testUndoRedoUpdatesStateAndWidget();
@@ -205,5 +291,8 @@ await testDebouncedCommit();
 await testFlushBeforeSerializationWritesPendingPromptWithoutRerender();
 await testExtensionFlushesBeforeNodeSerialize();
 await testGestureMouseupCommitBoundary();
+await testDeleteKeyRemovesSelectedItem();
+await testDeleteKeyIsIgnoredWhileTyping();
+await testUndoRestoresDeleteKeyRemoval();
 
 console.log("phase3 state tests passed");
