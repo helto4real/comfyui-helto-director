@@ -7,6 +7,8 @@ import torch
 
 from ..config import WAN_MODEL_FAMILY, WAN_MODEL_VERSION
 from ..planner import WAN_PLAN_TYPE
+from ..bernini import BERNINI_MODEL_MODE
+from .bernini import bernini_visual_debug, build_bernini_runtime_payload
 from .capabilities import (
     BACKEND_COMFYUI_CORE,
     BACKEND_PLAN_ONLY,
@@ -33,6 +35,7 @@ def build_wan_runtime_outputs(
     plan = deepcopy(wan_timeline_plan)
     _validate_plan(plan)
     config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
+    is_bernini = str(config.get("model_mode") or "") == BERNINI_MODEL_MODE
     requested_backend = str(config.get("runtime_backend_profile") or BACKEND_PLAN_ONLY)
     resolved_backend, backend_entries = resolve_backend(
         requested_backend,
@@ -42,7 +45,19 @@ def build_wan_runtime_outputs(
         vae=vae,
     )
     capabilities = backend_capabilities(resolved_backend)
+    if is_bernini and resolved_backend == BACKEND_COMFYUI_CORE:
+        capabilities = {
+            **capabilities,
+            "supports_bernini": True,
+            "supports_video_sections": True,
+            "supports_start_image": True,
+            "supports_end_image": False,
+            "supports_timed_keyframes": False,
+            "max_visual_keyframes": 1,
+        }
     visual = resolve_visual_conditioning(plan, capabilities, resolved_backend)
+    if is_bernini:
+        visual = bernini_visual_debug(plan, visual)
     prompt_relay = plan.get("model_specific", {}).get("wan", {}).get("prompt_relay", {})
     validation_entries = [_runtime_entry(entry) for entry in backend_entries]
     validation_entries.extend(_visual_validation_entries(visual, resolved_backend))
@@ -102,6 +117,8 @@ def build_wan_runtime_outputs(
         ))
         raise ValueError("WAN_RUNTIME_BACKEND_NOT_AVAILABLE: WanVideoWrapper is not available in this nodepack.")
 
+    if is_bernini:
+        _validate_bernini_user_conditioning(plan, validation_entries)
     _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries)
     _validate_comfy_core_visual_requirements(config, visual, validation_entries)
 
@@ -116,30 +133,43 @@ def build_wan_runtime_outputs(
         validation_entries,
     )
     runtime_negative = _resolve_negative_conditioning(negative, positive)
-    positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
-        positive,
-        runtime_negative,
-        vae,
-        visual,
-        width,
-        height,
-        frame_count,
-        batch_size,
-        latent_spec,
-        str(config.get("model_mode") or "I2V-A14B"),
-    )
+    if is_bernini:
+        positive, runtime_negative, video_latent, guide_debug = build_bernini_runtime_payload(
+            positive,
+            runtime_negative,
+            vae,
+            plan,
+            batch_size,
+            latent_spec,
+        )
+    else:
+        positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
+            positive,
+            runtime_negative,
+            vae,
+            visual,
+            width,
+            height,
+            frame_count,
+            batch_size,
+            latent_spec,
+            str(config.get("model_mode") or "I2V-A14B"),
+        )
     diagnostics.extend(guide_debug.get("diagnostics", []))
     media_decisions.extend(guide_debug.get("media_decisions", []))
-    if guide_debug.get("core_helper"):
+    if guide_debug.get("core_helper") and not any(
+        decision.get("helper") == guide_debug["core_helper"]
+        for decision in media_decisions
+    ):
         media_decisions.append({
             "type": "comfy_core_helper",
             "helper": guide_debug["core_helper"],
             "output_payload_type": "COMFYUI_CORE_CONDITIONING_LATENT",
         })
     validation_entries.append(info(
-        "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT",
-        "Built WAN visual keyframe runtime payload for the selected backend.",
-        "Inspect runtime_debug.visual_conditioning for applied and unsupported keyframes.",
+        "BERNINI_RUNTIME_PAYLOAD_BUILT" if is_bernini else "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT",
+        "Built Bernini runtime conditioning payload for the selected backend." if is_bernini else "Built WAN visual keyframe runtime payload for the selected backend.",
+        "Inspect runtime_debug.bernini and runtime_debug.visual_conditioning for applied and deferred media." if is_bernini else "Inspect runtime_debug.visual_conditioning for applied and unsupported keyframes.",
     ))
     runtime_debug = build_runtime_debug(
         plan=plan,
@@ -281,6 +311,29 @@ def _validate_comfy_core_visual_requirements(config: dict[str, Any], visual: dic
     ))
     raise ValueError(
         "WAN_REQUIRED_IMAGE_CONDITIONING_MISSING: WAN 2.2 I2V-A14B ComfyUI Core execution requires at least one usable Image Section keyframe."
+    )
+
+
+def _validate_bernini_user_conditioning(plan: dict[str, Any], validation_entries: list[dict[str, Any]]) -> None:
+    bernini = plan.get("model_specific", {}).get("wan", {}).get("bernini") or {}
+    if not bernini.get("enabled") or bernini.get("has_user_conditioning"):
+        return
+    details = {
+        "timeline_image_count": bernini.get("timeline_image_count"),
+        "timeline_video_count": bernini.get("timeline_video_count"),
+        "timeline_prompt_count": bernini.get("timeline_prompt_count"),
+        "has_user_prompt_text": bernini.get("has_user_prompt_text"),
+        "has_media_conditioning": bernini.get("has_media_conditioning"),
+    }
+    validation_entries.append(error(
+        "BERNINI_NO_USER_CONDITIONING",
+        "Bernini received no user prompt and no timeline media.",
+        "Add a Text Section, Image Section, Video Section, or verify the Director timeline is connected/serialized.",
+        details,
+    ))
+    raise ValueError(
+        "BERNINI_NO_USER_CONDITIONING: Bernini received no user prompt and no timeline media. "
+        "Add a Text Section, Image Section, Video Section, or verify the Director timeline is connected/serialized."
     )
 
 

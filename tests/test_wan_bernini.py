@@ -1,0 +1,379 @@
+from __future__ import annotations
+
+import math
+from pathlib import Path
+
+import pytest
+import torch
+from PIL import Image
+
+from shared.contracts.video_timeline import (
+    ASSET_SOURCE_FILE_PATH,
+    ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
+    SECTION_TYPE_IMAGE,
+    SECTION_TYPE_TEXT,
+    SECTION_TYPE_VIDEO,
+)
+from shared.timeline import create_default_video_timeline
+from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
+from shared.wan.bernini import BERNINI_SYSTEM_PROMPTS
+
+
+def test_bernini_config_normalizes_model_mode_and_prompt_policy():
+    config = create_wan_timeline_config(model_mode="Bernini-A14B", bernini_task_prompt="i2v")
+
+    assert config["model_mode"] == "Bernini-A14B"
+    assert config["bernini_task_prompt"] == "i2v"
+
+    fallback = create_wan_timeline_config(model_mode="Bernini-A14B", bernini_task_prompt="r2v")
+
+    assert fallback["bernini_task_prompt"] == "Auto"
+
+
+def test_bernini_planner_auto_selects_t2v_for_text_only():
+    plan, validation, _debug = build_wan_timeline_plan(
+        _text_timeline(),
+        create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+    )
+
+    bernini = plan["model_specific"]["wan"]["bernini"]
+    prompt_relay = plan["model_specific"]["wan"]["prompt_relay"]
+
+    assert validation["is_valid"] is True
+    assert bernini["task_type"] == "t2v"
+    assert bernini["system_prompt"] == BERNINI_SYSTEM_PROMPTS["t2v"]
+    assert prompt_relay["global_prompt"].startswith(BERNINI_SYSTEM_PROMPTS["t2v"])
+    assert "r2v" in bernini["deferred_task_types"]
+
+
+def test_bernini_planner_auto_selects_i2v_for_multiple_images(tmp_path):
+    plan, validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=3),
+        create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+    )
+
+    bernini = plan["model_specific"]["wan"]["bernini"]
+
+    assert validation["is_valid"] is True
+    assert bernini["task_type"] == "i2v"
+    assert bernini["system_prompt"] == BERNINI_SYSTEM_PROMPTS["i2v"]
+    assert bernini["media_used"]["item_id"] == "section_image_0"
+    assert bernini["media_used"]["bernini_role"] == "source_video_single_frame"
+    assert [entry["item_id"] for entry in bernini["ignored_timeline_media"]] == ["section_image_1", "section_image_2"]
+    assert "BERNINI_TIMELINE_MEDIA_DEFERRED" in [entry["code"] for entry in validation["warnings"]]
+
+
+def test_bernini_planner_auto_selects_v2v_and_defers_images_with_video(tmp_path):
+    plan, validation, _debug = build_wan_timeline_plan(
+        _video_timeline(tmp_path, include_image=True),
+        create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+    )
+
+    bernini = plan["model_specific"]["wan"]["bernini"]
+
+    assert validation["is_valid"] is True
+    assert bernini["task_type"] == "v2v"
+    assert bernini["system_prompt"] == BERNINI_SYSTEM_PROMPTS["v2v"]
+    assert bernini["media_used"]["item_id"] == "section_video"
+    assert bernini["ignored_timeline_media"][0]["item_id"] == "section_image"
+    assert "WAN_VIDEO_SECTION_PROMPT_ONLY" not in [entry["code"] for entry in validation["warnings"]]
+    assert "BERNINI_SOURCE_VIDEO_PLANNED" in [entry["code"] for entry in validation["info"]]
+
+
+def test_bernini_plan_only_debug_needs_no_backend_inputs(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=2),
+        create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+    )
+
+    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+
+    assert runtime_debug["bernini"]["task_type"] == "i2v"
+    assert runtime_debug["summary"]["bernini_task_type"] == "i2v"
+    assert runtime_debug["status"]["plan_only"] is True
+
+
+def test_bernini_plan_reports_empty_user_conditioning():
+    plan, validation, debug = build_wan_timeline_plan(
+        create_default_video_timeline(),
+        create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+    )
+
+    bernini = plan["model_specific"]["wan"]["bernini"]
+
+    assert validation["is_valid"] is True
+    assert "BERNINI_NO_USER_CONDITIONING" in [entry["code"] for entry in validation["warnings"]]
+    assert bernini["task_type"] == "t2v"
+    assert bernini["timeline_image_count"] == 0
+    assert bernini["timeline_video_count"] == 0
+    assert bernini["timeline_prompt_count"] == 0
+    assert bernini["has_user_prompt_text"] is False
+    assert bernini["has_media_conditioning"] is False
+    assert bernini["has_user_conditioning"] is False
+    assert debug["details"]["bernini"]["has_user_conditioning"] is False
+
+
+def test_bernini_comfyui_core_rejects_empty_user_conditioning():
+    plan, _validation, _debug = build_wan_timeline_plan(
+        create_default_video_timeline(),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            resolution_profile="Quick Draft",
+            debug_mode="Full",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="BERNINI_NO_USER_CONDITIONING"):
+        build_wan_runtime_outputs(
+            high_noise_model=FakeModel(),
+            clip=FakeClip(),
+            vae=FakeVAE(),
+            wan_timeline_plan=plan,
+        )
+
+
+def test_bernini_comfyui_core_allows_text_only_t2v_prompt():
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _text_timeline(),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            resolution_profile="Quick Draft",
+            prompt_routing="Off",
+            debug_mode="Full",
+        ),
+    )
+
+    _high, _low, positive, _negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert runtime_debug["bernini"]["task_type"] == "t2v"
+    assert runtime_debug["bernini"]["has_user_conditioning"] is True
+    assert runtime_debug["bernini"]["timeline_prompt_count"] == 1
+    assert _helper_decision(runtime_debug) == "BerniniConditioning"
+    assert positive[0][1]["prompt"].startswith(BERNINI_SYSTEM_PROMPTS["t2v"])
+    assert video_latent["samples"].shape[1] == 16
+
+
+def test_bernini_comfyui_core_uses_context_latents_for_i2v_single_frame_source(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            resolution_profile="Quick Draft",
+            debug_mode="Full",
+        ),
+    )
+
+    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert runtime_debug["output_payload_type"] == "COMFYUI_CORE_BERNINI_CONDITIONING_LATENT"
+    assert runtime_debug["bernini"]["task_type"] == "i2v"
+    assert runtime_debug["bernini"]["system_prompt"] == BERNINI_SYSTEM_PROMPTS["i2v"]
+    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["bernini_role"] == "source_video_single_frame"
+    assert "single-frame source_video" in " ".join(runtime_debug["bernini"]["runtime_diagnostics"])
+    assert _helper_decision(runtime_debug) == "BerniniConditioning"
+    assert _helper_decision(runtime_debug) not in {"WanImageToVideo", "Wan22ImageToVideoLatent"}
+    assert positive[0][1]["prompt"].startswith(BERNINI_SYSTEM_PROMPTS["i2v"])
+    assert positive[0][1]["context_latents"][0].shape[1] == 16
+    assert negative[0][1]["context_latents"][0].shape[1] == 16
+    assert "concat_latent_image" not in positive[0][1]
+    assert "concat_mask" not in positive[0][1]
+    assert video_latent["samples"].shape[1] == 16
+
+
+def test_bernini_comfyui_core_rejects_48_channel_wan22_i2v_wiring(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            resolution_profile="Quick Draft",
+            debug_mode="Full",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="BERNINI_RUNTIME_LATENT_FORMAT_MISMATCH"):
+        build_wan_runtime_outputs(
+            high_noise_model=FakeModel(latent_channels=48, spatial_scale=16),
+            clip=FakeClip(),
+            vae=FakeVAE(latent_channels=48, spatial_scale=16),
+            wan_timeline_plan=plan,
+        )
+
+
+def _helper_decision(runtime_debug: dict) -> str | None:
+    for decision in runtime_debug.get("media_decisions", []):
+        if decision.get("type") == "comfy_core_helper":
+            return decision.get("helper")
+    return None
+
+
+def _text_timeline():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 0.25
+    timeline["project"]["frame_rate"] = 8.0
+    timeline["director_track"]["sections"].append({
+        "item_id": "section_text",
+        "type": SECTION_TYPE_TEXT,
+        "start_time": 0.0,
+        "end_time": 0.25,
+        "prompt": "simple prompt",
+    })
+    return timeline
+
+
+def _image_timeline(tmp_path: Path, *, count: int):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = float(count) * 0.25
+    timeline["project"]["frame_rate"] = 8.0
+    for index in range(count):
+        asset_id = f"image_{index}"
+        path = tmp_path / f"image_{index}.png"
+        Image.new("RGB", (12, 8), (30 + index * 40, 80, 180)).save(path)
+        timeline["assets"].append({
+            "asset_id": asset_id,
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": str(path),
+            "name": path.name,
+        })
+        timeline["director_track"]["sections"].append({
+            "item_id": f"section_image_{index}",
+            "type": SECTION_TYPE_IMAGE,
+            "start_time": float(index) * 0.25,
+            "end_time": float(index + 1) * 0.25,
+            "image": {"asset_id": asset_id},
+            "prompt": f"image prompt {index}",
+            "guide_strength": 1.0,
+        })
+    return timeline
+
+
+def _video_timeline(tmp_path: Path, *, include_image: bool = False):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 0.5
+    timeline["project"]["frame_rate"] = 8.0
+    video_path = tmp_path / "source.mp4"
+    timeline["assets"].append({
+        "asset_id": "video_001",
+        "type": ASSET_TYPE_VIDEO,
+        "source_kind": ASSET_SOURCE_FILE_PATH,
+        "path": str(video_path),
+        "name": video_path.name,
+    })
+    timeline["director_track"]["sections"].append({
+        "item_id": "section_video",
+        "type": SECTION_TYPE_VIDEO,
+        "start_time": 0.0,
+        "end_time": 0.25,
+        "video": {"asset_id": "video_001"},
+        "prompt": "edit the source video",
+    })
+    if include_image:
+        image_path = tmp_path / "image.png"
+        Image.new("RGB", (12, 8), (120, 80, 40)).save(image_path)
+        timeline["assets"].append({
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": str(image_path),
+            "name": image_path.name,
+        })
+        timeline["director_track"]["sections"].append({
+            "item_id": "section_image",
+            "type": SECTION_TYPE_IMAGE,
+            "start_time": 0.25,
+            "end_time": 0.5,
+            "image": {"asset_id": "image_001"},
+            "prompt": "ignored keyframe",
+        })
+    return timeline
+
+
+class FakeTokenizer:
+    add_eos = False
+
+    def __call__(self, text):
+        tokens = [index for index, part in enumerate(str(text).split(" ")) if part]
+        return {"input_ids": tokens}
+
+
+class FakeClip:
+    tokenizer = FakeTokenizer()
+
+    def tokenize(self, prompt):
+        return prompt
+
+    def encode_from_tokens_scheduled(self, tokens):
+        return [[torch.ones(1, 2), {"prompt": tokens, "pooled_output": torch.ones(1, 2)}]]
+
+
+class FakeCrossAttention:
+    pass
+
+
+class FakeBlock:
+    def __init__(self):
+        self.cross_attn = FakeCrossAttention()
+
+
+class FakeDiffusionModel:
+    def __init__(self):
+        self.blocks = [FakeBlock(), FakeBlock()]
+
+
+class FakeLatentFormat:
+    def __init__(self, latent_channels: int = 16, spatial_scale: int = 8):
+        self.latent_channels = latent_channels
+        self.spacial_downscale_ratio = spatial_scale
+
+
+class FakeModel:
+    def __init__(self, latent_channels: int = 16, spatial_scale: int = 8):
+        self.diffusion_model = FakeDiffusionModel()
+        self.latent_format = FakeLatentFormat(latent_channels, spatial_scale)
+        self.object_patches = {}
+
+    def clone(self):
+        return FakeModel(
+            latent_channels=self.latent_format.latent_channels,
+            spatial_scale=self.latent_format.spacial_downscale_ratio,
+        )
+
+    def get_model_object(self, name):
+        if name == "latent_format":
+            return self.latent_format
+        assert name == "diffusion_model"
+        return self.diffusion_model
+
+    def add_object_patch(self, key, patch):
+        self.object_patches[key] = patch
+
+
+class FakeVAE:
+    def __init__(self, latent_channels: int = 16, spatial_scale: int = 8):
+        self.latent_channels = latent_channels
+        self._spatial_scale = spatial_scale
+
+    def spacial_compression_encode(self):
+        return self._spatial_scale
+
+    def encode(self, image):
+        frames = int(image.shape[0])
+        height = math.ceil(int(image.shape[1]) / self._spatial_scale)
+        width = math.ceil(int(image.shape[2]) / self._spatial_scale)
+        latent_frames = ((frames - 1) // 4) + 1
+        return torch.ones(1, self.latent_channels, latent_frames, height, width)

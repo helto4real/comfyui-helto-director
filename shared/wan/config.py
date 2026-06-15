@@ -3,6 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .bernini import (
+    BERNINI_MODEL_MODE,
+    BERNINI_TASK_PROMPT_AUTO,
+    BERNINI_TASK_PROMPT_MODES,
+)
+
 
 WAN_CONFIG_SCHEMA_VERSION = "1.0"
 WAN_CONFIG_TYPE = "WAN_TIMELINE_CONFIG"
@@ -24,6 +30,7 @@ MODEL_MODES = (
     "I2V-A14B",
     "TI2V-5B",
     "T2V-A14B",
+    BERNINI_MODEL_MODE,
 )
 PROMPT_ROUTING_MODES = (
     "Off",
@@ -73,6 +80,7 @@ def create_wan_timeline_config(
     model_mode: str = "I2V-A14B",
     prompt_routing: str = "Prompt Relay",
     prompt_relay_epsilon: float = 0.001,
+    bernini_task_prompt: str = BERNINI_TASK_PROMPT_AUTO,
     visual_conditioning_mode: str = "Timed Keyframes",
     unsupported_visual_keyframe_policy: str = "Warn And Keep In Plan",
     gap_policy: str = "Warning",
@@ -93,6 +101,7 @@ def create_wan_timeline_config(
         "model_mode": _choice(model_mode, MODEL_MODES, "I2V-A14B"),
         "prompt_routing": _choice(prompt_routing, PROMPT_ROUTING_MODES, "Prompt Relay"),
         "prompt_relay_epsilon": max(0.0, float(prompt_relay_epsilon)),
+        "bernini_task_prompt": _choice(bernini_task_prompt, BERNINI_TASK_PROMPT_MODES, BERNINI_TASK_PROMPT_AUTO),
         "visual_conditioning_mode": _choice(visual_conditioning_mode, VISUAL_CONDITIONING_MODES, "Timed Keyframes"),
         "unsupported_visual_keyframe_policy": _choice(
             unsupported_visual_keyframe_policy,
@@ -137,6 +146,11 @@ def normalize_wan_timeline_config(config: Any) -> dict[str, Any]:
     normalized["model_mode"] = _choice(normalized.get("model_mode"), MODEL_MODES, "I2V-A14B")
     normalized["prompt_routing"] = _choice(normalized.get("prompt_routing"), PROMPT_ROUTING_MODES, "Prompt Relay")
     normalized["prompt_relay_epsilon"] = max(0.0, float(normalized.get("prompt_relay_epsilon", 0.001)))
+    normalized["bernini_task_prompt"] = _choice(
+        normalized.get("bernini_task_prompt"),
+        BERNINI_TASK_PROMPT_MODES,
+        BERNINI_TASK_PROMPT_AUTO,
+    )
     normalized["visual_conditioning_mode"] = _choice(
         normalized.get("visual_conditioning_mode"),
         VISUAL_CONDITIONING_MODES,

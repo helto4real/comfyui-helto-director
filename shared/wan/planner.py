@@ -35,6 +35,10 @@ from .config import (
     WAN_MODEL_VERSION,
     normalize_wan_timeline_config,
 )
+from .bernini import (
+    apply_bernini_prompt_prefix,
+    build_bernini_plan,
+)
 
 
 WAN_PLAN_SCHEMA_VERSION = "1.0"
@@ -67,6 +71,8 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
     audio_entries = _build_audio_plan(timeline, frame_rate)
     prompt_relay = _build_prompt_relay(timeline, config, section_entries, prompt_entries, total_frames, latent_chunk_count)
     visual_conditioning = _build_visual_conditioning(config, section_entries, prompt_entries, media_entries)
+    bernini = build_bernini_plan(config, section_entries, media_entries, prompt_entries, prompt_relay.get("global_prompt"))
+    prompt_relay = apply_bernini_prompt_prefix(prompt_relay, bernini)
 
     wan_validation = _validate_wan_inputs(
         timeline,
@@ -78,6 +84,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         audio_entries,
         prompt_relay,
         frame_info,
+        bernini,
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
@@ -112,6 +119,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
                 "runtime_status": "Runtime backend selected by WAN Timeline Runtime",
                 "prompt_relay": prompt_relay,
                 "visual_conditioning": visual_conditioning,
+                "bernini": bernini,
                 "gap_decisions": gap_decisions,
             },
         },
@@ -386,6 +394,7 @@ def _validate_wan_inputs(
     audio_entries: list[dict[str, Any]],
     prompt_relay: dict[str, Any],
     frame_info: dict[str, Any],
+    bernini: dict[str, Any],
 ) -> dict[str, Any]:
     entries = []
     if not director_validation.get("is_valid", False):
@@ -450,6 +459,16 @@ def _validate_wan_inputs(
 
     for media in media_entries:
         if media.get("section_type") == SECTION_TYPE_VIDEO:
+            if bernini.get("enabled"):
+                entries.append(_entry(
+                    "BERNINI_SOURCE_VIDEO_PLANNED",
+                    SEVERITY_INFO,
+                    "Video Section",
+                    media.get("item_id"),
+                    "Bernini Auto uses source-video conditioning for Video Sections.",
+                    "Only the first usable Video Section is passed as Bernini source_video in this version.",
+                ))
+                continue
             prompt = _section_prompt(timeline, media.get("item_id"))
             if config["unsupported_video_section_policy"] == "Error":
                 entries.append(_entry(
@@ -478,6 +497,51 @@ def _validate_wan_inputs(
                     "Video Section has no supported WAN conditioning and no prompt fallback.",
                     "Add a prompt or replace it with Image/Text Sections.",
                 ))
+
+    if bernini.get("enabled"):
+        entries.append(_entry(
+            "BERNINI_TASK_PROMPT_SELECTED",
+            SEVERITY_INFO,
+            "Bernini",
+            None,
+            f"Selected Bernini task prompt {bernini.get('task_type')}.",
+            str(bernini.get("selection_reason") or ""),
+            {
+                "task_type": bernini.get("task_type"),
+                "task_prompt_policy": bernini.get("task_prompt_policy"),
+                "system_prompt": bernini.get("system_prompt"),
+                "prompt_prefix_enabled": bernini.get("prompt_prefix_enabled"),
+                "timeline_image_count": bernini.get("timeline_image_count"),
+                "timeline_video_count": bernini.get("timeline_video_count"),
+                "timeline_prompt_count": bernini.get("timeline_prompt_count"),
+                "has_user_prompt_text": bernini.get("has_user_prompt_text"),
+                "has_media_conditioning": bernini.get("has_media_conditioning"),
+            },
+        ))
+        if not bernini.get("has_user_conditioning"):
+            entries.append(_entry(
+                "BERNINI_NO_USER_CONDITIONING",
+                SEVERITY_WARNING,
+                "Bernini",
+                None,
+                "Bernini has no user prompt text and no timeline media conditioning.",
+                "Add a Text Section, Image Section, Video Section, or verify the Director timeline is connected and serialized.",
+                {
+                    "timeline_image_count": bernini.get("timeline_image_count"),
+                    "timeline_video_count": bernini.get("timeline_video_count"),
+                    "timeline_prompt_count": bernini.get("timeline_prompt_count"),
+                },
+            ))
+        if bernini.get("ignored_timeline_media"):
+            entries.append(_entry(
+                "BERNINI_TIMELINE_MEDIA_DEFERRED",
+                SEVERITY_WARNING,
+                "Bernini",
+                None,
+                "Some timeline media is not passed to Bernini conditioning in this version.",
+                "Reference-image tasks remain deferred until out-of-timeline reference support is added.",
+                {"ignored_timeline_media": bernini.get("ignored_timeline_media")},
+            ))
 
     if audio_entries:
         code = "WAN_AUDIO_FINAL_MIX_ONLY" if config["audio_policy"] == "Final Mix Only" else "WAN_AUDIO_IGNORED_BY_MODEL"
@@ -533,12 +597,15 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
     wan = plan["model_specific"]["wan"]
     prompt_relay = wan["prompt_relay"]
     visual = wan["visual_conditioning"]
+    bernini = wan.get("bernini") or {}
     enabled = config["debug_mode"] != "Off"
     summary = {
         "model_mode": config["model_mode"],
         "prompt_routing": config["prompt_routing"],
         "visual_conditioning_mode": config["visual_conditioning_mode"],
         "runtime_backend_profile": config["runtime_backend_profile"],
+        "bernini_task_type": bernini.get("task_type") if bernini.get("enabled") else None,
+        "bernini_prompt_prefix_enabled": bool(bernini.get("prompt_prefix_enabled")),
         "width": plan["resolved_output"]["width"],
         "height": plan["resolved_output"]["height"],
         "requested_frame_count": plan["resolved_output"].get("requested_frame_count"),
@@ -570,6 +637,7 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
             "prompt_plan": deepcopy(plan["prompt_plan"]),
             "visual_conditioning": deepcopy(visual),
             "prompt_relay": deepcopy(prompt_relay),
+            "bernini": deepcopy(bernini),
             "media_plan": deepcopy(plan["media_plan"]),
             "audio_plan": deepcopy(plan["audio_plan"]),
             "gap_decisions": deepcopy(wan["gap_decisions"]),

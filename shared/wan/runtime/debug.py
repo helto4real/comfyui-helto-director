@@ -48,7 +48,9 @@ def build_runtime_debug(
     media_decisions: list[dict[str, Any]] | None = None,
     model_patch_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
+    wan = plan.get("model_specific", {}).get("wan", {})
+    config = wan.get("config", {})
+    bernini = _bernini_runtime_debug(wan.get("bernini") or {}, media_decisions or [], diagnostics)
     validation = build_runtime_validation(validation_entries)
     backend = build_backend_report(
         plan=plan,
@@ -69,6 +71,8 @@ def build_runtime_debug(
             "requested_backend": requested_backend,
             "resolved_backend": resolved_backend,
             "model_mode": config.get("model_mode"),
+            "bernini_task_type": bernini.get("task_type") if bernini.get("enabled") else None,
+            "bernini_prompt_prefix_enabled": bool(bernini.get("prompt_prefix_enabled")),
             "prompt_routing": config.get("prompt_routing"),
             "prompt_relay_patched": bool(prompt_debug.get("patched")),
             "prompt_relay_status": prompt_debug.get("status", "not_built"),
@@ -89,6 +93,7 @@ def build_runtime_debug(
             "selected_primary_image": _selected_primary_image(visual),
         },
         "prompt_relay": deepcopy(prompt_debug),
+        "bernini": bernini,
         "model_patch_status": deepcopy(model_patch_status or {}),
         "media_decisions": deepcopy(media_decisions or []),
         "output_payload_type": _output_payload_type(resolved_backend, media_decisions or []),
@@ -209,6 +214,7 @@ def _missing_backend_requirements(
 
 def _unsupported_features(plan: dict[str, Any], visual: dict[str, Any], capabilities: dict[str, Any]) -> list[str]:
     features = []
+    bernini_enabled = bool(plan.get("model_specific", {}).get("wan", {}).get("bernini", {}).get("enabled"))
     if visual.get("unsupported_keyframes"):
         features.append("Some requested visual keyframes are unsupported by the resolved backend.")
     if capabilities.get("supports_timed_keyframes") is not True and any(
@@ -220,7 +226,10 @@ def _unsupported_features(plan: dict[str, Any], visual: dict[str, Any], capabili
         features.append("WAN audio conditioning is unsupported; audio clips are final-mix metadata only.")
     has_video_sections = any(entry.get("section_type") == "Video" for entry in plan.get("media_plan", []))
     if has_video_sections:
-        features.append("WAN Video Sections are prompt-only fallback metadata.")
+        if bernini_enabled and capabilities.get("supports_video_sections") is True:
+            features.append("Bernini uses the first Video Section as source_video; additional video sections are deferred.")
+        else:
+            features.append("WAN Video Sections are prompt-only fallback metadata.")
         if capabilities.get("supports_video_sections") is not True:
             features.append("WAN source-video conditioning is not supported by the resolved backend.")
     return features
@@ -251,15 +260,43 @@ def _output_payload_type(resolved_backend: str, media_decisions: list[dict[str, 
 
 def _known_limitations(plan: dict[str, Any], visual: dict[str, Any], capabilities: dict[str, Any]) -> list[str]:
     limitations = []
+    bernini = plan.get("model_specific", {}).get("wan", {}).get("bernini", {})
     if capabilities.get("supports_timed_keyframes") is not True:
         limitations.append("Timed visual keyframes are planned and reported but not applied by the selected backend.")
     if plan.get("audio_plan"):
         limitations.append("WAN audio conditioning is not implemented; audio clips remain final-mix metadata only.")
-    if any(entry.get("section_type") == "Video" for entry in plan.get("media_plan", [])):
+    if any(entry.get("section_type") == "Video" for entry in plan.get("media_plan", [])) and not bernini.get("enabled"):
         limitations.append("WAN source-video conditioning is not implemented.")
     if visual.get("unsupported_keyframes"):
         limitations.append("Some requested visual keyframes are preserved in debug but unsupported by the selected backend.")
+    if bernini.get("enabled") and bernini.get("ignored_timeline_media"):
+        limitations.append("Bernini reference-image task support is deferred; ignored timeline media is reported in runtime_debug.bernini.")
     return limitations
+
+
+def _bernini_runtime_debug(
+    bernini_plan: dict[str, Any],
+    media_decisions: list[dict[str, Any]],
+    diagnostics: list[str],
+) -> dict[str, Any]:
+    debug = deepcopy(bernini_plan)
+    if not debug:
+        return {}
+    debug["runtime_media_decisions"] = [
+        deepcopy(decision)
+        for decision in media_decisions
+        if (
+            decision.get("bernini_role")
+            or decision.get("helper") == "BerniniConditioning"
+            or str(decision.get("output_payload_type") or "").startswith("COMFYUI_CORE_BERNINI")
+        )
+    ]
+    debug["runtime_diagnostics"] = [
+        entry
+        for entry in diagnostics
+        if "Bernini" in str(entry)
+    ]
+    return debug
 
 
 def _visual_keyframe_support_level(resolved_backend: str, capabilities: dict[str, Any]) -> str:

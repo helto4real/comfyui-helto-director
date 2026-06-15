@@ -10,6 +10,7 @@ The Director stays generic. WAN-specific behavior lives in the WAN Config, Plann
 
 - Model Mode: `I2V-A14B`
 - Prompt Routing: `Prompt Relay`
+- Bernini Task Prompt: `Auto`
 - Visual Conditioning Mode: `Timed Keyframes`
 - Runtime Backend Profile: `Plan Only`
 
@@ -50,6 +51,33 @@ Text Sections become temporal Prompt Relay segments. The Project Global Prompt i
 - `section_to_latent_mapping`
 
 WAN uses a 4-frame temporal stride. Planner segment lengths always sum to `latent_chunk_count`.
+
+## Bernini-A14B Mode
+
+Select `Bernini-A14B` in WAN Model Mode to use Bernini task prompting with the supported ComfyUI Core conditioning path.
+
+Bernini Task Prompt controls the trained task system prompt prepended before T5 text:
+
+- `Auto`: choose `t2v`, `i2v`, or `v2v` from timeline media.
+- `Off`: run Bernini mode without adding a Bernini system prompt.
+- `t2v`, `i2v`, `v2v`: force a supported first-pass task prompt.
+
+Auto rules are conservative:
+
+- text-only timelines use `t2v`.
+- one or more Image Sections use `i2v`; multiple images remain timeline keyframes/storyboard beats, not `r2v` references.
+- any Video Section uses `v2v`; the first usable video is passed as Bernini `source_video`.
+
+The first-pass runtime passes only one timeline source into Bernini:
+
+- first Image Section -> single-frame Bernini `source_video` context.
+- first Video Section -> decoded source-video frames.
+
+Image-only `i2v` uses a compatibility mapping because ComfyUI Core does not expose a dedicated Bernini start-image input. The runtime keeps the Bernini `i2v` system prompt and passes the first timeline image as single-frame `source_video`, producing Bernini `context_latents`. It does not pass normal timeline images into `reference_images`, because that implies Bernini reference-token tasks such as `r2v`.
+
+Additional timeline images/videos are preserved in planner/runtime debug as deferred media. Reference-image Bernini tasks (`r2v`, `rv2v`, `ads2v`, `vi2v`, `vrc2v`, `mv2v`) are intentionally not auto-selected yet; they are reserved for future out-of-timeline reference-image support.
+
+Bernini system prompts are prefixes only. ComfyUI Core execution fails with `BERNINI_NO_USER_CONDITIONING` if Bernini receives no user prompt text and no timeline image/video media, because generating from only the trained task prefix usually indicates an unconnected or unserialized Director timeline.
 
 ## Visual Keyframes
 

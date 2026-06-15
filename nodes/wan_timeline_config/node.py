@@ -3,6 +3,7 @@ from comfy_api.latest import io
 from ...shared.contracts.socket_types import WAN_TIMELINE_CONFIG
 from ...shared.wan.config import (
     AUDIO_POLICIES,
+    BERNINI_TASK_PROMPT_MODES,
     DEBUG_MODES,
     GAP_POLICIES,
     MODEL_MODES,
@@ -54,6 +55,13 @@ class WANTimelineConfig(io.ComfyNode):
                     min=0.0,
                     max=1.0,
                     step=0.001,
+                    socketless=True,
+                ),
+                io.Combo.Input(
+                    "bernini_task_prompt",
+                    display_name="Bernini Task Prompt",
+                    options=list(BERNINI_TASK_PROMPT_MODES),
+                    default="Auto",
                     socketless=True,
                 ),
                 io.Combo.Input(
@@ -121,6 +129,7 @@ class WANTimelineConfig(io.ComfyNode):
         model_mode: str = "I2V-A14B",
         prompt_routing: str = "Prompt Relay",
         prompt_relay_epsilon: float = 0.001,
+        bernini_task_prompt: str = "Auto",
         visual_conditioning_mode: str = "Timed Keyframes",
         unsupported_visual_keyframe_policy: str = "Warn And Keep In Plan",
         gap_policy: str = "Warning",
@@ -134,6 +143,7 @@ class WANTimelineConfig(io.ComfyNode):
             model_mode=model_mode,
             prompt_routing=prompt_routing,
             prompt_relay_epsilon=prompt_relay_epsilon,
+            bernini_task_prompt=bernini_task_prompt,
             visual_conditioning_mode=visual_conditioning_mode,
             unsupported_visual_keyframe_policy=unsupported_visual_keyframe_policy,
             gap_policy=gap_policy,

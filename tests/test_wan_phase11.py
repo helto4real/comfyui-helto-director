@@ -83,6 +83,7 @@ def test_wan_config_defaults_include_skeleton_rules():
     assert config["resolution_profile"] == "Auto from Director"
     assert config["model_mode"] == "I2V-A14B"
     assert config["prompt_routing"] == "Prompt Relay"
+    assert config["bernini_task_prompt"] == "Auto"
     assert config["visual_conditioning_mode"] == "Timed Keyframes"
     assert config["audio_policy"] == "Final Mix Only"
     assert config["runtime_backend_profile"] == "Plan Only"
