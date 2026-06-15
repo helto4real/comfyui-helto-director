@@ -15,6 +15,7 @@ DOC_PATHS = [
     REPO_ROOT / "docs" / "picker_setup.md",
     REPO_ROOT / "docs" / "privacy_limitations.md",
     REPO_ROOT / "docs" / "current_limitations.md",
+    REPO_ROOT / "docs" / "WAN22_SUPPORT.md",
     REPO_ROOT / "docs" / "wan_skeleton_status.md",
 ]
 
@@ -44,6 +45,7 @@ EXPECTED_WORKFLOWS = {
         "HeltoVideoTimelineDirector",
         "HeltoWAN22TimelineConfig",
         "HeltoWAN22TimelinePlanner",
+        "HeltoWAN22TimelineRuntime",
     },
 }
 
@@ -95,13 +97,13 @@ def test_workflow_links_reference_existing_nodes():
             assert link[3] in node_ids, f"{path.name} link target node does not exist: {link}"
 
 
-def test_wan_example_is_planner_only():
+def test_wan_example_uses_plan_only_runtime():
     workflow = _load_workflow("wan_planner_skeleton_workflow.json")
     node_types = {node["type"] for node in workflow["nodes"]}
 
     assert "HeltoWAN22TimelineConfig" in node_types
     assert "HeltoWAN22TimelinePlanner" in node_types
-    assert all("WAN22TimelineRuntime" not in node_type for node_type in node_types)
+    assert "HeltoWAN22TimelineRuntime" in node_types
 
 
 def test_documentation_links_point_to_existing_files():

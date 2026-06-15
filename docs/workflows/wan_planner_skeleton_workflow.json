@@ -1,7 +1,7 @@
 {
   "revision": 0,
-  "last_node_id": 5,
-  "last_link_id": 2,
+  "last_node_id": 6,
+  "last_link_id": 3,
   "nodes": [
     {
       "id": 1,
@@ -15,7 +15,7 @@
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
       "title": "Example Notes",
       "properties": {},
-      "widgets_values": ["WAN 2.2 is planner-only in this nodepack today. This workflow verifies Director -> WAN Config -> WAN Planner and intentionally has no WAN runtime node."]
+      "widgets_values": ["WAN 2.2 defaults to Plan Only runtime mode. This workflow verifies Director -> WAN Config -> WAN Planner -> WAN Runtime debug without requiring a WAN checkpoint to import."]
     },
     {
       "id": 2,
@@ -53,7 +53,19 @@
       "outputs": [{ "name": "WAN_TIMELINE_CONFIG", "type": "WAN_TIMELINE_CONFIG", "links": [2] }],
       "title": "WAN 2.2 Timeline Config",
       "properties": {},
-      "widgets_values": ["Auto from Director", "Ignore Timeline Audio", true]
+      "widgets_values": [
+        "Auto from Director",
+        "I2V-A14B",
+        "Prompt Relay",
+        0.001,
+        "Timed Keyframes",
+        "Warn And Keep In Plan",
+        "Warning",
+        "Warn And Use Prompt Only",
+        "Final Mix Only",
+        "Plan Only",
+        "Summary"
+      ]
     },
     {
       "id": 4,
@@ -68,7 +80,7 @@
         { "name": "wan_timeline_config", "type": "WAN_TIMELINE_CONFIG", "link": 2 }
       ],
       "outputs": [
-        { "name": "WAN_TIMELINE_PLAN", "type": "WAN_TIMELINE_PLAN", "links": [] },
+        { "name": "WAN_TIMELINE_PLAN", "type": "WAN_TIMELINE_PLAN", "links": [3] },
         { "name": "TIMELINE_VALIDATION", "type": "TIMELINE_VALIDATION", "links": [] },
         { "name": "DEBUG_INFO", "type": "DEBUG_INFO", "links": [] }
       ],
@@ -77,23 +89,50 @@
       "widgets_values": []
     },
     {
-      "id": 5,
-      "type": "PrimitiveStringMultiline",
-      "pos": [1020, 460],
-      "size": [420, 110],
+      "id": 6,
+      "type": "HeltoWAN22TimelineRuntime",
+      "pos": [1400, 230],
+      "size": [340, 210],
       "flags": {},
       "order": 4,
+      "mode": 0,
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": null },
+        { "name": "clip", "type": "CLIP", "link": null },
+        { "name": "vae", "type": "VAE", "link": null },
+        { "name": "wan_timeline_plan", "type": "WAN_TIMELINE_PLAN", "link": 3 },
+        { "name": "negative", "type": "CONDITIONING", "link": null }
+      ],
+      "outputs": [
+        { "name": "model", "type": "MODEL", "links": [] },
+        { "name": "positive", "type": "CONDITIONING", "links": [] },
+        { "name": "negative", "type": "CONDITIONING", "links": [] },
+        { "name": "video_latent", "type": "LATENT", "links": [] },
+        { "name": "runtime_debug", "type": "DEBUG_INFO", "links": [] }
+      ],
+      "title": "WAN 2.2 Timeline Runtime",
+      "properties": {},
+      "widgets_values": [1]
+    },
+    {
+      "id": 5,
+      "type": "PrimitiveStringMultiline",
+      "pos": [1400, 500],
+      "size": [420, 110],
+      "flags": {},
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
       "title": "WAN Runtime Status",
       "properties": {},
-      "widgets_values": ["The planner output is serializable and includes warnings for unsupported Image, Video, and Audio timeline features. WAN runtime remains future work."]
+      "widgets_values": ["Runtime Backend Profile is Plan Only in this example. Connect WAN model, CLIP, and VAE loaders, then switch the config to ComfyUI Core when you want Start/End image conditioning materialized."]
     }
   ],
   "links": [
     [1, 2, 0, 4, 0, "VIDEO_TIMELINE"],
-    [2, 3, 0, 4, 1, "WAN_TIMELINE_CONFIG"]
+    [2, 3, 0, 4, 1, "WAN_TIMELINE_CONFIG"],
+    [3, 4, 0, 6, 3, "WAN_TIMELINE_PLAN"]
   ],
   "groups": [],
   "config": {},

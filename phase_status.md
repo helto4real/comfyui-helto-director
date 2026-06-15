@@ -17,9 +17,10 @@
 - Phase 10 adds LTX 2.3 Timeline identity/reference helper nodes, reference selection from runtime guide data, crop-reference-tail support, runtime identity anchor application, third-party notices for bundled/adapted helper code, and practical workflow documentation with visual infographics.
 - Phase 11 adds WAN 2.2 Timeline Config and Planner skeleton nodes that output serializable WAN plans with prompt ranges, media/audio metadata preservation, validation warnings for unsupported features, and debug info.
 - Phase 12 adds importable example workflows, README quick links, picker setup docs, privacy limitations, current limitations, WAN skeleton status docs, and docs/example validation tests.
+- Phase 13 adds WAN 2.2 I2V-A14B-first planning/runtime support: Prompt Relay planning, all Image Sections preserved as timed visual keyframe candidates, Plan Only runtime debug, ComfyUI Core runtime materialization for Start/End image conditioning, and clear unsupported-keyframe/video/audio diagnostics.
 
-Phase 12 completes the original roadmap hardening pass. WAN remains planner-only for 2.2; runtime behavior, actual conditioning, media guide semantics, and sampler wiring remain deferred until the exact WAN workflow is chosen. The current LTX path covers text, image, video, provided audio, native-audio gating, identity/reference helpers, privacy mode, prompt optimizer, and clear failure scenarios.
+Phase 12 completes the original roadmap hardening pass. Phase 13 is a post-roadmap WAN implementation step. WAN 2.2 now has Config, Planner, and Runtime nodes, but Timed visual keyframes are planned/debug-visible only in the ComfyUI Core backend; WanVideoWrapper, S2V/audio conditioning, Animate, and reference-library support remain deferred. The current LTX path covers text, image, video, provided audio, native-audio gating, identity/reference helpers, privacy mode, prompt optimizer, and clear failure scenarios.
 
 UI preference for further edits: use compact icon buttons and icon menu controls for node buttons/selection controls where practical, matching the timeline toolbar style. Keep full English labels in tooltips, aria labels, and dropdown menu items rather than putting bulky text controls in the node body.
 
-WAN 2.2 runtime remains deferred until the WAN execution workflow is chosen.
+Next WAN work should focus on a real backend that can apply Timed keyframes or a WanVideoWrapper adapter, depending on which workflow is chosen.

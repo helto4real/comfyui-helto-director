@@ -52,10 +52,13 @@ def test_wan_nodes_register_with_custom_sockets_and_mappings():
 
     assert "HeltoWAN22TimelineConfig" in node_ids
     assert "HeltoWAN22TimelinePlanner" in node_ids
+    assert "HeltoWAN22TimelineRuntime" in node_ids
     assert "HeltoWAN22TimelineConfig" in module.NODE_CLASS_MAPPINGS
     assert "HeltoWAN22TimelinePlanner" in module.NODE_CLASS_MAPPINGS
+    assert "HeltoWAN22TimelineRuntime" in module.NODE_CLASS_MAPPINGS
     assert module.NODE_DISPLAY_NAME_MAPPINGS["HeltoWAN22TimelineConfig"] == "WAN 2.2 Timeline Config"
     assert module.NODE_DISPLAY_NAME_MAPPINGS["HeltoWAN22TimelinePlanner"] == "WAN 2.2 Timeline Planner"
+    assert module.NODE_DISPLAY_NAME_MAPPINGS["HeltoWAN22TimelineRuntime"] == "WAN 2.2 Timeline Runtime"
 
     config_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelineConfig"].define_schema()
     planner_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelinePlanner"].define_schema()
@@ -78,11 +81,15 @@ def test_wan_config_defaults_include_skeleton_rules():
     assert config["model_family"] == "WAN"
     assert config["model_version"] == "2.2"
     assert config["resolution_profile"] == "Auto from Director"
-    assert config["audio_mode"] == "Ignore Timeline Audio"
+    assert config["model_mode"] == "I2V-A14B"
+    assert config["prompt_routing"] == "Prompt Relay"
+    assert config["visual_conditioning_mode"] == "Timed Keyframes"
+    assert config["audio_policy"] == "Final Mix Only"
+    assert config["runtime_backend_profile"] == "Plan Only"
     assert config["rules"] == {
         "divisible_by": 16,
-        "frame_rule": "none",
-        "temporal_stride": 1,
+        "frame_rule": "4n+1 latent chunks",
+        "temporal_stride": 4,
     }
 
 
@@ -116,9 +123,10 @@ def test_wan_planner_builds_serializable_text_plan_with_gap_no_guidance():
     assert plan["section_plan"][1]["role"] == "No Guidance"
     assert plan["prompt_plan"][0]["effective_prompt"] == "cinematic lighting, wide shot"
     assert plan["prompt_plan"][1]["effective_prompt"] == ""
-    assert plan["model_specific"]["wan"]["runtime_status"] == "Planner skeleton only"
+    assert plan["model_specific"]["wan"]["runtime_status"] == "Runtime backend selected by WAN Timeline Runtime"
+    assert sum(plan["model_specific"]["wan"]["prompt_relay"]["segment_lengths"]) == plan["model_specific"]["wan"]["prompt_relay"]["latent_chunk_count"]
     assert validation["is_valid"] is True
-    assert "WAN_DIRECTOR_GAP_NO_GUIDANCE" in [entry["code"] for entry in validation["info"]]
+    assert "WAN_GAP_HAS_NO_CONDITIONING" in [entry["code"] for entry in validation["warnings"]]
     assert debug["source"] == "WAN Planner"
     assert debug["enabled"] is True
     assert debug["summary"]["planned_ranges"] == 2
@@ -201,18 +209,17 @@ def test_wan_planner_preserves_unsupported_media_audio_with_warnings():
 
     assert validation["is_valid"] is True
     warning_codes = [entry["code"] for entry in validation["warnings"]]
-    assert warning_codes == [
-        "WAN_IMAGE_SECTION_UNSUPPORTED",
-        "WAN_VIDEO_SECTION_UNSUPPORTED",
-        "WAN_AUDIO_CLIP_UNSUPPORTED",
-    ]
+    assert warning_codes == ["WAN_VIDEO_SECTION_PROMPT_ONLY"]
+    info_codes = [entry["code"] for entry in validation["info"]]
+    assert "WAN_VISUAL_KEYFRAMES_PLANNED" in info_codes
+    assert "WAN_AUDIO_FINAL_MIX_ONLY" in info_codes
     assert [entry["asset_id"] for entry in plan["media_plan"]] == ["image_001", "video_001"]
-    assert plan["media_plan"][0]["wan_role"] == "Unsupported Guidance"
+    assert plan["media_plan"][0]["wan_role"] == "Visual Keyframe Candidate"
     assert plan["media_plan"][1]["source_in"] == 1.0
     assert plan["media_plan"][1]["video_guidance_frame_count"] == 17
     assert plan["audio_plan"][0]["asset_id"] == "audio_001"
     assert plan["audio_plan"][0]["volume"] == 0.5
-    assert debug["summary"]["warning_count"] == 3
+    assert debug["summary"]["warning_count"] == 1
 
 
 def test_wan_planner_propagates_invalid_director_timeline_without_crash():

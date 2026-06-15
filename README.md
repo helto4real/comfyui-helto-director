@@ -23,6 +23,7 @@ See [LTX 2.3 Timeline Workflow Guide](docs/examples/ltx_timeline_workflow_guide.
 - [Media picker setup](docs/picker_setup.md)
 - [Privacy mode limitations](docs/privacy_limitations.md)
 - [Current limitations](docs/current_limitations.md)
+- [WAN 2.2 Timeline support](docs/WAN22_SUPPORT.md)
 - [WAN 2.2 skeleton status](docs/wan_skeleton_status.md)
 
 ## Source of Truth

@@ -71,3 +71,4 @@ def test_comfyui_style_loader_includes_phase11_wan_nodes():
 
     assert "HeltoWAN22TimelineConfig" in node_ids
     assert "HeltoWAN22TimelinePlanner" in node_ids
+    assert "HeltoWAN22TimelineRuntime" in node_ids

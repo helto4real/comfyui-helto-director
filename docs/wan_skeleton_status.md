@@ -1,24 +1,26 @@
-# WAN 2.2 Skeleton Status
+# WAN 2.2 Status
 
-WAN 2.2 support is planner-only in Phase 11.
+WAN 2.2 support has moved beyond the Phase 11 planner skeleton into Phase 13 runtime planning and Plan Only execution support.
 
 Implemented:
 
 - `WAN 2.2 Timeline Config`
 - `WAN 2.2 Timeline Planner`
+- `WAN 2.2 Timeline Runtime`
 - `WAN_TIMELINE_CONFIG`
 - `WAN_TIMELINE_PLAN`
-- prompt ranges with global prompt merge
-- gap ranges as No Guidance
-- media and audio metadata preservation
-- warnings for unsupported Image, Video, and Audio timeline features
+- I2V-A14B as the default model mode
+- Prompt Relay planning with latent chunk segment lengths
+- all Image Sections preserved as requested visual keyframe candidates
+- Plan Only runtime debug mode
+- ComfyUI Core runtime adapter for Start and End image conditioning
+- warnings for unsupported Timed keyframes, Video Sections, and audio conditioning
 
-Deferred:
+Still limited:
 
-- WAN Runtime
-- WAN conditioning materialization
-- WAN media guide semantics
-- WAN sampler wiring
-- WAN-specific source-video/audio behavior
+- Timed visual keyframes are planned but not applied by the ComfyUI Core backend.
+- WanVideoWrapper integration is not implemented.
+- WAN Video Section conditioning is not implemented.
+- WAN audio conditioning, S2V, Animate, and reference library behavior are not implemented.
 
-Use the WAN skeleton to verify that a generic Director timeline can be planned for a second model family without adding WAN logic to the Director.
+See [WAN 2.2 Timeline Support](WAN22_SUPPORT.md) for the current workflow and debug fields.

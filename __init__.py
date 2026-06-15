@@ -35,6 +35,9 @@ WANTimelineConfig = importlib.import_module(
 WANTimelinePlanner = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.wan_timeline_planner.node"
 ).WANTimelinePlanner
+WANTimelineRuntime = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.wan_timeline_runtime.node"
+).WANTimelineRuntime
 _identity_module = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_identity.node"
 )
@@ -73,6 +76,7 @@ NODE_CLASS_MAPPINGS = {
     "HeltoLTX23TimelineRuntime": LTXTimelineRuntime,
     "HeltoWAN22TimelineConfig": WANTimelineConfig,
     "HeltoWAN22TimelinePlanner": WANTimelinePlanner,
+    "HeltoWAN22TimelineRuntime": WANTimelineRuntime,
     "HeltoLTX23TimelineCropReferenceTail": LTXTimelineCropReferenceTail,
     "HeltoLTX23TimelineReferenceImageSelector": LTXTimelineReferenceImageSelector,
     "HeltoLTX23TimelineIdentityAnchorLatentAware": LTXTimelineIdentityAnchorLatentAware,
@@ -88,6 +92,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoLTX23TimelineRuntime": "LTX 2.3 Timeline Runtime",
     "HeltoWAN22TimelineConfig": "WAN 2.2 Timeline Config",
     "HeltoWAN22TimelinePlanner": "WAN 2.2 Timeline Planner",
+    "HeltoWAN22TimelineRuntime": "WAN 2.2 Timeline Runtime",
     "HeltoLTX23TimelineCropReferenceTail": "LTX 2.3 Timeline Crop Reference Tail",
     "HeltoLTX23TimelineReferenceImageSelector": "LTX 2.3 Timeline Reference Image Selector",
     "HeltoLTX23TimelineIdentityAnchorLatentAware": "LTX 2.3 Timeline Identity Anchor: Latent Aware",
@@ -107,6 +112,7 @@ class TimelineDirectorExtension(ComfyExtension):
             LTXTimelineRuntime,
             WANTimelineConfig,
             WANTimelinePlanner,
+            WANTimelineRuntime,
             LTXTimelineCropReferenceTail,
             LTXTimelineReferenceImageSelector,
             LTXTimelineIdentityAnchorLatentAware,
@@ -133,6 +139,7 @@ __all__ = [
     "LTXTimelineReferenceImageSelector",
     "WANTimelineConfig",
     "WANTimelinePlanner",
+    "WANTimelineRuntime",
     "register_media_browser_routes",
     "register_media_cache_routes",
     "register_privacy_routes",
