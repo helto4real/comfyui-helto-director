@@ -1,0 +1,257 @@
+import asyncio
+import copy
+import importlib.util
+import sys
+from pathlib import Path
+
+from shared.contracts.video_timeline import (
+    ASSET_SOURCE_FILE_PATH,
+    ASSET_TYPE_AUDIO,
+    ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
+    SECTION_TYPE_IMAGE,
+    SECTION_TYPE_TEXT,
+    SECTION_TYPE_VIDEO,
+)
+from shared.timeline import create_default_video_timeline
+from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
+
+
+def _load_nodepack():
+    module_path = Path(__file__).resolve().parents[1]
+    sys_module_name = str(module_path).replace(".", "_x_")
+    spec = importlib.util.spec_from_file_location(
+        sys_module_name,
+        module_path / "__init__.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+
+    previous = sys.modules.get(sys_module_name)
+    previous_path = list(sys.path)
+    sys.modules[sys_module_name] = module
+    try:
+        sys.path = [
+            path
+            for path in sys.path
+            if Path(path or ".").resolve() != module_path
+        ]
+        spec.loader.exec_module(module)
+        extension = asyncio.run(module.comfy_entrypoint())
+        return module, asyncio.run(extension.get_node_list())
+    finally:
+        sys.path = previous_path
+        if previous is None:
+            sys.modules.pop(sys_module_name, None)
+        else:
+            sys.modules[sys_module_name] = previous
+
+
+def test_wan_nodes_register_with_custom_sockets_and_mappings():
+    module, node_classes = _load_nodepack()
+    node_ids = [node_class.define_schema().node_id for node_class in node_classes]
+
+    assert "HeltoWAN22TimelineConfig" in node_ids
+    assert "HeltoWAN22TimelinePlanner" in node_ids
+    assert "HeltoWAN22TimelineConfig" in module.NODE_CLASS_MAPPINGS
+    assert "HeltoWAN22TimelinePlanner" in module.NODE_CLASS_MAPPINGS
+    assert module.NODE_DISPLAY_NAME_MAPPINGS["HeltoWAN22TimelineConfig"] == "WAN 2.2 Timeline Config"
+    assert module.NODE_DISPLAY_NAME_MAPPINGS["HeltoWAN22TimelinePlanner"] == "WAN 2.2 Timeline Planner"
+
+    config_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelineConfig"].define_schema()
+    planner_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelinePlanner"].define_schema()
+    assert [output.io_type for output in config_schema.outputs] == ["WAN_TIMELINE_CONFIG"]
+    assert [input_item.io_type for input_item in planner_schema.inputs] == [
+        "VIDEO_TIMELINE",
+        "WAN_TIMELINE_CONFIG",
+    ]
+    assert [output.io_type for output in planner_schema.outputs] == [
+        "WAN_TIMELINE_PLAN",
+        "TIMELINE_VALIDATION",
+        "DEBUG_INFO",
+    ]
+
+
+def test_wan_config_defaults_include_skeleton_rules():
+    config = create_wan_timeline_config()
+
+    assert config["type"] == "WAN_TIMELINE_CONFIG"
+    assert config["model_family"] == "WAN"
+    assert config["model_version"] == "2.2"
+    assert config["resolution_profile"] == "Auto from Director"
+    assert config["audio_mode"] == "Ignore Timeline Audio"
+    assert config["rules"] == {
+        "divisible_by": 16,
+        "frame_rule": "none",
+        "temporal_stride": 1,
+    }
+
+
+def test_wan_planner_builds_serializable_text_plan_with_gap_no_guidance():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["global_prompt"]["enabled"] = True
+    timeline["project"]["global_prompt"]["prompt"] = "cinematic lighting"
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 0.5,
+            "prompt": "wide shot",
+        }
+    )
+
+    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config(debug_mode=True))
+
+    assert plan["type"] == "WAN_TIMELINE_PLAN"
+    assert plan["model_family"] == "WAN"
+    assert plan["model_version"] == "2.2"
+    assert plan["resolved_output"]["frame_count"] == 48
+    assert plan["resolved_output"]["width"] % 16 == 0
+    assert plan["resolved_output"]["height"] % 16 == 0
+    assert [entry["type"] for entry in plan["section_plan"]] == ["Text", "Gap"]
+    assert plan["section_plan"][0]["start_frame"] == 0
+    assert plan["section_plan"][0]["end_frame_exclusive"] == 12
+    assert plan["section_plan"][1]["role"] == "No Guidance"
+    assert plan["prompt_plan"][0]["effective_prompt"] == "cinematic lighting, wide shot"
+    assert plan["prompt_plan"][1]["effective_prompt"] == ""
+    assert plan["model_specific"]["wan"]["runtime_status"] == "Planner skeleton only"
+    assert validation["is_valid"] is True
+    assert "WAN_DIRECTOR_GAP_NO_GUIDANCE" in [entry["code"] for entry in validation["info"]]
+    assert debug["source"] == "WAN Planner"
+    assert debug["enabled"] is True
+    assert debug["summary"]["planned_ranges"] == 2
+
+
+def test_wan_planner_preserves_unsupported_media_audio_with_warnings():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["assets"].extend(
+        [
+            {
+                "asset_id": "image_001",
+                "type": ASSET_TYPE_IMAGE,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": "/mnt/media/reference.png",
+                "name": "reference.png",
+            },
+            {
+                "asset_id": "video_001",
+                "type": ASSET_TYPE_VIDEO,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": "/mnt/media/source.mp4",
+                "name": "source.mp4",
+            },
+            {
+                "asset_id": "audio_001",
+                "type": ASSET_TYPE_AUDIO,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": "/mnt/media/sound.wav",
+                "name": "sound.wav",
+            },
+        ]
+    )
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_image",
+                "type": SECTION_TYPE_IMAGE,
+                "start_time": 0.0,
+                "end_time": 0.5,
+                "image": {"asset_id": "image_001"},
+                "prompt": "",
+                "guide_strength": 0.7,
+            },
+            {
+                "item_id": "section_video",
+                "type": SECTION_TYPE_VIDEO,
+                "start_time": 0.5,
+                "end_time": 1.0,
+                "video": {"asset_id": "video_001"},
+                "prompt": "continue",
+                "source_in": 1.0,
+                "source_out": 2.0,
+                "video_guidance_range": "Last Frames",
+                "video_guidance_frame_count": 17,
+            },
+        ]
+    )
+    timeline["audio_tracks"].append(
+        {
+            "track_id": "audio_track_001",
+            "clips": [
+                {
+                    "item_id": "audio_clip_001",
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "audio": {"asset_id": "audio_001"},
+                    "volume": 0.5,
+                    "fade_in": 0.1,
+                    "fade_out": 0.2,
+                    "enabled": True,
+                    "lane": 0,
+                }
+            ],
+        }
+    )
+
+    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config())
+
+    assert validation["is_valid"] is True
+    warning_codes = [entry["code"] for entry in validation["warnings"]]
+    assert warning_codes == [
+        "WAN_IMAGE_SECTION_UNSUPPORTED",
+        "WAN_VIDEO_SECTION_UNSUPPORTED",
+        "WAN_AUDIO_CLIP_UNSUPPORTED",
+    ]
+    assert [entry["asset_id"] for entry in plan["media_plan"]] == ["image_001", "video_001"]
+    assert plan["media_plan"][0]["wan_role"] == "Unsupported Guidance"
+    assert plan["media_plan"][1]["source_in"] == 1.0
+    assert plan["media_plan"][1]["video_guidance_frame_count"] == 17
+    assert plan["audio_plan"][0]["asset_id"] == "audio_001"
+    assert plan["audio_plan"][0]["volume"] == 0.5
+    assert debug["summary"]["warning_count"] == 3
+
+
+def test_wan_planner_propagates_invalid_director_timeline_without_crash():
+    timeline = create_default_video_timeline()
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "",
+        }
+    )
+
+    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config())
+
+    assert plan["type"] == "WAN_TIMELINE_PLAN"
+    assert validation["is_valid"] is False
+    assert "TEXT_SECTION_EMPTY_PROMPT" in [entry["code"] for entry in validation["errors"]]
+    assert "WAN_DIRECTOR_TIMELINE_INVALID" in [entry["code"] for entry in validation["errors"]]
+    assert debug["summary"]["error_count"] == 2
+
+
+def test_wan_planner_does_not_mutate_inputs():
+    timeline = create_default_video_timeline()
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "wide shot",
+        }
+    )
+    config = create_wan_timeline_config(debug_mode=True)
+    timeline_before = copy.deepcopy(timeline)
+    config_before = copy.deepcopy(config)
+
+    build_wan_timeline_plan(timeline, config)
+
+    assert timeline == timeline_before
+    assert config == config_before

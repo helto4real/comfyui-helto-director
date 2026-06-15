@@ -15,9 +15,11 @@
 - Phase 8 adds LTX 2.3 Timeline Config and Planner nodes that output serializable LTX plans with frame mapping, resolved dimensions, prompt/media/audio plans, validation, and debug info.
 - Phase 9 adds the LTX 2.3 Timeline Runtime node with Prompt Relay model patching, image/video guide data/application, default tail-frame video guidance, provided-audio mixing, native-audio mode gating, optional negative conditioning, video/audio latents, trimmed source-video outputs, and runtime debug.
 - Phase 10 adds LTX 2.3 Timeline identity/reference helper nodes, reference selection from runtime guide data, crop-reference-tail support, runtime identity anchor application, third-party notices for bundled/adapted helper code, and practical workflow documentation with visual infographics.
+- Phase 11 adds WAN 2.2 Timeline Config and Planner skeleton nodes that output serializable WAN plans with prompt ranges, media/audio metadata preservation, validation warnings for unsupported features, and debug info.
+- Phase 12 adds importable example workflows, README quick links, picker setup docs, privacy limitations, current limitations, WAN skeleton status docs, and docs/example validation tests.
 
-Phase 10 has been hardened through practical ComfyUI graph documentation before moving to WAN 2.2. The current LTX path covers text, image, video, provided audio, native-audio gating, identity/reference helpers, privacy mode, prompt optimizer, and clear failure scenarios.
+Phase 12 completes the original roadmap hardening pass. WAN remains planner-only for 2.2; runtime behavior, actual conditioning, media guide semantics, and sampler wiring remain deferred until the exact WAN workflow is chosen. The current LTX path covers text, image, video, provided audio, native-audio gating, identity/reference helpers, privacy mode, prompt optimizer, and clear failure scenarios.
 
 UI preference for further edits: use compact icon buttons and icon menu controls for node buttons/selection controls where practical, matching the timeline toolbar style. Keep full English labels in tooltips, aria labels, and dropdown menu items rather than putting bulky text controls in the node body.
 
-WAN 2.2 planning/runtime remains deferred until the LTX runtime path has been exercised end to end.
+WAN 2.2 runtime remains deferred until the WAN execution workflow is chosen.

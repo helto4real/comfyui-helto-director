@@ -17,6 +17,14 @@ Restart ComfyUI after cloning.
 
 See [LTX 2.3 Timeline Workflow Guide](docs/examples/ltx_timeline_workflow_guide.md) for practical graph wiring, source-video extension, prompt optimizer, identity/reference helpers, audio modes, and privacy mode behavior.
 
+## Quick Links
+
+- [Workflow examples](docs/workflows/README.md)
+- [Media picker setup](docs/picker_setup.md)
+- [Privacy mode limitations](docs/privacy_limitations.md)
+- [Current limitations](docs/current_limitations.md)
+- [WAN 2.2 skeleton status](docs/wan_skeleton_status.md)
+
 ## Source of Truth
 
 See [PLAN.md](PLAN.md) for the original locked product rules, VIDEO_TIMELINE contract, and phase roadmap.

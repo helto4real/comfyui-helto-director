@@ -1,0 +1,102 @@
+{
+  "revision": 0,
+  "last_node_id": 5,
+  "last_link_id": 2,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "PrimitiveStringMultiline",
+      "pos": [40, 40],
+      "size": [520, 130],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
+      "title": "Example Notes",
+      "properties": {},
+      "widgets_values": ["WAN 2.2 is planner-only in this nodepack today. This workflow verifies Director -> WAN Config -> WAN Planner and intentionally has no WAN runtime node."]
+    },
+    {
+      "id": 2,
+      "type": "HeltoVideoTimelineDirector",
+      "pos": [40, 230],
+      "size": [560, 420],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        { "name": "VIDEO_TIMELINE", "type": "VIDEO_TIMELINE", "links": [1] },
+        { "name": "TIMELINE_VALIDATION", "type": "TIMELINE_VALIDATION", "links": [] }
+      ],
+      "title": "Video Timeline Director",
+      "properties": {},
+      "widgets_values": [
+        2,
+        24,
+        "16:9",
+        "Landscape",
+        "Quick Draft",
+        "{\"schema_version\":\"1.0\",\"type\":\"VIDEO_TIMELINE\",\"project\":{\"duration_seconds\":2,\"frame_rate\":24,\"aspect_ratio\":\"16:9\",\"orientation\":\"Landscape\",\"quality_preset\":\"Quick Draft\",\"default_crop_mode\":\"Project Default\",\"settings\":{\"allow_gaps\":true,\"auto_close_gaps\":false,\"minimum_section_duration_seconds\":0.25,\"show_resolved_model_output\":false},\"global_prompt\":{\"enabled\":true,\"prompt\":\"soft cinematic lighting\",\"position\":\"Prefix\",\"show_effective_prompt\":false},\"audio\":{\"use_native_audio\":false,\"always_normalize\":false,\"normalization_mode\":\"Integrated LUFS\",\"target_lufs\":-16,\"true_peak_limit_db\":-1,\"default_volume\":1,\"default_fade_in_seconds\":0,\"default_fade_out_seconds\":0},\"privacy\":{\"mode\":false},\"display\":{\"show_section_labels\":true,\"show_thumbnails\":true,\"show_audio_waveforms\":true}},\"ui_state\":{\"timeline_display_mode\":\"Sections\",\"section_edit_mode\":\"Trim Neighbor\",\"snap_mode\":\"Frames\",\"view_start_seconds\":0,\"view_end_seconds\":2,\"selected_item_id\":\"section_text_001\",\"state_revision\":0},\"assets\":[],\"director_track\":{\"track_id\":\"director\",\"sections\":[{\"item_id\":\"section_text_001\",\"type\":\"Text\",\"start_time\":0,\"end_time\":1,\"prompt\":\"wide establishing shot\"}]},\"audio_tracks\":[],\"model_outputs\":{},\"validation\":{\"is_valid\":true,\"errors\":[],\"warnings\":[],\"info\":[]}}"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "HeltoWAN22TimelineConfig",
+      "pos": [660, 230],
+      "size": [300, 160],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "WAN_TIMELINE_CONFIG", "type": "WAN_TIMELINE_CONFIG", "links": [2] }],
+      "title": "WAN 2.2 Timeline Config",
+      "properties": {},
+      "widgets_values": ["Auto from Director", "Ignore Timeline Audio", true]
+    },
+    {
+      "id": 4,
+      "type": "HeltoWAN22TimelinePlanner",
+      "pos": [1020, 230],
+      "size": [320, 170],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        { "name": "video_timeline", "type": "VIDEO_TIMELINE", "link": 1 },
+        { "name": "wan_timeline_config", "type": "WAN_TIMELINE_CONFIG", "link": 2 }
+      ],
+      "outputs": [
+        { "name": "WAN_TIMELINE_PLAN", "type": "WAN_TIMELINE_PLAN", "links": [] },
+        { "name": "TIMELINE_VALIDATION", "type": "TIMELINE_VALIDATION", "links": [] },
+        { "name": "DEBUG_INFO", "type": "DEBUG_INFO", "links": [] }
+      ],
+      "title": "WAN 2.2 Timeline Planner",
+      "properties": {},
+      "widgets_values": []
+    },
+    {
+      "id": 5,
+      "type": "PrimitiveStringMultiline",
+      "pos": [1020, 460],
+      "size": [420, 110],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
+      "title": "WAN Runtime Status",
+      "properties": {},
+      "widgets_values": ["The planner output is serializable and includes warnings for unsupported Image, Video, and Audio timeline features. WAN runtime remains future work."]
+    }
+  ],
+  "links": [
+    [1, 2, 0, 4, 0, "VIDEO_TIMELINE"],
+    [2, 3, 0, 4, 1, "WAN_TIMELINE_CONFIG"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": { "ds": { "scale": 0.9, "offset": [0, 0] } },
+  "version": 0.4
+}

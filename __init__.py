@@ -29,6 +29,12 @@ LTXTimelinePlanner = importlib.import_module(
 LTXTimelineRuntime = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_runtime.node"
 ).LTXTimelineRuntime
+WANTimelineConfig = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.wan_timeline_config.node"
+).WANTimelineConfig
+WANTimelinePlanner = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.wan_timeline_planner.node"
+).WANTimelinePlanner
 _identity_module = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_identity.node"
 )
@@ -65,6 +71,8 @@ NODE_CLASS_MAPPINGS = {
     "HeltoLTX23TimelineConfig": LTXTimelineConfig,
     "HeltoLTX23TimelinePlanner": LTXTimelinePlanner,
     "HeltoLTX23TimelineRuntime": LTXTimelineRuntime,
+    "HeltoWAN22TimelineConfig": WANTimelineConfig,
+    "HeltoWAN22TimelinePlanner": WANTimelinePlanner,
     "HeltoLTX23TimelineCropReferenceTail": LTXTimelineCropReferenceTail,
     "HeltoLTX23TimelineReferenceImageSelector": LTXTimelineReferenceImageSelector,
     "HeltoLTX23TimelineIdentityAnchorLatentAware": LTXTimelineIdentityAnchorLatentAware,
@@ -78,6 +86,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoLTX23TimelineConfig": "LTX 2.3 Timeline Config",
     "HeltoLTX23TimelinePlanner": "LTX 2.3 Timeline Planner",
     "HeltoLTX23TimelineRuntime": "LTX 2.3 Timeline Runtime",
+    "HeltoWAN22TimelineConfig": "WAN 2.2 Timeline Config",
+    "HeltoWAN22TimelinePlanner": "WAN 2.2 Timeline Planner",
     "HeltoLTX23TimelineCropReferenceTail": "LTX 2.3 Timeline Crop Reference Tail",
     "HeltoLTX23TimelineReferenceImageSelector": "LTX 2.3 Timeline Reference Image Selector",
     "HeltoLTX23TimelineIdentityAnchorLatentAware": "LTX 2.3 Timeline Identity Anchor: Latent Aware",
@@ -95,6 +105,8 @@ class TimelineDirectorExtension(ComfyExtension):
             LTXTimelineConfig,
             LTXTimelinePlanner,
             LTXTimelineRuntime,
+            WANTimelineConfig,
+            WANTimelinePlanner,
             LTXTimelineCropReferenceTail,
             LTXTimelineReferenceImageSelector,
             LTXTimelineIdentityAnchorLatentAware,
@@ -119,6 +131,8 @@ __all__ = [
     "LTXTimelineIdentityAnchorFace",
     "LTXTimelineIdentityAnchorLatentAware",
     "LTXTimelineReferenceImageSelector",
+    "WANTimelineConfig",
+    "WANTimelinePlanner",
     "register_media_browser_routes",
     "register_media_cache_routes",
     "register_privacy_routes",

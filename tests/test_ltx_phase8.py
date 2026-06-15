@@ -54,6 +54,8 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
         "HeltoLTX23TimelineConfig",
         "HeltoLTX23TimelinePlanner",
         "HeltoLTX23TimelineRuntime",
+        "HeltoWAN22TimelineConfig",
+        "HeltoWAN22TimelinePlanner",
         "HeltoLTX23TimelineCropReferenceTail",
         "HeltoLTX23TimelineReferenceImageSelector",
         "HeltoLTX23TimelineIdentityAnchorLatentAware",

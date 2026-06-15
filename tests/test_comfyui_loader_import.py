@@ -64,3 +64,10 @@ def test_comfyui_style_loader_includes_phase10_timeline_identity_nodes():
     assert "HeltoLTX23TimelineIdentityAnchorFace" in node_ids
     assert "HeltoLTX23TimelineIdentityAnchorCombine" in node_ids
     assert "HeltoLTX23TimelineApplyIdentityAnchor" in node_ids
+
+
+def test_comfyui_style_loader_includes_phase11_wan_nodes():
+    node_ids = [node.define_schema().node_id for node in get_node_list()]
+
+    assert "HeltoWAN22TimelineConfig" in node_ids
+    assert "HeltoWAN22TimelinePlanner" in node_ids
