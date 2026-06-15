@@ -132,6 +132,12 @@ def build_wan_runtime_outputs(
         model_patch_status,
         validation_entries,
     )
+    if is_bernini and not prompt_relay.get("enabled", True):
+        validation_entries.append(warning(
+            "BERNINI_PROMPT_RELAY_DISABLED",
+            "Bernini is running with Prompt Relay disabled; timeline prompts were merged into one prompt.",
+            "Enable Prompt Relay when comparing against manual Bernini workflows that rely on temporal prompt routing.",
+        ))
     runtime_negative = _resolve_negative_conditioning(negative, positive)
     if is_bernini:
         positive, runtime_negative, video_latent, guide_debug = build_bernini_runtime_payload(
@@ -141,7 +147,9 @@ def build_wan_runtime_outputs(
             plan,
             batch_size,
             latent_spec,
+            prompt_debug=prompt_debug,
         )
+        _append_bernini_source_aspect_warnings(guide_debug, validation_entries)
     else:
         positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
             positive,
@@ -401,6 +409,28 @@ def _build_prompt_payload_and_patch_models(
         "Enable Prompt Relay in WAN Config for temporal prompt routing.",
     ))
     return prompt_debug, positive, high_noise_model, low_noise_model
+
+
+def _append_bernini_source_aspect_warnings(
+    guide_debug: dict[str, Any],
+    validation_entries: list[dict[str, Any]],
+) -> None:
+    for decision in guide_debug.get("media_decisions") or []:
+        if decision.get("bernini_role") != "source_video_single_frame" or not decision.get("aspect_mismatch"):
+            continue
+        validation_entries.append(warning(
+            "BERNINI_SOURCE_ASPECT_MISMATCH",
+            "Bernini source image aspect ratio does not match the output canvas.",
+            "Match the project aspect/orientation to the source image or crop the image manually to the intended output framing.",
+            {
+                "source_aspect_ratio": decision.get("source_aspect_ratio"),
+                "target_aspect_ratio": decision.get("target_aspect_ratio"),
+                "source_size": decision.get("exif_transposed_size") or decision.get("original_size"),
+                "target_size": [decision.get("target_width"), decision.get("target_height")],
+                "resize": decision.get("comfy_source_video_resize"),
+            },
+        ))
+        return
 
 
 def _visual_validation_entries(visual: dict[str, Any], backend: str) -> list[dict[str, Any]]:

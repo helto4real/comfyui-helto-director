@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Any
 import importlib.util
 
-import numpy as np
 import torch
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageOps
 
 from ...media_cache import resolve_media_path
 
@@ -222,11 +222,16 @@ def load_keyframe_image(
         raise ValueError(f"RUNTIME_MEDIA_FILE_NOT_FOUND: WAN visual keyframe image does not exist: {path}")
     try:
         with Image.open(path) as image:
+            original_size = list(image.size)
+            original_orientation = image.getexif().get(274)
+            image = ImageOps.exif_transpose(image)
+            transposed_size = list(image.size)
             image = image.convert("RGB")
             array = np.array(image, dtype=np.float32) / 255.0
     except Exception as exc:
         raise ValueError(f"RUNTIME_IMAGE_DECODE_FAILED: Could not decode WAN visual keyframe image {path}: {exc}") from exc
     tensor = torch.from_numpy(array).unsqueeze(0)
+    output = resize_image_tensor(tensor, width, height) if resize else tensor
     if media_decisions is not None:
         media_decisions.append({
             "section_id": keyframe.get("section_id"),
@@ -235,14 +240,32 @@ def load_keyframe_image(
             "loaded": True,
             "target_width": width,
             "target_height": height,
+            "original_size": original_size,
+            "exif_orientation": int(original_orientation) if original_orientation is not None else None,
+            "exif_transposed_size": transposed_size,
+            "tensor_shape": _tensor_shape(output),
+            "tensor_stats": _tensor_stats(output),
         })
-    return resize_image_tensor(tensor, width, height) if resize else tensor
+    return output
 
 
 def resize_image_tensor(tensor: torch.Tensor, width: int, height: int) -> torch.Tensor:
     channels_first = tensor.movedim(-1, 1)
     resized = torch.nn.functional.interpolate(channels_first, size=(height, width), mode="bilinear", align_corners=False)
     return resized.movedim(1, -1)
+
+
+def _tensor_shape(tensor: torch.Tensor) -> list[int]:
+    return [int(dim) for dim in tensor.shape]
+
+
+def _tensor_stats(tensor: torch.Tensor) -> dict[str, float]:
+    detached = tensor.detach().float()
+    return {
+        "min": float(detached.min().item()),
+        "max": float(detached.max().item()),
+        "mean": float(detached.mean().item()),
+    }
 
 
 def conditioning_set_values(conditioning, values):

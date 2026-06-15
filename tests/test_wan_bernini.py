@@ -157,6 +157,7 @@ def test_bernini_comfyui_core_allows_text_only_t2v_prompt():
     assert runtime_debug["bernini"]["has_user_conditioning"] is True
     assert runtime_debug["bernini"]["timeline_prompt_count"] == 1
     assert _helper_decision(runtime_debug) == "BerniniConditioning"
+    assert "BERNINI_PROMPT_RELAY_DISABLED" in [entry["code"] for entry in runtime_debug["validation"]["warnings"]]
     assert positive[0][1]["prompt"].startswith(BERNINI_SYSTEM_PROMPTS["t2v"])
     assert video_latent["samples"].shape[1] == 16
 
@@ -183,6 +184,18 @@ def test_bernini_comfyui_core_uses_context_latents_for_i2v_single_frame_source(t
     assert runtime_debug["bernini"]["task_type"] == "i2v"
     assert runtime_debug["bernini"]["system_prompt"] == BERNINI_SYSTEM_PROMPTS["i2v"]
     assert runtime_debug["bernini"]["runtime_media_decisions"][0]["bernini_role"] == "source_video_single_frame"
+    assert "reference_images" not in runtime_debug["bernini"]["runtime_media_decisions"][0]
+    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["tensor_shape"] == [1, 8, 12, 3]
+    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["tensor_stats"]["max"] > 0.0
+    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["source_aspect_ratio"] == 1.5
+    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["aspect_mismatch"] is True
+    assert "BERNINI_SOURCE_ASPECT_MISMATCH" in [entry["code"] for entry in runtime_debug["validation"]["warnings"]]
+    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+    assert conditioning_debug["source_video"]["frame_count"] == 1
+    assert conditioning_debug["source_video"]["tensor_shape"] == [1, 8, 12, 3]
+    assert conditioning_debug["context_latents"]["count"] == 1
+    assert conditioning_debug["context_latents"]["shapes"][0][1] == 16
+    assert conditioning_debug["positive_prompt"]["starts_with_system_prompt"] is True
     assert "single-frame source_video" in " ".join(runtime_debug["bernini"]["runtime_diagnostics"])
     assert _helper_decision(runtime_debug) == "BerniniConditioning"
     assert _helper_decision(runtime_debug) not in {"WanImageToVideo", "Wan22ImageToVideoLatent"}
@@ -192,6 +205,66 @@ def test_bernini_comfyui_core_uses_context_latents_for_i2v_single_frame_source(t
     assert "concat_latent_image" not in positive[0][1]
     assert "concat_mask" not in positive[0][1]
     assert video_latent["samples"].shape[1] == 16
+
+
+def test_bernini_source_image_loader_applies_exif_transpose(tmp_path):
+    image_path = tmp_path / "rotated.jpg"
+    image = Image.new("RGB", (3, 5), (80, 120, 160))
+    exif = image.getexif()
+    exif[274] = 6
+    image.save(image_path, exif=exif)
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _single_image_timeline(image_path),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            resolution_profile="Quick Draft",
+            debug_mode="Full",
+        ),
+    )
+
+    _high, _low, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    media_debug = runtime_debug["bernini"]["runtime_media_decisions"][0]
+    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+
+    assert media_debug["bernini_role"] == "source_video_single_frame"
+    assert media_debug["original_size"] == [3, 5]
+    assert media_debug["exif_orientation"] == 6
+    assert media_debug["exif_transposed_size"] == [5, 3]
+    assert media_debug["tensor_shape"] == [1, 3, 5, 3]
+    assert conditioning_debug["source_video"]["tensor_shape"] == [1, 3, 5, 3]
+
+
+def test_bernini_prompt_debug_falls_back_to_prompt_relay_payload(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            resolution_profile="Quick Draft",
+            debug_mode="Full",
+        ),
+    )
+
+    _high, _low, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClipWithoutPromptMetadata(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+
+    assert conditioning_debug["positive_prompt"]["present"] is True
+    assert conditioning_debug["positive_prompt"]["source"] == "runtime_prompt_debug"
+    assert conditioning_debug["positive_prompt"]["prompt_relay_status"] == "patched"
+    assert conditioning_debug["positive_prompt"]["starts_with_system_prompt"] is True
 
 
 def test_bernini_comfyui_core_rejects_48_channel_wan22_i2v_wiring(tmp_path):
@@ -221,6 +294,13 @@ def _helper_decision(runtime_debug: dict) -> str | None:
     return None
 
 
+def _bernini_decision(runtime_debug: dict, decision_type: str) -> dict:
+    for decision in runtime_debug["bernini"]["runtime_media_decisions"]:
+        if decision.get("type") == decision_type:
+            return decision
+    raise AssertionError(f"Missing Bernini runtime decision {decision_type}")
+
+
 def _text_timeline():
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 0.25
@@ -231,6 +311,29 @@ def _text_timeline():
         "start_time": 0.0,
         "end_time": 0.25,
         "prompt": "simple prompt",
+    })
+    return timeline
+
+
+def _single_image_timeline(path: Path):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 0.25
+    timeline["project"]["frame_rate"] = 8.0
+    timeline["assets"].append({
+        "asset_id": "image_0",
+        "type": ASSET_TYPE_IMAGE,
+        "source_kind": ASSET_SOURCE_FILE_PATH,
+        "path": str(path),
+        "name": path.name,
+    })
+    timeline["director_track"]["sections"].append({
+        "item_id": "section_image_0",
+        "type": SECTION_TYPE_IMAGE,
+        "start_time": 0.0,
+        "end_time": 0.25,
+        "image": {"asset_id": "image_0"},
+        "prompt": "animate this image",
+        "guide_strength": 1.0,
     })
     return timeline
 
@@ -319,6 +422,11 @@ class FakeClip:
 
     def encode_from_tokens_scheduled(self, tokens):
         return [[torch.ones(1, 2), {"prompt": tokens, "pooled_output": torch.ones(1, 2)}]]
+
+
+class FakeClipWithoutPromptMetadata(FakeClip):
+    def encode_from_tokens_scheduled(self, tokens):
+        return [[torch.ones(1, 2), {"pooled_output": torch.ones(1, 2)}]]
 
 
 class FakeCrossAttention:
