@@ -1,6 +1,6 @@
 # WAN 2.2 Status
 
-WAN 2.2 support has moved beyond the Phase 11 planner skeleton into Phase 13 runtime planning and Plan Only execution support.
+WAN 2.2 support has moved beyond the Phase 11 planner skeleton into Phase 15 workflow hardening and debug-focused runtime integration.
 
 Implemented:
 
@@ -14,13 +14,19 @@ Implemented:
 - all Image Sections preserved as requested visual keyframe candidates
 - Plan Only runtime debug mode
 - ComfyUI Core runtime adapter for Start and End image conditioning
+- dual high-noise and low-noise model sockets for Prompt Relay patching
+- Auto backend resolution to Plan Only or ComfyUI Core
+- runtime compatibility reports under `runtime_debug.backend`
+- compact user-facing runtime summaries under `runtime_debug.status`
+- importable WAN workflow examples for text-only, first-image I2V, timed keyframe planning, and audio final-mix metadata
 - warnings for unsupported Timed keyframes, Video Sections, and audio conditioning
 
 Still limited:
 
 - Timed visual keyframes are planned but not applied by the ComfyUI Core backend.
+- ComfyUI Core mode requires CLIP and VAE, and Prompt Relay requires at least one connected WAN model phase.
 - WanVideoWrapper integration is not implemented.
 - WAN Video Section conditioning is not implemented.
 - WAN audio conditioning, S2V, Animate, and reference library behavior are not implemented.
 
-See [WAN 2.2 Timeline Support](WAN22_SUPPORT.md) for the current workflow and debug fields.
+See [WAN 2.2 Timeline Support](WAN22_SUPPORT.md) for the current workflow and debug fields, and [WAN 2.2 Manual Test Checklist](WAN22_MANUAL_TEST_CHECKLIST.md) for hands-on verification.

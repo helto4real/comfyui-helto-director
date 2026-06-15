@@ -151,18 +151,16 @@ def test_video_policy_and_audio_final_mix_validation(tmp_path):
 def test_plan_only_runtime_validates_and_returns_debug():
     plan, _validation, _debug = build_wan_timeline_plan(_text_timeline(), create_wan_timeline_config(debug_mode="Summary"))
 
-    runtime_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
-        model=FakeModel(),
-        clip=FakeClip(),
-        vae=FakeVAE(),
+    runtime_high_model, runtime_low_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
         wan_timeline_plan=plan,
     )
 
-    assert isinstance(runtime_model, FakeModel)
+    assert runtime_high_model is None
+    assert runtime_low_model is None
     assert positive == []
     assert negative == []
-    assert tuple(video_latent["samples"].shape[:3]) == (1, 48, plan["model_specific"]["wan"]["prompt_relay"]["latent_chunk_count"])
-    assert runtime_debug["summary"]["backend"] == "Plan Only"
+    assert tuple(video_latent["samples"].shape[:3]) == (1, 16, plan["model_specific"]["wan"]["prompt_relay"]["latent_chunk_count"])
+    assert runtime_debug["summary"]["resolved_backend"] == "Plan Only"
     assert runtime_debug["summary"]["requested_visual_keyframes"] == 0
 
 
@@ -189,8 +187,9 @@ def test_comfyui_core_runtime_applies_start_end_and_marks_timed_unsupported(tmp_
     plan_before = copy.deepcopy(plan)
     input_negative = [[torch.ones(1, 2), {"tag": "negative"}]]
 
-    runtime_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
-        model=FakeModel(),
+    runtime_high_model, runtime_low_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        low_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
@@ -199,11 +198,12 @@ def test_comfyui_core_runtime_applies_start_end_and_marks_timed_unsupported(tmp_
 
     assert plan == plan_before
     assert input_negative[0][1] == {"tag": "negative"}
-    assert len(runtime_model.object_patches) == 2
-    assert positive[0][1]["concat_latent_image"].shape[1] == 48
+    assert len(runtime_high_model.object_patches) == 2
+    assert len(runtime_low_model.object_patches) == 2
+    assert positive[0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 4
-    assert video_latent["samples"].shape[1] == 48
-    assert runtime_debug["summary"]["backend"] == "ComfyUI Core"
+    assert video_latent["samples"].shape[1] == 16
+    assert runtime_debug["summary"]["resolved_backend"] == "ComfyUI Core"
     assert runtime_debug["summary"]["applied_visual_keyframes"] == 2
     assert runtime_debug["summary"]["unsupported_visual_keyframes"] == 1
     assert runtime_debug["visual_conditioning"]["unsupported_keyframes"][0]["role"] == "Timed"
@@ -273,15 +273,23 @@ class FakeDiffusionModel:
         self.blocks = [FakeBlock(), FakeBlock()]
 
 
+class FakeLatentFormat:
+    latent_channels = 16
+    spacial_downscale_ratio = 8
+
+
 class FakeModel:
     def __init__(self):
         self.diffusion_model = FakeDiffusionModel()
+        self.latent_format = FakeLatentFormat()
         self.object_patches = {}
 
     def clone(self):
         return FakeModel()
 
     def get_model_object(self, name):
+        if name == "latent_format":
+            return self.latent_format
         assert name == "diffusion_model"
         return self.diffusion_model
 
@@ -290,14 +298,14 @@ class FakeModel:
 
 
 class FakeVAE:
-    latent_channels = 48
+    latent_channels = 16
 
     def spacial_compression_encode(self):
-        return 16
+        return 8
 
     def encode(self, image):
         frames = int(image.shape[0])
-        height = math.ceil(int(image.shape[1]) / 16)
-        width = math.ceil(int(image.shape[2]) / 16)
+        height = math.ceil(int(image.shape[1]) / 8)
+        width = math.ceil(int(image.shape[2]) / 8)
         latent_frames = ((frames - 1) // 4) + 1
-        return torch.ones(1, 48, latent_frames, height, width)
+        return torch.ones(1, 16, latent_frames, height, width)

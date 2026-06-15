@@ -1,21 +1,21 @@
 {
   "revision": 0,
-  "last_node_id": 6,
+  "last_node_id": 5,
   "last_link_id": 3,
   "nodes": [
     {
       "id": 1,
       "type": "PrimitiveStringMultiline",
       "pos": [40, 40],
-      "size": [520, 130],
+      "size": [560, 120],
       "flags": {},
       "order": 0,
       "mode": 0,
       "inputs": [],
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
-      "title": "Example Notes",
+      "title": "WAN I2V First Image Notes",
       "properties": {},
-      "widgets_values": ["WAN 2.2 defaults to Plan Only runtime mode. This workflow verifies Director -> WAN Config -> WAN Planner -> WAN Runtime debug without requiring a WAN checkpoint to import."]
+      "widgets_values": ["WAN I2V-A14B example with one Image Section followed by Text Sections. Runtime debug should show one requested Start keyframe candidate and Prompt Relay local prompts."]
     },
     {
       "id": 2,
@@ -33,12 +33,12 @@
       "title": "Video Timeline Director",
       "properties": {},
       "widgets_values": [
-        2,
+        3,
         24,
         "16:9",
         "Landscape",
         "Quick Draft",
-        "{\"schema_version\":\"1.0\",\"type\":\"VIDEO_TIMELINE\",\"project\":{\"duration_seconds\":2,\"frame_rate\":24,\"aspect_ratio\":\"16:9\",\"orientation\":\"Landscape\",\"quality_preset\":\"Quick Draft\",\"default_crop_mode\":\"Project Default\",\"settings\":{\"allow_gaps\":true,\"auto_close_gaps\":false,\"minimum_section_duration_seconds\":0.25,\"show_resolved_model_output\":false},\"global_prompt\":{\"enabled\":true,\"prompt\":\"soft cinematic lighting\",\"position\":\"Prefix\",\"show_effective_prompt\":false},\"audio\":{\"use_native_audio\":false,\"always_normalize\":false,\"normalization_mode\":\"Integrated LUFS\",\"target_lufs\":-16,\"true_peak_limit_db\":-1,\"default_volume\":1,\"default_fade_in_seconds\":0,\"default_fade_out_seconds\":0},\"privacy\":{\"mode\":false},\"display\":{\"show_section_labels\":true,\"show_thumbnails\":true,\"show_audio_waveforms\":true}},\"ui_state\":{\"timeline_display_mode\":\"Sections\",\"section_edit_mode\":\"Trim Neighbor\",\"snap_mode\":\"Frames\",\"view_start_seconds\":0,\"view_end_seconds\":2,\"selected_item_id\":\"section_text_001\",\"state_revision\":0},\"assets\":[],\"director_track\":{\"track_id\":\"director\",\"sections\":[{\"item_id\":\"section_text_001\",\"type\":\"Text\",\"start_time\":0,\"end_time\":1,\"prompt\":\"wide establishing shot\"}]},\"audio_tracks\":[],\"model_outputs\":{},\"validation\":{\"is_valid\":true,\"errors\":[],\"warnings\":[],\"info\":[]}}"
+        "{\"schema_version\":\"1.0\",\"type\":\"VIDEO_TIMELINE\",\"project\":{\"duration_seconds\":3,\"frame_rate\":24,\"aspect_ratio\":\"16:9\",\"orientation\":\"Landscape\",\"quality_preset\":\"Quick Draft\",\"default_crop_mode\":\"Project Default\",\"settings\":{\"allow_gaps\":true,\"auto_close_gaps\":false,\"minimum_section_duration_seconds\":0.25,\"show_resolved_model_output\":false},\"global_prompt\":{\"enabled\":true,\"prompt\":\"cinematic lighting, coherent motion\",\"position\":\"Prefix\",\"show_effective_prompt\":false},\"audio\":{\"use_native_audio\":false,\"always_normalize\":false,\"normalization_mode\":\"Integrated LUFS\",\"target_lufs\":-16,\"true_peak_limit_db\":-1,\"default_volume\":1,\"default_fade_in_seconds\":0,\"default_fade_out_seconds\":0},\"privacy\":{\"mode\":false},\"display\":{\"show_section_labels\":true,\"show_thumbnails\":true,\"show_audio_waveforms\":true}},\"ui_state\":{\"timeline_display_mode\":\"Sections\",\"section_edit_mode\":\"Trim Neighbor\",\"snap_mode\":\"Frames\",\"view_start_seconds\":0,\"view_end_seconds\":3,\"selected_item_id\":\"section_image_001\",\"state_revision\":0},\"assets\":[{\"asset_id\":\"image_start\",\"type\":\"Image\",\"source_kind\":\"FilePath\",\"path\":\"/replace/with/start_image.png\",\"name\":\"start_image.png\"}],\"director_track\":{\"track_id\":\"director\",\"sections\":[{\"item_id\":\"section_image_001\",\"type\":\"Image\",\"start_time\":0,\"end_time\":1,\"image\":{\"asset_id\":\"image_start\"},\"prompt\":\"establish the subject and scene\",\"guide_strength\":0.8,\"crop_mode\":\"Project Default\"},{\"item_id\":\"section_text_001\",\"type\":\"Text\",\"start_time\":1,\"end_time\":2,\"prompt\":\"the camera glides forward\"},{\"item_id\":\"section_text_002\",\"type\":\"Text\",\"start_time\":2,\"end_time\":3,\"prompt\":\"the subject turns toward the light\"}]},\"audio_tracks\":[],\"model_outputs\":{},\"validation\":{\"is_valid\":true,\"errors\":[],\"warnings\":[],\"info\":[]}}"
       ]
     },
     {
@@ -53,19 +53,7 @@
       "outputs": [{ "name": "WAN_TIMELINE_CONFIG", "type": "WAN_TIMELINE_CONFIG", "links": [2] }],
       "title": "WAN 2.2 Timeline Config",
       "properties": {},
-      "widgets_values": [
-        "Auto from Director",
-        "I2V-A14B",
-        "Prompt Relay",
-        0.001,
-        "Timed Keyframes",
-        "Warn And Keep In Plan",
-        "Warning",
-        "Warn And Use Prompt Only",
-        "Final Mix Only",
-        "Plan Only",
-        "Summary"
-      ]
+      "widgets_values": ["Auto from Director", "I2V-A14B", "Prompt Relay", 0.001, "Timed Keyframes", "Warn And Keep In Plan", "Warning", "Warn And Use Prompt Only", "Final Mix Only", "Plan Only", "Summary"]
     },
     {
       "id": 4,
@@ -89,7 +77,7 @@
       "widgets_values": []
     },
     {
-      "id": 6,
+      "id": 5,
       "type": "HeltoWAN22TimelineRuntime",
       "pos": [1400, 230],
       "size": [340, 210],
@@ -115,26 +103,12 @@
       "title": "WAN 2.2 Timeline Runtime",
       "properties": {},
       "widgets_values": [1]
-    },
-    {
-      "id": 5,
-      "type": "PrimitiveStringMultiline",
-      "pos": [1400, 500],
-      "size": [420, 110],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
-      "title": "WAN Runtime Status",
-      "properties": {},
-      "widgets_values": ["Runtime Backend Profile is Plan Only in this example. Connect WAN high-noise and low-noise model phases plus CLIP and VAE, then switch the config to ComfyUI Core when you want Prompt Relay patches and Start/End image conditioning materialized."]
     }
   ],
   "links": [
     [1, 2, 0, 4, 0, "VIDEO_TIMELINE"],
     [2, 3, 0, 4, 1, "WAN_TIMELINE_CONFIG"],
-    [3, 4, 0, 6, 4, "WAN_TIMELINE_PLAN"]
+    [3, 4, 0, 5, 4, "WAN_TIMELINE_PLAN"]
   ],
   "groups": [],
   "config": {},

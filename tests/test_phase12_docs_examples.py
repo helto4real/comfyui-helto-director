@@ -16,6 +16,8 @@ DOC_PATHS = [
     REPO_ROOT / "docs" / "privacy_limitations.md",
     REPO_ROOT / "docs" / "current_limitations.md",
     REPO_ROOT / "docs" / "WAN22_SUPPORT.md",
+    REPO_ROOT / "docs" / "WAN22_MANUAL_TEST_CHECKLIST.md",
+    REPO_ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md",
     REPO_ROOT / "docs" / "wan_skeleton_status.md",
 ]
 
@@ -42,6 +44,30 @@ EXPECTED_WORKFLOWS = {
         "HeltoLTX23TimelineCropReferenceTail",
     },
     "wan_planner_skeleton_workflow.json": {
+        "HeltoVideoTimelineDirector",
+        "HeltoWAN22TimelineConfig",
+        "HeltoWAN22TimelinePlanner",
+        "HeltoWAN22TimelineRuntime",
+    },
+    "wan_i2v_text_first_image_workflow.json": {
+        "HeltoVideoTimelineDirector",
+        "HeltoWAN22TimelineConfig",
+        "HeltoWAN22TimelinePlanner",
+        "HeltoWAN22TimelineRuntime",
+    },
+    "wan_timed_keyframes_workflow.json": {
+        "HeltoVideoTimelineDirector",
+        "HeltoWAN22TimelineConfig",
+        "HeltoWAN22TimelinePlanner",
+        "HeltoWAN22TimelineRuntime",
+    },
+    "wan_text_only_prompt_relay_workflow.json": {
+        "HeltoVideoTimelineDirector",
+        "HeltoWAN22TimelineConfig",
+        "HeltoWAN22TimelinePlanner",
+        "HeltoWAN22TimelineRuntime",
+    },
+    "wan_audio_final_mix_workflow.json": {
         "HeltoVideoTimelineDirector",
         "HeltoWAN22TimelineConfig",
         "HeltoWAN22TimelinePlanner",

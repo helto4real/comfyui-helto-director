@@ -97,6 +97,16 @@ def create_mask_fn(q_token_idx, latent_chunks: int):
 
 
 def encode_wan_prompt_relay(model: Any, clip: Any, prompt_relay: dict[str, Any]):
+    conditioning, prompt_debug, mask_fn = prepare_wan_prompt_relay_payload(clip, prompt_relay)
+    if mask_fn is None:
+        return model, conditioning, prompt_debug
+    patched_model = apply_wan_prompt_relay_patches(model, mask_fn)
+    prompt_debug["patched"] = True
+    return patched_model, conditioning, prompt_debug
+
+
+def prepare_wan_prompt_relay_payload(clip: Any, prompt_relay: dict[str, Any]):
+    validate_segment_lengths(prompt_relay)
     global_prompt, prompted_segments = prompt_relay_prompt_parts(prompt_relay)
     full_prompt = global_prompt
     token_ranges = []
@@ -107,20 +117,34 @@ def encode_wan_prompt_relay(model: Any, clip: Any, prompt_relay: dict[str, Any])
         relay_segments = build_segments(token_ranges, prompted_segments, float(prompt_relay.get("epsilon", 0.001)))
     conditioning = clip.encode_from_tokens_scheduled(clip.tokenize(full_prompt))
     if not prompted_segments:
-        return model, conditioning, {
+        return conditioning, {
             "full_prompt": full_prompt,
             "local_prompts": [],
             "token_ranges": [],
             "patched": False,
-        }
+        }, None
     mask_fn = create_mask_fn(relay_segments, int(prompt_relay.get("latent_chunk_count") or 1))
-    patched_model = apply_wan_prompt_relay_patches(model, mask_fn)
-    return patched_model, conditioning, {
+    return conditioning, {
         "full_prompt": full_prompt,
         "local_prompts": prompted_segments,
         "token_ranges": token_ranges,
-        "patched": True,
-    }
+        "patched": False,
+    }, mask_fn
+
+
+def patch_wan_prompt_relay_models(high_noise_model, low_noise_model, mask_fn):
+    patched_high = apply_wan_prompt_relay_patches(high_noise_model, mask_fn) if high_noise_model is not None else None
+    patched_low = apply_wan_prompt_relay_patches(low_noise_model, mask_fn) if low_noise_model is not None else None
+    return patched_high, patched_low
+
+
+def validate_segment_lengths(prompt_relay: dict[str, Any]) -> None:
+    segment_lengths = [int(length) for length in prompt_relay.get("segment_lengths") or []]
+    latent_chunk_count = int(prompt_relay.get("latent_chunk_count") or 0)
+    if segment_lengths and sum(segment_lengths) != latent_chunk_count:
+        raise ValueError(
+            f"WAN_PROMPT_RELAY_SEGMENT_LENGTH_MISMATCH: segment_lengths sum to {sum(segment_lengths)}, expected {latent_chunk_count}."
+        )
 
 
 def apply_wan_prompt_relay_patches(model: Any, mask_fn):

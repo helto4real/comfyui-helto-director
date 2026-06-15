@@ -1,6 +1,6 @@
 # WAN 2.2 Timeline Support
 
-WAN 2.2 support is now in Phase 13. The path is:
+WAN 2.2 support is now in Phase 15 workflow-hardening status. The path is:
 
 `Video Timeline Director -> WAN 2.2 Timeline Config -> WAN 2.2 Timeline Planner -> WAN 2.2 Timeline Runtime`
 
@@ -13,7 +13,32 @@ The Director stays generic. WAN-specific behavior lives in the WAN Config, Plann
 - Visual Conditioning Mode: `Timed Keyframes`
 - Runtime Backend Profile: `Plan Only`
 
-`Plan Only` is the safe default. It validates the WAN plan, resolves backend capabilities as unknown, and returns runtime debug without attempting WAN tensor conditioning.
+`Plan Only` is the safe default. It validates the WAN plan, reports backend compatibility, and returns runtime debug without attempting WAN tensor conditioning.
+
+## Backend Profiles
+
+- `Plan Only`: diagnostic mode. It preserves planned prompts/keyframes/audio metadata and explains what would or would not run.
+- `Auto`: resolves to `ComfyUI Core` only when CLIP, VAE, and at least one high/low WAN model phase are connected; otherwise it resolves to `Plan Only`.
+- `ComfyUI Core`: partial execution mode. It builds prompt conditioning, patches connected model phases for Prompt Relay, creates a WAN latent, and applies Start/End image conditioning.
+- `WanVideoWrapper`: reserved profile. It is not implemented in this nodepack yet and fails clearly if selected.
+
+## Runtime Model Wiring
+
+WAN 2.2 workflows commonly use separate high-noise and low-noise model phases. The Runtime therefore exposes:
+
+- `high_noise_model`
+- `low_noise_model`
+
+These model sockets are optional so `Plan Only` can run without model loaders. In `ComfyUI Core` mode, the core WAN image/latent helpers use `clip` and `vae` for conditioning; the model sockets are used for Prompt Relay patching and pass-through.
+
+When Prompt Relay is enabled:
+
+- both connected model phases are patched independently,
+- one connected phase is patched and the missing phase is reported as a warning,
+- no connected model phase is an error in `ComfyUI Core`,
+- `Auto` resolves to `ComfyUI Core` only when `clip`, `vae`, and at least one model phase are connected; otherwise it resolves to `Plan Only`.
+
+The runtime builds the output latent from the connected model latent format when a model phase is present. This matters for WanMoe high/low workflows, which commonly expect 16-channel WAN latents and a matching WAN VAE. If image keyframe conditioning is enabled and the VAE encodes into a different latent format than the connected model expects, the runtime fails with `WAN_RUNTIME_LATENT_FORMAT_MISMATCH` before the sampler runs.
 
 ## Prompt Relay
 
@@ -46,10 +71,18 @@ The `ComfyUI Core` backend currently applies Start and End image conditioning. T
 
 ## Video, Audio, And References
 
-- Video Sections are prompt-only fallback in Phase 13 unless policy is set to error.
-- Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned in Phase 13.
-- Reference library, Animate, S2V, and WanVideoWrapper runtime integration are not implemented in Phase 13.
+- Video Sections are prompt-only fallback in Phase 15 unless policy is set to error.
+- Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned in Phase 15.
+- Reference library, Animate, S2V, and WanVideoWrapper runtime integration are not implemented in Phase 15.
 
 ## Debugging
 
-Set Debug Mode to `Summary` or `Full` on the WAN Config node. Inspect the Planner `DEBUG_INFO` for prompt/keyframe planning, and Runtime `runtime_debug` for backend capabilities plus applied/unsupported keyframes.
+Set Debug Mode to `Summary` or `Full` on the WAN Config node. Inspect the Planner `DEBUG_INFO` for prompt/keyframe planning, and Runtime `runtime_debug` for:
+
+- `backend`: requested/resolved backend profile, availability, missing requirements, unsupported features, and recommended next action.
+- `status`: compact user-facing summary of execution, Prompt Relay, visual keyframes, audio policy, and validation counts.
+- `visual_conditioning`: requested, applied, and unsupported keyframes.
+- `prompt_relay`: full prompt and token/range debug.
+- `model_patch_status`: high/low model phase patch status.
+
+Use [WAN 2.2 Manual Test Checklist](WAN22_MANUAL_TEST_CHECKLIST.md) for hands-on verification steps.

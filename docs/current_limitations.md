@@ -13,9 +13,11 @@ This nodepack is usable for LTX Timeline workflows and early WAN 2.2 planning/ru
 - WAN 2.2 has Config, Planner, and Runtime nodes.
 - I2V-A14B is the default WAN mode.
 - Prompt Relay planning and all Image Section visual keyframe candidates are preserved in `WAN_TIMELINE_PLAN`.
-- The default Runtime Backend Profile is `Plan Only`.
+- The default Runtime Backend Profile is `Plan Only`, with `runtime_debug.backend` and `runtime_debug.status` intended for workflow inspection.
+- The Runtime uses separate optional `high_noise_model` and `low_noise_model` sockets for WAN 2.2 Prompt Relay patching.
 - The `ComfyUI Core` backend can apply Start and End image conditioning, but Timed keyframes are planned/debug-visible only.
-- Video Sections, WAN audio conditioning, S2V, Animate, reference library support, and WanVideoWrapper integration remain future work.
+- `ComfyUI Core` requires CLIP and VAE, and Prompt Relay requires at least one connected WAN model phase.
+- Video Sections, WAN audio conditioning, S2V, Animate, reference library support, arbitrary Timed keyframe execution, and WanVideoWrapper integration remain future work.
 
 ## Workflow JSON Examples
 

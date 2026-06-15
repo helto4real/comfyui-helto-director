@@ -1,59 +1,122 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
-from PIL import Image
 
-from ...media_cache import resolve_media_path
 from ..config import WAN_MODEL_FAMILY, WAN_MODEL_VERSION
 from ..planner import WAN_PLAN_TYPE
-from .prompt_relay import encode_wan_prompt_relay
+from .capabilities import (
+    BACKEND_COMFYUI_CORE,
+    BACKEND_PLAN_ONLY,
+    BACKEND_WAN_VIDEO_WRAPPER,
+    backend_capabilities,
+    resolve_backend,
+    resolve_visual_conditioning,
+)
+from .debug import build_runtime_debug, error, info, warning
+from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
+from .visual import apply_comfy_core_visual_keyframes
 
 
 def build_wan_runtime_outputs(
     *,
-    model,
-    clip,
-    vae,
+    high_noise_model=None,
+    low_noise_model=None,
+    clip=None,
+    vae=None,
     wan_timeline_plan: dict[str, Any],
     negative=None,
     batch_size: int = 1,
-) -> tuple[Any, Any, Any, dict[str, Any], dict[str, Any]]:
+) -> tuple[Any, Any, Any, Any, dict[str, Any], dict[str, Any]]:
     plan = deepcopy(wan_timeline_plan)
     _validate_plan(plan)
     config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
-    backend = _resolve_backend(config.get("runtime_backend_profile"))
-    capabilities = _backend_capabilities(backend)
-    visual = _resolved_visual_conditioning(plan, capabilities)
+    requested_backend = str(config.get("runtime_backend_profile") or BACKEND_PLAN_ONLY)
+    resolved_backend, backend_entries = resolve_backend(
+        requested_backend,
+        high_noise_model=high_noise_model,
+        low_noise_model=low_noise_model,
+        clip=clip,
+        vae=vae,
+    )
+    capabilities = backend_capabilities(resolved_backend)
+    visual = resolve_visual_conditioning(plan, capabilities, resolved_backend)
+    prompt_relay = plan.get("model_specific", {}).get("wan", {}).get("prompt_relay", {})
+    validation_entries = [_runtime_entry(entry) for entry in backend_entries]
+    validation_entries.extend(_visual_validation_entries(visual, resolved_backend))
+    diagnostics: list[str] = []
+    media_decisions: list[dict[str, Any]] = []
+    prompt_debug: dict[str, Any] = {"status": "not_built", "patched": False}
+    model_patch_status: dict[str, Any] = {
+        "high_noise_model": "not_connected" if high_noise_model is None else "unpatched",
+        "low_noise_model": "not_connected" if low_noise_model is None else "unpatched",
+    }
     width = int(plan["resolved_output"].get("width") or 1280)
     height = int(plan["resolved_output"].get("height") or 704)
     frame_count = int(plan["resolved_output"].get("frame_count") or 1)
+    latent_spec = resolve_wan_latent_spec(
+        high_noise_model=high_noise_model,
+        low_noise_model=low_noise_model,
+        vae=vae,
+    )
 
-    if backend == "Plan Only":
-        video_latent = empty_wan22_video_latent(vae, width, height, frame_count, batch_size)
-        runtime_debug = _runtime_debug(plan, backend, capabilities, visual, {}, ["WAN runtime backend is Plan Only; no conditioning execution was performed."])
-        return model, [], negative if negative is not None else [], video_latent, runtime_debug
+    try:
+        validate_segment_lengths(prompt_relay)
+    except ValueError as exc:
+        validation_entries.append(error(
+            "WAN_PROMPT_RELAY_SEGMENT_LENGTH_MISMATCH",
+            str(exc),
+            "Regenerate the WAN plan before running the runtime.",
+        ))
+        raise
 
-    if backend == "WanVideoWrapper":
-        raise ValueError("WAN runtime backend WanVideoWrapper is not available in this nodepack yet.")
+    if resolved_backend == BACKEND_PLAN_ONLY:
+        validation_entries.append(info(
+            "WAN_RUNTIME_BACKEND_PLAN_ONLY",
+            "WAN Runtime is in Plan Only mode; no conditioning execution was performed.",
+            "Switch Runtime Backend Profile to ComfyUI Core to materialize conditioning.",
+        ))
+        diagnostics.append("WAN runtime backend is Plan Only; no conditioning execution was performed.")
+        video_latent = empty_wan22_video_latent(width, height, frame_count, batch_size, latent_spec)
+        runtime_debug = build_runtime_debug(
+            plan=plan,
+            requested_backend=requested_backend,
+            resolved_backend=resolved_backend,
+            capabilities=capabilities,
+            visual=visual,
+            prompt_debug=prompt_debug,
+            validation_entries=validation_entries,
+            diagnostics=diagnostics,
+            media_decisions=media_decisions,
+            model_patch_status=model_patch_status,
+        )
+        return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_debug
 
-    prompt_debug = {}
-    prompt_relay = plan.get("model_specific", {}).get("wan", {}).get("prompt_relay", {})
-    if prompt_relay.get("enabled", True):
-        runtime_model, positive, prompt_debug = encode_wan_prompt_relay(model, clip, prompt_relay)
-    else:
-        prompt = _plain_prompt(prompt_relay)
-        positive = clip.encode_from_tokens_scheduled(clip.tokenize(prompt))
-        runtime_model = model
-        prompt_debug = {"full_prompt": prompt, "local_prompts": [], "token_ranges": [], "patched": False}
+    if resolved_backend == BACKEND_WAN_VIDEO_WRAPPER:
+        validation_entries.append(error(
+            "WAN_RUNTIME_BACKEND_NOT_AVAILABLE",
+            "WAN Runtime backend WanVideoWrapper is not available in this nodepack.",
+            "Use Plan Only or ComfyUI Core.",
+        ))
+        raise ValueError("WAN_RUNTIME_BACKEND_NOT_AVAILABLE: WanVideoWrapper is not available in this nodepack.")
 
+    _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries)
+
+    runtime_high_model = high_noise_model
+    runtime_low_model = low_noise_model
+    prompt_debug, positive, runtime_high_model, runtime_low_model = _build_prompt_payload_and_patch_models(
+        clip,
+        prompt_relay,
+        high_noise_model,
+        low_noise_model,
+        model_patch_status,
+        validation_entries,
+    )
     runtime_negative = _resolve_negative_conditioning(negative, positive)
-    video_latent = empty_wan22_video_latent(vae, width, height, frame_count, batch_size)
-    positive, runtime_negative, video_latent, guide_debug = _apply_comfy_core_visual_keyframes(
+    video_latent = empty_wan22_video_latent(width, height, frame_count, batch_size, latent_spec)
+    positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
         positive,
         runtime_negative,
         vae,
@@ -63,20 +126,65 @@ def build_wan_runtime_outputs(
         height,
         frame_count,
     )
-    runtime_debug = _runtime_debug(plan, backend, capabilities, visual, prompt_debug, guide_debug.get("diagnostics", []))
-    runtime_debug["guide_debug"] = guide_debug
-    return runtime_model, positive, runtime_negative, video_latent, runtime_debug
+    diagnostics.extend(guide_debug.get("diagnostics", []))
+    media_decisions.extend(guide_debug.get("media_decisions", []))
+    validation_entries.append(info(
+        "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT",
+        "Built WAN visual keyframe runtime payload for the selected backend.",
+        "Inspect runtime_debug.visual_conditioning for applied and unsupported keyframes.",
+    ))
+    runtime_debug = build_runtime_debug(
+        plan=plan,
+        requested_backend=requested_backend,
+        resolved_backend=resolved_backend,
+        capabilities=capabilities,
+        visual=visual,
+        prompt_debug=prompt_debug,
+        validation_entries=validation_entries,
+        diagnostics=diagnostics,
+        media_decisions=media_decisions,
+        model_patch_status=model_patch_status,
+    )
+    return runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, runtime_debug
 
 
-def empty_wan22_video_latent(vae, width: int, height: int, frame_count: int, batch_size: int = 1) -> dict[str, Any]:
+def resolve_wan_latent_spec(*, high_noise_model=None, low_noise_model=None, vae=None) -> dict[str, Any]:
+    latent_format = _model_latent_format(high_noise_model) or _model_latent_format(low_noise_model)
+    if latent_format is not None:
+        return {
+            "channels": int(getattr(latent_format, "latent_channels", 16) or 16),
+            "spatial_scale": int(getattr(latent_format, "spacial_downscale_ratio", 8) or 8),
+            "source": "model_latent_format",
+        }
+    if vae is not None:
+        return {
+            "channels": int(getattr(vae, "latent_channels", 16) or 16),
+            "spatial_scale": int(_call_or_value(vae, "spacial_compression_encode", 8) or 8),
+            "source": "vae",
+        }
+    return {
+        "channels": 16,
+        "spatial_scale": 8,
+        "source": "wan_default",
+    }
+
+
+def empty_wan22_video_latent(
+    width: int,
+    height: int,
+    frame_count: int,
+    batch_size: int = 1,
+    latent_spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
         import comfy.model_management
 
         device = comfy.model_management.intermediate_device()
     except Exception:
         device = "cpu"
-    latent_channels = int(getattr(vae, "latent_channels", 48) or 48)
-    spatial_scale = int(_call_or_value(vae, "spacial_compression_encode", 16) or 16)
+    latent_spec = latent_spec or {"channels": 16, "spatial_scale": 8}
+    latent_channels = int(latent_spec.get("channels") or 16)
+    spatial_scale = int(latent_spec.get("spatial_scale") or 8)
     latent = torch.zeros(
         (
             max(1, int(batch_size)),
@@ -88,6 +196,15 @@ def empty_wan22_video_latent(vae, width: int, height: int, frame_count: int, bat
         device=device,
     )
     return {"samples": latent}
+
+
+def _model_latent_format(model):
+    if model is None or not hasattr(model, "get_model_object"):
+        return None
+    try:
+        return model.get_model_object("latent_format")
+    except Exception:
+        return None
 
 
 def zero_out_conditioning(conditioning):
@@ -119,168 +236,136 @@ def _validate_plan(plan: dict[str, Any]) -> None:
         raise ValueError(f"WAN runtime cannot run an invalid timeline plan: {codes or 'unknown validation error'}.")
 
 
-def _resolve_backend(value: Any) -> str:
-    if value == "ComfyUI Core":
-        return "ComfyUI Core"
-    if value == "WanVideoWrapper":
-        return "WanVideoWrapper"
-    return "Plan Only"
+def _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries):
+    missing = []
+    if clip is None:
+        missing.append("clip")
+    if vae is None:
+        missing.append("vae")
+    if missing:
+        validation_entries.append(error(
+            "WAN_RUNTIME_REQUIRED_INPUT_MISSING",
+            f"ComfyUI Core WAN runtime requires {', '.join(missing)}.",
+            "Connect the missing backend input(s), or switch Runtime Backend Profile to Plan Only.",
+            {"missing": missing},
+        ))
+        raise ValueError(f"WAN_RUNTIME_REQUIRED_INPUT_MISSING: ComfyUI Core WAN runtime requires {', '.join(missing)}.")
+    if prompt_relay.get("enabled", True) and high_noise_model is None and low_noise_model is None:
+        validation_entries.append(error(
+            "WAN_RUNTIME_REQUIRED_INPUT_MISSING",
+            "WAN Prompt Relay requires at least one connected high or low noise model.",
+            "Connect high_noise_model and/or low_noise_model, disable Prompt Relay, or switch Runtime Backend Profile to Plan Only.",
+        ))
+        raise ValueError("WAN_RUNTIME_REQUIRED_INPUT_MISSING: WAN Prompt Relay requires at least one connected high or low noise model.")
 
 
-def _backend_capabilities(backend: str) -> dict[str, Any]:
-    if backend == "ComfyUI Core":
-        return {
-            "supports_start_image": True,
-            "supports_end_image": True,
-            "supports_timed_keyframes": False,
-            "max_visual_keyframes": 2,
-            "supports_prompt_relay": True,
-            "supports_video_sections": False,
-            "supports_audio_conditioning": False,
-        }
-    if backend == "WanVideoWrapper":
-        return {
-            "supports_start_image": None,
-            "supports_end_image": None,
-            "supports_timed_keyframes": None,
-            "max_visual_keyframes": None,
-            "supports_prompt_relay": None,
-            "supports_video_sections": None,
-            "supports_audio_conditioning": None,
-        }
-    return {
-        "supports_start_image": None,
-        "supports_end_image": None,
-        "supports_timed_keyframes": None,
-        "max_visual_keyframes": None,
-        "supports_prompt_relay": None,
-        "supports_video_sections": None,
-        "supports_audio_conditioning": None,
-    }
-
-
-def _resolved_visual_conditioning(plan: dict[str, Any], capabilities: dict[str, Any]) -> dict[str, Any]:
-    visual = deepcopy(plan.get("model_specific", {}).get("wan", {}).get("visual_conditioning") or {})
-    requested = list(visual.get("requested_keyframes") or [])
-    applied = []
-    unsupported = []
-    max_keyframes = capabilities.get("max_visual_keyframes")
-    for keyframe in requested:
-        role = keyframe.get("role")
-        supported = (
-            role == "Start" and capabilities.get("supports_start_image")
-        ) or (
-            role == "End" and capabilities.get("supports_end_image")
-        ) or (
-            role == "Timed" and capabilities.get("supports_timed_keyframes")
-        )
-        if supported and (max_keyframes is None or len(applied) < int(max_keyframes)):
-            applied.append({**keyframe, "backend_role": role})
+def _build_prompt_payload_and_patch_models(
+    clip,
+    prompt_relay,
+    high_noise_model,
+    low_noise_model,
+    model_patch_status: dict[str, Any],
+    validation_entries: list[dict[str, Any]],
+):
+    if prompt_relay.get("enabled", True):
+        try:
+            positive, prompt_debug, mask_fn = prepare_wan_prompt_relay_payload(clip, prompt_relay)
+            if mask_fn is None:
+                prompt_debug["status"] = "plain_prompt"
+                return prompt_debug, positive, high_noise_model, low_noise_model
+            patched_high, patched_low = patch_wan_prompt_relay_models(high_noise_model, low_noise_model, mask_fn)
+        except Exception as exc:
+            validation_entries.append(error(
+                "WAN_RUNTIME_PROMPT_RELAY_PATCH_UNAVAILABLE",
+                f"WAN Prompt Relay patching failed: {exc}",
+                "Use compatible WAN models or switch Prompt Routing off.",
+            ))
+            if isinstance(exc, ValueError) and str(exc).startswith("WAN_RUNTIME_PROMPT_RELAY_PATCH_UNAVAILABLE"):
+                raise
+            raise ValueError(f"WAN_RUNTIME_PROMPT_RELAY_PATCH_UNAVAILABLE: {exc}") from exc
+        prompt_debug["patched"] = True
+        prompt_debug["status"] = "patched"
+        validation_entries.append(info(
+            "WAN_PROMPT_RELAY_RUNTIME_PAYLOAD_BUILT",
+            "Built WAN Prompt Relay runtime payload.",
+            "Both connected WAN model phases are patched independently.",
+        ))
+        if high_noise_model is not None:
+            model_patch_status["high_noise_model"] = "patched"
         else:
-            reason = "Timed visual keyframes are not supported by the selected backend."
-            if supported:
-                reason = "Selected backend visual keyframe limit was exceeded."
-            unsupported.append({**keyframe, "reason": reason})
-    visual["applied_keyframes"] = applied
-    visual["unsupported_keyframes"] = unsupported
-    visual["backend_capabilities"] = capabilities
-    return visual
+            validation_entries.append(warning(
+                "WAN_RUNTIME_REQUIRED_INPUT_MISSING",
+                "high_noise_model is not connected; only the low noise model was patched.",
+                "Connect high_noise_model for a complete dual-model WAN 2.2 workflow.",
+            ))
+        if low_noise_model is not None:
+            model_patch_status["low_noise_model"] = "patched"
+        else:
+            validation_entries.append(warning(
+                "WAN_RUNTIME_REQUIRED_INPUT_MISSING",
+                "low_noise_model is not connected; only the high noise model was patched.",
+                "Connect low_noise_model for a complete dual-model WAN 2.2 workflow.",
+            ))
+        return prompt_debug, positive, patched_high, patched_low
 
-
-def _apply_comfy_core_visual_keyframes(
-    positive,
-    negative,
-    vae,
-    latent: dict[str, Any],
-    visual: dict[str, Any],
-    width: int,
-    height: int,
-    frame_count: int,
-) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
-    applied = visual.get("applied_keyframes") or []
-    start_keyframe = next((entry for entry in applied if entry.get("role") == "Start"), None)
-    end_keyframe = next((entry for entry in applied if entry.get("role") == "End"), None)
-    diagnostics = []
-    if not start_keyframe and not end_keyframe:
-        diagnostics.append("No WAN visual keyframes were applied by the ComfyUI Core backend.")
-        return positive, negative, latent, {"applied_keyframes": [], "unsupported_keyframes": visual.get("unsupported_keyframes", []), "diagnostics": diagnostics}
-
-    start_image = _load_keyframe_image(start_keyframe, width, height) if start_keyframe else None
-    end_image = _load_keyframe_image(end_keyframe, width, height) if end_keyframe else None
-    concat_latent_image, concat_mask = _encode_first_last_images(
-        vae,
-        latent,
-        width,
-        height,
-        frame_count,
-        start_image,
-        end_image,
-    )
-    values = {"concat_latent_image": concat_latent_image, "concat_mask": concat_mask}
-    positive = _conditioning_set_values(positive, values)
-    negative = _conditioning_set_values(negative, values)
-    return positive, negative, latent, {
-        "applied_keyframes": applied,
-        "unsupported_keyframes": visual.get("unsupported_keyframes", []),
-        "diagnostics": diagnostics,
+    prompt = _plain_prompt(prompt_relay)
+    positive = clip.encode_from_tokens_scheduled(clip.tokenize(prompt))
+    prompt_debug = {
+        "full_prompt": prompt,
+        "local_prompts": [],
+        "token_ranges": [],
+        "patched": False,
+        "status": "merged_prompt_fallback",
     }
+    validation_entries.append(warning(
+        "WAN_RUNTIME_USING_MERGED_PROMPT_FALLBACK",
+        "WAN Prompt Relay is disabled; runtime used a merged prompt fallback.",
+        "Enable Prompt Relay in WAN Config for temporal prompt routing.",
+    ))
+    return prompt_debug, positive, high_noise_model, low_noise_model
 
 
-def _encode_first_last_images(vae, latent, width: int, height: int, frame_count: int, start_image, end_image):
-    samples = latent["samples"]
-    device = samples.device
-    dtype = samples.dtype
-    image = torch.ones((max(1, frame_count), height, width, 3), device=device, dtype=dtype) * 0.5
-    mask = torch.ones((1, 1, samples.shape[2] * 4, samples.shape[-2], samples.shape[-1]), device=device, dtype=dtype)
-
-    if start_image is not None:
-        start_image = start_image.to(device=device, dtype=dtype)
-        image[: start_image.shape[0]] = start_image
-        mask[:, :, : start_image.shape[0] + 3] = 0.0
-    if end_image is not None:
-        end_image = end_image.to(device=device, dtype=dtype)
-        image[-end_image.shape[0] :] = end_image
-        mask[:, :, -end_image.shape[0] :] = 0.0
-
-    concat_latent_image = vae.encode(image[:, :, :, :3])
-    mask = mask.view(1, mask.shape[2] // 4, 4, mask.shape[3], mask.shape[4]).transpose(1, 2)
-    return concat_latent_image, mask
-
-
-def _load_keyframe_image(keyframe: dict[str, Any] | None, width: int, height: int):
-    if not keyframe:
-        return None
-    path_value = keyframe.get("path")
-    if not path_value:
-        raise ValueError(f"WAN visual keyframe {keyframe.get('section_id')} is missing an image path.")
-    path = resolve_media_path(path_value)
-    if not Path(path).exists():
-        raise ValueError(f"WAN visual keyframe image does not exist: {path}")
-    with Image.open(path) as image:
-        image = image.convert("RGB")
-        array = np.array(image, dtype=np.float32) / 255.0
-    tensor = torch.from_numpy(array).unsqueeze(0)
-    return _resize_image_tensor(tensor, width, height)
+def _visual_validation_entries(visual: dict[str, Any], backend: str) -> list[dict[str, Any]]:
+    entries = []
+    unsupported = visual.get("unsupported_keyframes") or []
+    if not unsupported:
+        return entries
+    if backend == BACKEND_PLAN_ONLY:
+        entries.append(info(
+            "WAN_RUNTIME_BACKEND_PLAN_ONLY",
+            "Plan Only preserved requested visual keyframes without applying them.",
+            "Switch to ComfyUI Core to apply supported Start/End keyframes.",
+        ))
+        return entries
+    timed = [entry for entry in unsupported if entry.get("role") == "Timed"]
+    if timed:
+        entries.append(warning(
+            "WAN_TIMED_KEYFRAME_UNSUPPORTED_BY_BACKEND",
+            "Timed visual keyframes are unsupported by the selected WAN backend.",
+            "They remain visible in runtime_debug.unsupported_keyframes.",
+            {"count": len(timed)},
+        ))
+    other = [entry for entry in unsupported if entry.get("role") != "Timed"]
+    if other:
+        entries.append(warning(
+            "WAN_VISUAL_KEYFRAME_UNSUPPORTED_BY_BACKEND",
+            "Some visual keyframes are unsupported by the selected WAN backend.",
+            "Inspect runtime_debug.visual_conditioning.unsupported_keyframes.",
+            {"count": len(other)},
+        ))
+    return entries
 
 
-def _resize_image_tensor(tensor: torch.Tensor, width: int, height: int) -> torch.Tensor:
-    channels_first = tensor.movedim(-1, 1)
-    resized = torch.nn.functional.interpolate(channels_first, size=(height, width), mode="bilinear", align_corners=False)
-    return resized.movedim(1, -1)
-
-
-def _conditioning_set_values(conditioning, values):
-    try:
-        import node_helpers
-
-        return node_helpers.conditioning_set_values(conditioning, values)
-    except Exception:
-        result = []
-        for tensor, metadata in conditioning:
-            next_metadata = metadata.copy()
-            next_metadata.update(values)
-            result.append([tensor, next_metadata])
-        return result
+def _runtime_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    severity = entry.get("severity", "Info")
+    code = entry.get("code", "WAN_RUNTIME_INFO")
+    message = entry.get("message", "")
+    details = entry.get("details", {})
+    if severity == "Warning":
+        return warning(code, message, details=details)
+    if severity == "Error":
+        return error(code, message, details=details)
+    return info(code, message, details=details)
 
 
 def _plain_prompt(prompt_relay: dict[str, Any]) -> str:
@@ -302,38 +387,3 @@ def _call_or_value(obj, name: str, fallback):
     if callable(value):
         return value()
     return value if value is not None else fallback
-
-
-def _runtime_debug(
-    plan: dict[str, Any],
-    backend: str,
-    capabilities: dict[str, Any],
-    visual: dict[str, Any],
-    prompt_debug: dict[str, Any],
-    diagnostics: list[str],
-) -> dict[str, Any]:
-    config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
-    return {
-        "type": "DEBUG_INFO",
-        "source": "WAN Runtime",
-        "enabled": config.get("debug_mode") != "Off",
-        "mode": config.get("debug_mode", "Off"),
-        "summary": {
-            "backend": backend,
-            "model_mode": config.get("model_mode"),
-            "prompt_relay_patched": bool(prompt_debug.get("patched")),
-            "requested_visual_keyframes": len(visual.get("requested_keyframes") or []),
-            "applied_visual_keyframes": len(visual.get("applied_keyframes") or []),
-            "unsupported_visual_keyframes": len(visual.get("unsupported_keyframes") or []),
-            "video_frame_count": plan.get("resolved_output", {}).get("frame_count"),
-            "latent_chunk_count": plan.get("resolved_output", {}).get("latent_chunk_count"),
-        },
-        "backend_capabilities": capabilities,
-        "visual_conditioning": {
-            "requested_keyframes": visual.get("requested_keyframes") or [],
-            "applied_keyframes": visual.get("applied_keyframes") or [],
-            "unsupported_keyframes": visual.get("unsupported_keyframes") or [],
-        },
-        "prompt_relay": prompt_debug,
-        "diagnostics": diagnostics,
-    }
