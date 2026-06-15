@@ -23,6 +23,9 @@ Use this checklist inside ComfyUI when verifying WAN Timeline workflows.
 - [ ] Verify Auto resolves to `Plan Only` when CLIP, VAE, and model phases are not connected.
 - [ ] Connect CLIP, VAE, and at least one WAN high/low model phase.
 - [ ] Verify Auto resolves to `ComfyUI Core`.
+- [ ] With default `I2V-A14B`, verify ComfyUI Core execution fails clearly with `WAN_REQUIRED_IMAGE_CONDITIONING_MISSING` if no Image Section is present.
+- [ ] Add one Image Section and verify Runtime produces `positive`, `negative`, and `video_latent` outputs with `output_payload_type` set to `COMFYUI_CORE_CONDITIONING_LATENT`.
+- [ ] Add Start and End Image Sections and verify Runtime reports two applied keyframes.
 - [ ] Connect both high-noise and low-noise model phases.
 - [ ] Verify Prompt Relay patch status reports both phases patched.
 - [ ] Keep notes on any sampler/model/VAE mismatch errors for future backend hardening.

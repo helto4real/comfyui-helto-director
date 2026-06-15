@@ -140,7 +140,7 @@ def test_comfyui_core_patches_one_model_and_warns_when_other_missing(tmp_path):
 def test_comfyui_core_errors_when_prompt_relay_enabled_without_model():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
-        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
+        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B"),
     )
 
     with pytest.raises(ValueError, match="WAN_RUNTIME_REQUIRED_INPUT_MISSING.*Prompt Relay"):
@@ -154,7 +154,7 @@ def test_comfyui_core_errors_when_prompt_relay_enabled_without_model():
 def test_runtime_latent_uses_model_format_not_mismatched_vae():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
-        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
+        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B"),
     )
 
     _high_model, _low_model, _positive, _negative, video_latent, _runtime_debug = build_wan_runtime_outputs(

@@ -103,6 +103,7 @@ def build_wan_runtime_outputs(
         raise ValueError("WAN_RUNTIME_BACKEND_NOT_AVAILABLE: WanVideoWrapper is not available in this nodepack.")
 
     _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries)
+    _validate_comfy_core_visual_requirements(config, visual, validation_entries)
 
     runtime_high_model = high_noise_model
     runtime_low_model = low_noise_model
@@ -115,19 +116,26 @@ def build_wan_runtime_outputs(
         validation_entries,
     )
     runtime_negative = _resolve_negative_conditioning(negative, positive)
-    video_latent = empty_wan22_video_latent(width, height, frame_count, batch_size, latent_spec)
     positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
         positive,
         runtime_negative,
         vae,
-        video_latent,
         visual,
         width,
         height,
         frame_count,
+        batch_size,
+        latent_spec,
+        str(config.get("model_mode") or "I2V-A14B"),
     )
     diagnostics.extend(guide_debug.get("diagnostics", []))
     media_decisions.extend(guide_debug.get("media_decisions", []))
+    if guide_debug.get("core_helper"):
+        media_decisions.append({
+            "type": "comfy_core_helper",
+            "helper": guide_debug["core_helper"],
+            "output_payload_type": "COMFYUI_CORE_CONDITIONING_LATENT",
+        })
     validation_entries.append(info(
         "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT",
         "Built WAN visual keyframe runtime payload for the selected backend.",
@@ -257,6 +265,23 @@ def _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_n
             "Connect high_noise_model and/or low_noise_model, disable Prompt Relay, or switch Runtime Backend Profile to Plan Only.",
         ))
         raise ValueError("WAN_RUNTIME_REQUIRED_INPUT_MISSING: WAN Prompt Relay requires at least one connected high or low noise model.")
+
+
+def _validate_comfy_core_visual_requirements(config: dict[str, Any], visual: dict[str, Any], validation_entries):
+    model_mode = str(config.get("model_mode") or "I2V-A14B")
+    if model_mode != "I2V-A14B":
+        return
+    has_start_keyframe = any(entry.get("role") == "Start" for entry in visual.get("applied_keyframes") or [])
+    if has_start_keyframe:
+        return
+    validation_entries.append(error(
+        "WAN_REQUIRED_IMAGE_CONDITIONING_MISSING",
+        "WAN 2.2 I2V-A14B ComfyUI Core execution requires at least one usable Image Section keyframe.",
+        "Add an Image Section to the timeline, or select a text-capable WAN model mode before executing.",
+    ))
+    raise ValueError(
+        "WAN_REQUIRED_IMAGE_CONDITIONING_MISSING: WAN 2.2 I2V-A14B ComfyUI Core execution requires at least one usable Image Section keyframe."
+    )
 
 
 def _build_prompt_payload_and_patch_models(

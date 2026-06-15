@@ -86,10 +86,13 @@ def build_runtime_debug(
             "requested_keyframes": deepcopy(visual.get("requested_keyframes") or []),
             "applied_keyframes": deepcopy(visual.get("applied_keyframes") or []),
             "unsupported_keyframes": deepcopy(visual.get("unsupported_keyframes") or []),
+            "selected_primary_image": _selected_primary_image(visual),
         },
         "prompt_relay": deepcopy(prompt_debug),
         "model_patch_status": deepcopy(model_patch_status or {}),
         "media_decisions": deepcopy(media_decisions or []),
+        "output_payload_type": _output_payload_type(resolved_backend, media_decisions or []),
+        "known_limitations": _known_limitations(plan, visual, capabilities),
         "validation": validation,
         "diagnostics": list(diagnostics),
     }
@@ -221,6 +224,42 @@ def _unsupported_features(plan: dict[str, Any], visual: dict[str, Any], capabili
         if capabilities.get("supports_video_sections") is not True:
             features.append("WAN source-video conditioning is not supported by the resolved backend.")
     return features
+
+
+def _selected_primary_image(visual: dict[str, Any]) -> dict[str, Any] | None:
+    for entry in visual.get("applied_keyframes") or []:
+        if entry.get("role") == "Start":
+            return {
+                "section_id": entry.get("section_id"),
+                "asset_id": entry.get("asset_id"),
+                "role": entry.get("role"),
+                "frame": entry.get("frame"),
+            }
+    return None
+
+
+def _output_payload_type(resolved_backend: str, media_decisions: list[dict[str, Any]]) -> str:
+    if resolved_backend == "Plan Only":
+        return "WAN_RUNTIME_BACKEND_PLAN_ONLY"
+    for decision in media_decisions:
+        if decision.get("output_payload_type"):
+            return str(decision["output_payload_type"])
+    if resolved_backend == "ComfyUI Core":
+        return "COMFYUI_CORE_CONDITIONING_LATENT"
+    return "UNAVAILABLE"
+
+
+def _known_limitations(plan: dict[str, Any], visual: dict[str, Any], capabilities: dict[str, Any]) -> list[str]:
+    limitations = []
+    if capabilities.get("supports_timed_keyframes") is not True:
+        limitations.append("Timed visual keyframes are planned and reported but not applied by the selected backend.")
+    if plan.get("audio_plan"):
+        limitations.append("WAN audio conditioning is not implemented; audio clips remain final-mix metadata only.")
+    if any(entry.get("section_type") == "Video" for entry in plan.get("media_plan", [])):
+        limitations.append("WAN source-video conditioning is not implemented.")
+    if visual.get("unsupported_keyframes"):
+        limitations.append("Some requested visual keyframes are preserved in debug but unsupported by the selected backend.")
+    return limitations
 
 
 def _visual_keyframe_support_level(resolved_backend: str, capabilities: dict[str, Any]) -> str:

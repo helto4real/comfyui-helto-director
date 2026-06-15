@@ -1,6 +1,6 @@
 # WAN 2.2 Timeline Support
 
-WAN 2.2 support is now in Phase 15 workflow-hardening status. The path is:
+WAN 2.2 support is now in Phase 16 runtime-execution status. The path is:
 
 `Video Timeline Director -> WAN 2.2 Timeline Config -> WAN 2.2 Timeline Planner -> WAN 2.2 Timeline Runtime`
 
@@ -13,13 +13,13 @@ The Director stays generic. WAN-specific behavior lives in the WAN Config, Plann
 - Visual Conditioning Mode: `Timed Keyframes`
 - Runtime Backend Profile: `Plan Only`
 
-`Plan Only` is the safe default. It validates the WAN plan, reports backend compatibility, and returns runtime debug without attempting WAN tensor conditioning.
+`Plan Only` is the safe default. It validates the WAN plan, reports backend compatibility, and returns runtime debug without attempting WAN tensor conditioning. Switch to `ComfyUI Core` when you want the runtime to materialize supported WAN conditioning and latent outputs.
 
 ## Backend Profiles
 
 - `Plan Only`: diagnostic mode. It preserves planned prompts/keyframes/audio metadata and explains what would or would not run.
 - `Auto`: resolves to `ComfyUI Core` only when CLIP, VAE, and at least one high/low WAN model phase are connected; otherwise it resolves to `Plan Only`.
-- `ComfyUI Core`: partial execution mode. It builds prompt conditioning, patches connected model phases for Prompt Relay, creates a WAN latent, and applies Start/End image conditioning.
+- `ComfyUI Core`: executable mode for the supported core path. It builds prompt conditioning, patches connected model phases for Prompt Relay, calls ComfyUI Core WAN image/latent helpers, creates a WAN latent, and applies supported Start/End image conditioning.
 - `WanVideoWrapper`: reserved profile. It is not implemented in this nodepack yet and fails clearly if selected.
 
 ## Runtime Model Wiring
@@ -38,7 +38,7 @@ When Prompt Relay is enabled:
 - no connected model phase is an error in `ComfyUI Core`,
 - `Auto` resolves to `ComfyUI Core` only when `clip`, `vae`, and at least one model phase are connected; otherwise it resolves to `Plan Only`.
 
-The runtime builds the output latent from the connected model latent format when a model phase is present. This matters for WanMoe high/low workflows, which commonly expect 16-channel WAN latents and a matching WAN VAE. If image keyframe conditioning is enabled and the VAE encodes into a different latent format than the connected model expects, the runtime fails with `WAN_RUNTIME_LATENT_FORMAT_MISMATCH` before the sampler runs.
+The runtime builds the output latent from the connected model latent format when a model phase is present. This matters for WanMoe high/low workflows, which commonly expect 16-channel WAN latents and a matching WAN VAE. If image keyframe conditioning is enabled and the VAE encodes into a different latent format than the connected model expects, the runtime fails with `WAN_RUNTIME_LATENT_FORMAT_MISMATCH` before the sampler runs. For 48-channel WAN 2.2 VAE/model wiring, the Core path can use the WAN 2.2 image-to-video latent helper and reports that helper choice in `runtime_debug.media_decisions`.
 
 ## Prompt Relay
 
@@ -69,11 +69,13 @@ Runtime backend capabilities decide what can be applied:
 
 The `ComfyUI Core` backend currently applies Start and End image conditioning. Timed keyframes remain planned and visible in debug, but are reported unsupported.
 
+For default `I2V-A14B` execution, at least one usable Image Section is required. If the timeline has no Start image keyframe, `ComfyUI Core` mode fails clearly with `WAN_REQUIRED_IMAGE_CONDITIONING_MISSING` instead of silently producing a text-only fallback. Use `Plan Only` for inspection, add an Image Section, or select a text-capable model mode when you intentionally want no image guidance.
+
 ## Video, Audio, And References
 
-- Video Sections are prompt-only fallback in Phase 15 unless policy is set to error.
-- Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned in Phase 15.
-- Reference library, Animate, S2V, and WanVideoWrapper runtime integration are not implemented in Phase 15.
+- Video Sections are prompt-only fallback in Phase 16 unless policy is set to error.
+- Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned in Phase 16.
+- Reference library, Animate, S2V, arbitrary Timed keyframe tensor application, and WanVideoWrapper runtime integration are not implemented in Phase 16.
 
 ## Debugging
 
@@ -82,7 +84,9 @@ Set Debug Mode to `Summary` or `Full` on the WAN Config node. Inspect the Planne
 - `backend`: requested/resolved backend profile, availability, missing requirements, unsupported features, and recommended next action.
 - `status`: compact user-facing summary of execution, Prompt Relay, visual keyframes, audio policy, and validation counts.
 - `visual_conditioning`: requested, applied, and unsupported keyframes.
+- `output_payload_type`: the runtime output family, such as `COMFYUI_CORE_CONDITIONING_LATENT`.
 - `prompt_relay`: full prompt and token/range debug.
 - `model_patch_status`: high/low model phase patch status.
+- `known_limitations`: limitations that still apply to the resolved backend.
 
 Use [WAN 2.2 Manual Test Checklist](WAN22_MANUAL_TEST_CHECKLIST.md) for hands-on verification steps.

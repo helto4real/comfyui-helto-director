@@ -1,6 +1,6 @@
 # Current Limitations
 
-This nodepack is usable for LTX Timeline workflows and early WAN 2.2 planning/runtime debug, but it is still intentionally scoped.
+This nodepack is usable for LTX Timeline workflows and the supported WAN 2.2 ComfyUI Core runtime path, but it is still intentionally scoped.
 
 ## LTX
 
@@ -15,7 +15,9 @@ This nodepack is usable for LTX Timeline workflows and early WAN 2.2 planning/ru
 - Prompt Relay planning and all Image Section visual keyframe candidates are preserved in `WAN_TIMELINE_PLAN`.
 - The default Runtime Backend Profile is `Plan Only`, with `runtime_debug.backend` and `runtime_debug.status` intended for workflow inspection.
 - The Runtime uses separate optional `high_noise_model` and `low_noise_model` sockets for WAN 2.2 Prompt Relay patching.
-- The `ComfyUI Core` backend can apply Start and End image conditioning, but Timed keyframes are planned/debug-visible only.
+- The `ComfyUI Core` backend can execute the supported core path: prompt conditioning, Prompt Relay patching for compatible high/low models, WAN latent creation, and Start/End image conditioning.
+- Default `I2V-A14B` ComfyUI Core execution requires at least one Image Section; text-only execution should use `Plan Only` or an explicit text-capable model mode.
+- Timed keyframes are planned/debug-visible only.
 - `ComfyUI Core` requires CLIP and VAE, and Prompt Relay requires at least one connected WAN model phase.
 - Video Sections, WAN audio conditioning, S2V, Animate, reference library support, arbitrary Timed keyframe execution, and WanVideoWrapper integration remain future work.
 

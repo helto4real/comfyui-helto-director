@@ -101,10 +101,10 @@ def test_four_plus_keyframes_survive_to_runtime_debug_with_reasons(tmp_path):
     assert runtime_debug["status"]["visual_keyframes"]["unsupported_reasons"]
 
 
-def test_text_only_prompt_relay_reports_no_image_conditioning_error():
+def test_text_only_prompt_relay_reports_no_image_conditioning_error_for_text_capable_mode():
     plan, validation, _debug = build_wan_timeline_plan(
         _text_timeline(section_count=2),
-        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full"),
+        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B", debug_mode="Full"),
     )
 
     *_, runtime_debug = build_wan_runtime_outputs(

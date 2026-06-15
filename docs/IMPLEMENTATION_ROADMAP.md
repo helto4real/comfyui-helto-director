@@ -7,15 +7,16 @@ This document is the user-facing roadmap summary. The detailed locked product de
 - The generic `Video Timeline Director` is implemented and remains model-agnostic.
 - LTX 2.3 has Config, Planner, Runtime, source-video guidance, audio handling, prompt optimizer, privacy mode, and identity/reference helpers.
 - WAN 2.2 has Config, Planner, and a single Timeline Runtime node.
-- WAN 2.2 Runtime supports Plan Only diagnostics and partial ComfyUI Core execution.
+- WAN 2.2 Runtime supports Plan Only diagnostics and a supported ComfyUI Core execution path for prompt conditioning, Prompt Relay patching, Start/End image conditioning, and WAN latent creation.
 
 ## WAN 2.2 Runtime Scope
 
-WAN support is currently intended for inspection and controlled workflow hardening:
+WAN support is currently intended for controlled workflow hardening:
 
 - `Plan Only` validates and explains the timeline plan without executing tensor conditioning.
 - `Auto` resolves to `ComfyUI Core` only when required backend inputs are connected.
 - `ComfyUI Core` can build text conditioning, patch connected high/low model phases for Prompt Relay, create a WAN latent, and apply Start/End image keyframes.
+- Default `I2V-A14B` execution requires at least one Image Section; missing image guidance fails clearly instead of silently falling back.
 - Timed image keyframes are preserved in `requested_keyframes` and reported as unsupported when the selected backend cannot apply them.
 
 ## Deferred Work
