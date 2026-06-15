@@ -114,7 +114,9 @@ def test_wan_planner_builds_serializable_text_plan_with_gap_no_guidance():
     assert plan["type"] == "WAN_TIMELINE_PLAN"
     assert plan["model_family"] == "WAN"
     assert plan["model_version"] == "2.2"
-    assert plan["resolved_output"]["frame_count"] == 48
+    assert plan["resolved_output"]["requested_frame_count"] == 48
+    assert plan["resolved_output"]["frame_count"] == 49
+    assert plan["resolved_output"]["frame_count_rule"] == "WAN video length is rounded up to 4n+1 frames."
     assert plan["resolved_output"]["width"] % 16 == 0
     assert plan["resolved_output"]["height"] % 16 == 0
     assert [entry["type"] for entry in plan["section_plan"]] == ["Text", "Gap"]

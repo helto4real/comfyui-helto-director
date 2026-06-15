@@ -62,6 +62,25 @@ def test_prompt_relay_segments_and_global_prompt_merge_sum_to_latent_chunks():
     assert debug["details"]["prompt_relay"]["segment_lengths"] == prompt_relay["segment_lengths"]
 
 
+def test_wan_frame_count_rounds_up_to_core_temporal_rule():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 5.0
+    timeline["project"]["frame_rate"] = 16.0
+    timeline["director_track"]["sections"].append(_text_section("text_a", 0.0, 5.0, "complete action"))
+
+    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config(debug_mode="Summary"))
+
+    assert validation["is_valid"] is True
+    assert plan["resolved_output"]["requested_frame_count"] == 80
+    assert plan["resolved_output"]["frame_count"] == 81
+    assert plan["resolved_output"]["latent_chunk_count"] == 21
+    assert plan["resolved_output"]["generation_duration_seconds"] == 81 / 16
+    assert debug["summary"]["requested_frame_count"] == 80
+    assert debug["summary"]["video_frame_count"] == 81
+    frame_entries = [entry for entry in validation["info"] if entry["code"] == "WAN_FRAME_COUNT_RESOLVED"]
+    assert frame_entries[0]["details"]["added_padding_frames"] == 1
+
+
 def test_gap_policy_warning_no_guidance_and_merge():
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 2.0

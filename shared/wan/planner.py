@@ -56,8 +56,10 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
     director_validation = validate_video_timeline(timeline)
 
     frame_rate = float(timeline["project"].get("frame_rate") or 24.0)
-    total_frames = _wan_frame_count(float(timeline["project"].get("duration_seconds") or 0.0), frame_rate)
+    requested_frames = _requested_frame_count(float(timeline["project"].get("duration_seconds") or 0.0), frame_rate)
+    total_frames = _wan_frame_count(requested_frames)
     latent_chunk_count = _latent_chunk_count(total_frames)
+    frame_info = _wan_frame_info(requested_frames, total_frames, frame_rate)
     resolved_output = _resolve_output(timeline["project"], config)
     section_entries, gap_decisions = _build_section_plan(timeline, config, frame_rate, total_frames)
     prompt_entries = _build_prompt_plan(timeline, section_entries)
@@ -75,6 +77,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         media_entries,
         audio_entries,
         prompt_relay,
+        frame_info,
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
@@ -91,9 +94,12 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         "resolved_output": {
             **resolved_output,
             "frame_rate": frame_rate,
+            "requested_frame_count": requested_frames,
             "frame_count": total_frames,
             "duration_seconds": timeline["project"].get("duration_seconds"),
+            "generation_duration_seconds": total_frames / frame_rate if frame_rate > 0 else None,
             "latent_chunk_count": latent_chunk_count,
+            "frame_count_rule": frame_info["rule"],
         },
         "section_plan": section_entries,
         "prompt_plan": prompt_entries,
@@ -379,6 +385,7 @@ def _validate_wan_inputs(
     media_entries: list[dict[str, Any]],
     audio_entries: list[dict[str, Any]],
     prompt_relay: dict[str, Any],
+    frame_info: dict[str, Any],
 ) -> dict[str, Any]:
     entries = []
     if not director_validation.get("is_valid", False):
@@ -517,6 +524,7 @@ def _validate_wan_inputs(
         None,
         "Resolved WAN frame and latent chunk counts.",
         "Use DEBUG_INFO to inspect frame mapping.",
+        frame_info,
     ))
     return create_validation_result(entries)
 
@@ -533,7 +541,10 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
         "runtime_backend_profile": config["runtime_backend_profile"],
         "width": plan["resolved_output"]["width"],
         "height": plan["resolved_output"]["height"],
+        "requested_frame_count": plan["resolved_output"].get("requested_frame_count"),
         "video_frame_count": plan["resolved_output"]["frame_count"],
+        "generation_duration_seconds": plan["resolved_output"].get("generation_duration_seconds"),
+        "frame_count_rule": plan["resolved_output"].get("frame_count_rule"),
         "latent_chunk_count": prompt_relay["latent_chunk_count"],
         "section_count": len(timeline["director_track"]["sections"]),
         "planned_ranges": len(plan["section_plan"]),
@@ -567,8 +578,25 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
     return debug
 
 
-def _wan_frame_count(duration_seconds: float, frame_rate: float) -> int:
+def _requested_frame_count(duration_seconds: float, frame_rate: float) -> int:
     return max(1, math.ceil(duration_seconds * frame_rate))
+
+
+def _wan_frame_count(requested_frame_count: int) -> int:
+    requested = max(1, int(requested_frame_count))
+    return ((requested - 1 + WAN_TEMPORAL_STRIDE - 1) // WAN_TEMPORAL_STRIDE) * WAN_TEMPORAL_STRIDE + 1
+
+
+def _wan_frame_info(requested_frame_count: int, resolved_frame_count: int, frame_rate: float) -> dict[str, Any]:
+    return {
+        "requested_frame_count": requested_frame_count,
+        "resolved_frame_count": resolved_frame_count,
+        "added_padding_frames": max(0, resolved_frame_count - requested_frame_count),
+        "frame_rate": frame_rate,
+        "generation_duration_seconds": resolved_frame_count / frame_rate if frame_rate > 0 else None,
+        "temporal_stride": WAN_TEMPORAL_STRIDE,
+        "rule": "WAN video length is rounded up to 4n+1 frames.",
+    }
 
 
 def _latent_chunk_count(video_frame_count: int) -> int:
