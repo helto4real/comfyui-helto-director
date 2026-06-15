@@ -63,6 +63,7 @@ const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
 const INSPECTOR_EDITOR_HEIGHT = 188;
 const ROOT_GAP = 6;
+const NODE_BODY_HORIZONTAL_PADDING = 20;
 const DELETE_MENU_LABELS = {
   Image: "Delete Image",
   Video: "Delete Video",
@@ -72,6 +73,21 @@ const DELETE_MENU_LABELS = {
 
 export function getTimelineWidgetHeight(timeline) {
   return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
+}
+
+export function measureStableTimelineViewportWidth(node, container) {
+  const viewport = container?.querySelector?.(".htd-viewport");
+  const viewportWidth = positiveNumber(viewport?.clientWidth);
+  const nodeWidth = nodeBodyWidth(node);
+  if (nodeWidth > 0) return Math.max(1, nodeWidth);
+  const stableWidth = nodeWidth || Math.max(
+    elementLayoutWidth(container?.parentElement),
+    elementLayoutWidth(container),
+  );
+  if (stableWidth > 0) {
+    return Math.max(1, viewportWidth >= stableWidth ? viewportWidth : stableWidth);
+  }
+  return Math.max(1, viewportWidth || TIMELINE_WIDTH);
 }
 
 export function setLiveItemField(timeline, item, field, value) {
@@ -123,9 +139,11 @@ export class TimelineRenderer {
   render(timeline = this.controller.timeline) {
     this.closeContextMenu({ rerender: false });
     this.viewportWidth = this.measureViewportWidth();
+    this.applyViewportContainerWidth(this.viewportWidth);
     this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
     this.container.replaceChildren();
     const root = el("div", "htd-root");
+    root.style.width = `${this.viewportWidth}px`;
     const privacyMode = Boolean(timeline?.project?.privacy?.mode);
     const privacyRevealed = !privacyMode || (this.privacyRevealActive && !this.privacyExternalModalOpen);
     root.classList.toggle("is-private", privacyMode);
@@ -938,8 +956,25 @@ export class TimelineRenderer {
   }
 
   measureViewportWidth() {
-    const viewport = this.container.querySelector?.(".htd-viewport");
-    return Math.max(1, viewport?.clientWidth || this.container.clientWidth || TIMELINE_WIDTH);
+    return measureStableTimelineViewportWidth(this.node, this.container);
+  }
+
+  handleNodeResize() {
+    const measuredWidth = this.measureViewportWidth();
+    this.applyViewportContainerWidth(measuredWidth);
+    if (Math.abs(measuredWidth - this.viewportWidth) < 1) return;
+    this.viewportWidth = measuredWidth;
+    this.render(this.controller.timeline);
+  }
+
+  applyViewportContainerWidth(width) {
+    const stableWidth = Math.max(1, Number(width) || TIMELINE_WIDTH);
+    this.container.style.width = `${stableWidth}px`;
+    this.container.style.maxWidth = `${stableWidth}px`;
+    if (this.container.parentElement) {
+      this.container.parentElement.style.width = `${stableWidth}px`;
+      this.container.parentElement.style.maxWidth = `${stableWidth}px`;
+    }
   }
 
   scheduleViewportRemeasure() {
@@ -951,6 +986,7 @@ export class TimelineRenderer {
       const measuredWidth = this.measureViewportWidth();
       if (Math.abs(measuredWidth - this.viewportWidth) < 1) return;
       this.viewportWidth = measuredWidth;
+      this.applyViewportContainerWidth(this.viewportWidth);
       this.render(this.controller.timeline);
     });
   }
@@ -1057,6 +1093,22 @@ function getInspectorHeight(timeline) {
   const selected = timeline?.director_track?.sections?.find((section) => section.item_id === timeline?.ui_state?.selected_item_id);
   const selectedAudio = findAudioClip(timeline, timeline?.ui_state?.selected_item_id);
   return selected || selectedAudio ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
+}
+
+function positiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function elementLayoutWidth(element) {
+  const rectWidth = positiveNumber(element?.getBoundingClientRect?.().width);
+  return rectWidth || positiveNumber(element?.clientWidth) || positiveNumber(element?.offsetWidth);
+}
+
+function nodeBodyWidth(node) {
+  const rawWidth = Array.isArray(node?.size) ? node.size[0] : node?.size?.[0];
+  const width = positiveNumber(rawWidth);
+  return width > NODE_BODY_HORIZONTAL_PADDING ? width - NODE_BODY_HORIZONTAL_PADDING : width;
 }
 
 function shouldRenderPromptInput(timeline, item) {
@@ -1402,8 +1454,8 @@ function installStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-timeline-director-style";
   style.textContent = `
-    .helto-timeline-director { overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
-    .htd-root { position: relative; height: 100%; display: flex; flex-direction: column; gap: 6px; }
+    .helto-timeline-director { width: 100%; box-sizing: border-box; overflow: hidden; color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
+    .htd-root { position: relative; width: 100%; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; }
     .htd-root.is-private:not(.is-privacy-revealed) .htd-range-control,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-viewport,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-inspector { visibility: hidden; }
@@ -1435,14 +1487,14 @@ function installStyles(documentRef) {
     .htd-context-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; white-space: nowrap; }
     .htd-context-menu-item:hover { background: #293244; color: #f7f9fc; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; }
-    .htd-range-control { height: ${RANGE_CONTROL_HEIGHT}px; display: flex; align-items: center; gap: 0; box-sizing: border-box; }
+    .htd-range-control { width: 100%; height: ${RANGE_CONTROL_HEIGHT}px; display: flex; align-items: center; gap: 0; box-sizing: border-box; }
     .htd-range-gutter { width: ${TIMELINE_RIGHT_PADDING}px; flex: 0 0 ${TIMELINE_RIGHT_PADDING}px; }
     .htd-range-bar { position: relative; height: 8px; flex: 1 1 auto; margin-right: ${TIMELINE_RIGHT_PADDING}px; border-radius: 999px; background: #111722; border: 1px solid #3d4658; cursor: pointer; box-sizing: border-box; }
     .htd-range-active { position: absolute; top: -1px; bottom: -1px; min-width: 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(123, 148, 180, 0.95), rgba(226, 194, 92, 0.82)); border: 1px solid rgba(242, 209, 107, 0.72); box-sizing: border-box; }
     .htd-range-handle { position: absolute; top: 50%; width: 12px; height: 18px; border: 1px solid #d8dde8; border-radius: 3px; background: #202633; transform: translate(-50%, -50%); cursor: ew-resize; box-shadow: 0 1px 4px rgba(0,0,0,0.36); }
     .htd-range-start { left: 0; }
     .htd-range-end { left: 100%; }
-    .htd-viewport { overflow: hidden; box-sizing: border-box; border: 1px solid #3d4658; border-radius: 4px; background: #111722; }
+    .htd-viewport { width: 100%; overflow: hidden; box-sizing: border-box; border: 1px solid #3d4658; border-radius: 4px; background: #111722; }
     .htd-stage { position: relative; min-height: 100%; }
     .htd-ruler { position: relative; border-bottom: 1px solid #31394a; }
     .htd-tick { position: absolute; z-index: 2; top: 3px; height: 20px; border-left: 1px solid #394255; padding-left: 4px; color: #9ba8bd; }
@@ -1472,7 +1524,7 @@ function installStyles(documentRef) {
     .htd-left { left: 0; }
     .htd-right { right: 0; }
     .is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }
-    .htd-inspector { min-height: ${INSPECTOR_HEIGHT}px; overflow: visible; box-sizing: border-box; }
+    .htd-inspector { width: 100%; min-height: ${INSPECTOR_HEIGHT}px; overflow: visible; box-sizing: border-box; }
     .htd-inspector.has-selection { min-height: ${INSPECTOR_EDITOR_HEIGHT}px; }
     .htd-inspector-panel { height: 100%; min-height: ${INSPECTOR_EDITOR_HEIGHT}px; box-sizing: border-box; padding: 7px; border: 1px solid #30394c; border-radius: 4px; background: rgba(17, 23, 34, 0.48); overflow: visible; }
     .htd-inspector-panel.is-section-inspector { display: flex; flex-direction: column; gap: 6px; align-content: start; }

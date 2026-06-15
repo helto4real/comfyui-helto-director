@@ -226,6 +226,10 @@ async function testExtensionFlushesBeforeNodeSerialize() {
   assert.equal(extensionSource.includes("const serialize = nodeType.prototype.serialize"), true);
   assert.equal(extensionSource.includes("this.flushTimelineBeforeSerialization?.()"), true);
   assert.equal(extensionSource.includes("return serialize.apply(this, arguments)"), true);
+  assert.equal(extensionSource.includes("const onResize = nodeType.prototype.onResize"), true);
+  assert.equal(extensionSource.includes("this._timelineRenderer?.handleNodeResize?.()"), true);
+  assert.equal(extensionSource.includes("const onDrawForeground = nodeType.prototype.onDrawForeground"), true);
+  assert.equal(extensionSource.includes("_timelineDirectorLastNodeWidth"), true);
 }
 
 async function testGestureMouseupCommitBoundary() {

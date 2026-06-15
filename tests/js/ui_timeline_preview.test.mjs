@@ -10,6 +10,7 @@ import {
 } from "../../web/timeline/geometry.js";
 import {
   getTimelineWidgetHeight,
+  measureStableTimelineViewportWidth,
   setLiveItemField,
   waveformPeakCountForWidth,
   waveformPeakRequestForClip,
@@ -100,7 +101,7 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
   assert.equal(rendererSource.includes('backgroundSize = "cover"'), false);
-  assert.equal(rendererSource.includes(".htd-viewport { overflow: hidden;"), true);
+  assert.equal(rendererSource.includes(".htd-viewport { width: 100%; overflow: hidden;"), true);
   assert.equal(rendererSource.includes("viewport.scrollLeft"), false);
   assert.equal(rendererSource.includes("iconButton(\"text\", \"Add Text Section\""), true);
   assert.equal(rendererSource.includes("iconMenuControl"), true);
@@ -115,6 +116,23 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("scheduleViewportRemeasure"), true);
   assert.equal(rendererSource.includes("ResizeObserver"), true);
   assert.equal(rendererSource.includes("contentRect?.width"), true);
+  assert.equal(rendererSource.includes("measureStableTimelineViewportWidth(this.node, this.container)"), true);
+  assert.equal(rendererSource.includes("this.applyViewportContainerWidth(this.viewportWidth)"), true);
+  assert.equal(rendererSource.includes("handleNodeResize()"), true);
+  assert.equal(rendererSource.includes("applyViewportContainerWidth(width)"), true);
+  assert.equal(rendererSource.includes("this.container.style.width = `${stableWidth}px`;"), true);
+  assert.equal(rendererSource.includes("this.container.style.maxWidth = `${stableWidth}px`;"), true);
+  assert.equal(rendererSource.includes("this.container.parentElement.style.width = `${stableWidth}px`;"), true);
+  assert.equal(rendererSource.includes("this.container.parentElement.style.maxWidth = `${stableWidth}px`;"), true);
+  assert.equal(rendererSource.includes("root.style.width = `${this.viewportWidth}px`;"), true);
+  assert.equal(rendererSource.includes("nodeBodyWidth(node)"), true);
+  assert.equal(rendererSource.includes("if (nodeWidth > 0) return Math.max(1, nodeWidth);"), true);
+  assert.equal(rendererSource.includes("viewportWidth >= stableWidth ? viewportWidth : stableWidth"), true);
+  assert.equal(rendererSource.includes(".helto-timeline-director { width: 100%; box-sizing: border-box;"), true);
+  assert.equal(rendererSource.includes(".htd-root { position: relative; width: 100%; height: 100%; box-sizing: border-box;"), true);
+  assert.equal(rendererSource.includes(".htd-range-control { width: 100%;"), true);
+  assert.equal(rendererSource.includes(".htd-viewport { width: 100%; overflow: hidden; box-sizing: border-box;"), true);
+  assert.equal(rendererSource.includes(".htd-inspector { width: 100%;"), true);
   assert.equal(rendererSource.includes("startItemDrag(event"), true);
   assert.equal(rendererSource.includes("selectItem(timeline, dragState.itemId)"), true);
   assert.equal(rendererSource.includes("rerender: false"), true);
@@ -315,6 +333,31 @@ function testWaveformHelpersAdaptAndTrimPeaks() {
   }), [1, 1, 1]);
 }
 
+function testViewportMeasurementIgnoresCollapsedChildWidth() {
+  const container = {
+    clientWidth: 460,
+    offsetWidth: 460,
+    parentElement: {
+      clientWidth: 768,
+      offsetWidth: 768,
+      getBoundingClientRect: () => ({ width: 768 }),
+    },
+    getBoundingClientRect: () => ({ width: 460 }),
+    querySelector: () => ({ clientWidth: 460 }),
+  };
+
+  assert.equal(measureStableTimelineViewportWidth({ size: [820, 400] }, container), 800);
+  assert.equal(measureStableTimelineViewportWidth({}, container), 768);
+  assert.equal(measureStableTimelineViewportWidth({ size: [820, 400] }, {
+    ...container,
+    querySelector: () => ({ clientWidth: 900 }),
+  }), 800);
+  assert.equal(measureStableTimelineViewportWidth({ size: [540, 400] }, {
+    ...container,
+    querySelector: () => ({ clientWidth: 900 }),
+  }), 520);
+}
+
 testTimelineHeightIsTripled();
 testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
@@ -325,5 +368,6 @@ testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
 testRendererUsesRealWaveformsOnly();
 testWaveformHelpersAdaptAndTrimPeaks();
+testViewportMeasurementIgnoresCollapsedChildWidth();
 
 console.log("timeline preview UI tests passed");

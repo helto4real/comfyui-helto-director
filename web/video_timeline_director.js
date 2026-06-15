@@ -39,6 +39,25 @@ app.registerExtension({
       };
     }
 
+    const onResize = nodeType.prototype.onResize;
+    nodeType.prototype.onResize = function () {
+      const result = onResize?.apply(this, arguments);
+      this._timelineDirectorLastNodeWidth = getNodeWidth(this);
+      this._timelineRenderer?.handleNodeResize?.();
+      return result;
+    };
+
+    const onDrawForeground = nodeType.prototype.onDrawForeground;
+    nodeType.prototype.onDrawForeground = function () {
+      const result = onDrawForeground?.apply(this, arguments);
+      const nodeWidth = getNodeWidth(this);
+      if (nodeWidth > 0 && Math.abs(nodeWidth - Number(this._timelineDirectorLastNodeWidth ?? 0)) >= 1) {
+        this._timelineDirectorLastNodeWidth = nodeWidth;
+        this._timelineRenderer?.handleNodeResize?.();
+      }
+      return result;
+    };
+
     const onRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
       unmountTimelineRenderer(this);
@@ -48,3 +67,8 @@ app.registerExtension({
     };
   },
 });
+
+function getNodeWidth(node) {
+  const width = Number(node?.size?.[0] ?? 0);
+  return Number.isFinite(width) ? width : 0;
+}
