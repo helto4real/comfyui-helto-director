@@ -63,10 +63,11 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
 
 def test_director_runs_without_frontend_state():
     VideoTimelineDirector = get_video_timeline_director()
-    timeline, validation = VideoTimelineDirector.execute().result
+    timeline, validation, frame_rate = VideoTimelineDirector.execute().result
 
     assert timeline["type"] == "VIDEO_TIMELINE"
     assert timeline["project"]["duration_seconds"] == 5.0
+    assert frame_rate == timeline["project"]["frame_rate"] == 24.0
     assert validation["is_valid"] is True
     assert [entry["code"] for entry in validation["info"]] == ["DIRECTOR_GAP"]
 
@@ -80,7 +81,7 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     timeline["ui_state"]["view_start_seconds"] = 2
     timeline["ui_state"]["view_end_seconds"] = 4
 
-    output_timeline, validation = VideoTimelineDirector.execute(
+    output_timeline, validation, frame_rate = VideoTimelineDirector.execute(
         duration_seconds=12.0,
         frame_rate=30.0,
         aspect_ratio="9:16",
@@ -92,6 +93,7 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     assert validation["is_valid"] is True
     assert output_timeline["project"]["duration_seconds"] == 12.0
     assert output_timeline["project"]["frame_rate"] == 30.0
+    assert frame_rate == 30.0
     assert output_timeline["project"]["aspect_ratio"] == "9:16"
     assert output_timeline["project"]["orientation"] == "Portrait"
     assert output_timeline["project"]["quality_preset"] == "High"
@@ -112,7 +114,7 @@ def test_director_outputs_validation_for_invalid_timeline():
         }
     )
 
-    output_timeline, validation = VideoTimelineDirector.execute(
+    output_timeline, validation, _frame_rate = VideoTimelineDirector.execute(
         video_timeline_json=json.dumps(timeline)
     ).result
 
@@ -139,7 +141,7 @@ def test_director_decrypts_private_timeline_json():
     )
     envelope = encrypt_state({"timeline": timeline})
 
-    output_timeline, validation = VideoTimelineDirector.execute(
+    output_timeline, validation, _frame_rate = VideoTimelineDirector.execute(
         video_timeline_json=json.dumps(envelope)
     ).result
 
@@ -150,7 +152,7 @@ def test_director_decrypts_private_timeline_json():
 
 def test_director_invalid_json_returns_validation_error_not_crash():
     VideoTimelineDirector = get_video_timeline_director()
-    output_timeline, validation = VideoTimelineDirector.execute(
+    output_timeline, validation, _frame_rate = VideoTimelineDirector.execute(
         video_timeline_json="{not json"
     ).result
 

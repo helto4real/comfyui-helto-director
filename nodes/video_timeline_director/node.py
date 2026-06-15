@@ -87,6 +87,10 @@ class VideoTimelineDirector(io.ComfyNode):
                     "timeline_validation",
                     display_name="TIMELINE_VALIDATION",
                 ),
+                io.Float.Output(
+                    "frame_rate",
+                    display_name="frame_rate",
+                ),
             ],
         )
 
@@ -108,4 +112,4 @@ class VideoTimelineDirector(io.ComfyNode):
             orientation=orientation,
             quality_preset=quality_preset,
         )
-        return io.NodeOutput(video_timeline, timeline_validation)
+        return io.NodeOutput(video_timeline, timeline_validation, float(video_timeline["project"]["frame_rate"]))

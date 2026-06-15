@@ -52,6 +52,7 @@ def test_comfyui_style_custom_node_loader_imports_package():
     assert [output.io_type for output in schema.outputs] == [
         "VIDEO_TIMELINE",
         "TIMELINE_VALIDATION",
+        "FLOAT",
     ]
 
 
