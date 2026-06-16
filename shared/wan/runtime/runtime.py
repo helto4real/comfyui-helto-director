@@ -312,6 +312,13 @@ def _validate_comfy_core_visual_requirements(config: dict[str, Any], visual: dic
     has_start_keyframe = any(entry.get("role") == "Start" for entry in visual.get("applied_keyframes") or [])
     if has_start_keyframe:
         return
+    if _has_previous_tail_start_conditioning(visual):
+        validation_entries.append(info(
+            "WAN_CONTINUATION_TAIL_IMAGE_CONDITIONING",
+            "WAN I2V continuation image conditioning is satisfied by the previous segment tail.",
+            "Inspect runtime_debug.visual_conditioning.media_decisions for segment_previous_tail.",
+        ))
+        return
     validation_entries.append(error(
         "WAN_REQUIRED_IMAGE_CONDITIONING_MISSING",
         "WAN 2.2 I2V-A14B ComfyUI Core execution requires at least one usable Image Section keyframe.",
@@ -320,6 +327,18 @@ def _validate_comfy_core_visual_requirements(config: dict[str, Any], visual: dic
     raise ValueError(
         "WAN_REQUIRED_IMAGE_CONDITIONING_MISSING: WAN 2.2 I2V-A14B ComfyUI Core execution requires at least one usable Image Section keyframe."
     )
+
+
+def _has_previous_tail_start_conditioning(visual: dict[str, Any]) -> bool:
+    if visual.get("continuation_source") != "previous_tail":
+        return False
+    transient_start = visual.get("transient_start_image")
+    if transient_start is None or not hasattr(transient_start, "shape"):
+        return False
+    try:
+        return int(transient_start.shape[0]) > 0
+    except Exception:
+        return False
 
 
 def _validate_bernini_user_conditioning(plan: dict[str, Any], validation_entries: list[dict[str, Any]]) -> None:

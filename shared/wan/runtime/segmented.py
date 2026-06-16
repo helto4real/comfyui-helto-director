@@ -127,6 +127,7 @@ def build_wan_segmented_executor_outputs(
             spill_records.append(record)
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
             wan_debug = runtime_debug.get("wan", {}) if isinstance(runtime_debug, dict) else {}
+            visual_debug = wan_debug.get("visual_conditioning", {}) if isinstance(wan_debug, dict) else {}
             segment_debug.append({
                 "id": segment.get("id"),
                 "seed": segment_seed_value,
@@ -140,6 +141,11 @@ def build_wan_segmented_executor_outputs(
                 "actual_tail_shape": [int(dim) for dim in tail.shape] if tail is not None else [],
                 "sampling": sampling_debug,
                 "bernini": wan_debug.get("bernini"),
+                "visual_conditioning": {
+                    "requested_keyframes": visual_debug.get("requested_keyframes") or [],
+                    "applied_keyframes": visual_debug.get("applied_keyframes") or [],
+                    "media_decisions": visual_debug.get("media_decisions") or [],
+                },
             })
             del segment_plan, runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, sampled, images, visible_images
 
@@ -379,6 +385,7 @@ def _build_segment_prompt_relay(
 
 def _apply_wan_segment_continuity(segment_plan: dict[str, Any], tail) -> None:
     wan = segment_plan.get("model_specific", {}).get("wan", {})
+    _reset_segment_visual_conditioning(segment_plan, has_continuity=tail is not None)
     if tail is None:
         return
     wan["segment_continuity"] = {
@@ -389,6 +396,10 @@ def _apply_wan_segment_continuity(segment_plan: dict[str, Any], tail) -> None:
     visual = wan.get("visual_conditioning")
     if isinstance(visual, dict):
         visual["transient_start_image"] = tail
+        visual["continuation_source"] = "previous_tail"
+        visual["requested_keyframes"] = []
+        visual["applied_keyframes"] = []
+        visual["unsupported_keyframes"] = []
     bernini = wan.get("bernini")
     if isinstance(bernini, dict) and bernini.get("enabled"):
         bernini["segment_continuity"] = wan["segment_continuity"]
@@ -400,6 +411,72 @@ def _apply_wan_segment_continuity(segment_plan: dict[str, Any], tail) -> None:
             bernini["task_type"] = "v2v"
             bernini["system_prompt"] = BERNINI_SYSTEM_PROMPTS["v2v"]
             bernini["selection_reason"] = "Continuation segment uses the previous decoded tail as Bernini source_video."
+
+
+def _reset_segment_visual_conditioning(segment_plan: dict[str, Any], *, has_continuity: bool) -> None:
+    wan = segment_plan.get("model_specific", {}).get("wan", {})
+    previous = wan.get("visual_conditioning") if isinstance(wan.get("visual_conditioning"), dict) else {}
+    if has_continuity:
+        requested = []
+    else:
+        requested = _segment_visual_keyframes(segment_plan)
+    wan["visual_conditioning"] = {
+        "mode": previous.get("mode") or wan.get("config", {}).get("visual_conditioning_mode") or "Timed Keyframes",
+        "requested_keyframes": requested,
+        "applied_keyframes": [],
+        "unsupported_keyframes": [],
+        "backend_capabilities": previous.get("backend_capabilities") or {
+            "supports_start_image": None,
+            "supports_end_image": None,
+            "supports_timed_keyframes": None,
+            "max_visual_keyframes": None,
+            "supports_prompt_relay": None,
+            "supports_video_sections": None,
+            "supports_audio_conditioning": None,
+        },
+        "selection_policy": previous.get("selection_policy") or "Segment-local visual keyframes only.",
+        "segment_local": True,
+    }
+
+
+def _segment_visual_keyframes(segment_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    prompts_by_id = {entry.get("item_id"): entry for entry in segment_plan.get("prompt_plan", [])}
+    sections_by_id = {entry.get("item_id"): entry for entry in segment_plan.get("section_plan", [])}
+    temporal_stride = int(
+        segment_plan.get("model_specific", {}).get("wan", {}).get("config", {}).get("rules", {}).get("temporal_stride")
+        or 4
+    )
+    image_media = [
+        media for media in segment_plan.get("media_plan", [])
+        if media.get("section_type") == "Image" and media.get("asset_id") and media.get("path")
+    ]
+    image_media.sort(key=lambda media: sections_by_id.get(media.get("item_id"), {}).get("start_frame", 0))
+    requested = []
+    for index, media in enumerate(image_media):
+        section = sections_by_id.get(media.get("item_id"), {})
+        prompt = prompts_by_id.get(media.get("item_id"), {})
+        requested.append({
+            "role": _keyframe_role(index, len(image_media)),
+            "section_id": media.get("item_id"),
+            "asset_id": media.get("asset_id"),
+            "path": media.get("path"),
+            "time": section.get("start_time"),
+            "frame": int(section.get("start_frame") or 0),
+            "latent_chunk": int(section.get("start_frame") or 0) // max(1, temporal_stride),
+            "guide_strength": float(media.get("guide_strength") if media.get("guide_strength") is not None else 1.0),
+            "crop_mode": media.get("crop_mode"),
+            "prompt": prompt.get("raw_prompt", ""),
+            "effective_prompt": prompt.get("effective_prompt", ""),
+        })
+    return requested
+
+
+def _keyframe_role(index: int, count: int) -> str:
+    if index == 0:
+        return "Start"
+    if index == count - 1:
+        return "End"
+    return "Timed"
 
 
 def _wan_plan_as_audio_mix_plan(plan: dict[str, Any]) -> dict[str, Any]:

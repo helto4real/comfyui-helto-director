@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import torch
+
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_AUDIO,
@@ -16,6 +18,8 @@ from shared.contracts.video_timeline import (
 from shared.timeline import create_default_video_timeline
 from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.config import normalize_wan_timeline_config
+from shared.segmented_executor import build_segment_plan
+from shared.wan.runtime.segmented import _apply_wan_segment_continuity
 
 
 def _load_nodepack():
@@ -45,6 +49,55 @@ def _load_nodepack():
             sys.modules.pop(sys_module_name, None)
         else:
             sys.modules[sys_module_name] = previous
+
+
+def _timeline_with_start_image_and_three_text_sections():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 10.0
+    timeline["project"]["frame_rate"] = 16.0
+    timeline["assets"].append(
+        {
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/woman.png",
+            "name": "woman.png",
+        }
+    )
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "image_section",
+                "type": SECTION_TYPE_IMAGE,
+                "start_time": 0.0,
+                "end_time": 79 / 16,
+                "image": {"asset_id": "image_001"},
+                "prompt": "woman in frame",
+            },
+            {
+                "item_id": "text_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 79 / 16,
+                "end_time": 120 / 16,
+                "prompt": "she turns toward the window",
+            },
+            {
+                "item_id": "text_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 120 / 16,
+                "end_time": 140 / 16,
+                "prompt": "she walks forward",
+            },
+            {
+                "item_id": "text_003",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 140 / 16,
+                "end_time": 10.0,
+                "prompt": "she looks back",
+            },
+        ]
+    )
+    return timeline
 
 
 def test_wan_nodes_register_with_custom_sockets_and_mappings():
@@ -218,51 +271,7 @@ def test_wan_planner_builds_hidden_segments_and_requires_vanilla_start_or_end_fr
 
 
 def test_wan_segment_padding_does_not_create_extra_hidden_generation_with_start_image():
-    timeline = create_default_video_timeline()
-    timeline["project"]["duration_seconds"] = 10.0
-    timeline["project"]["frame_rate"] = 16.0
-    timeline["assets"].append(
-        {
-            "asset_id": "image_001",
-            "type": ASSET_TYPE_IMAGE,
-            "source_kind": ASSET_SOURCE_FILE_PATH,
-            "path": "/mnt/media/woman.png",
-            "name": "woman.png",
-        }
-    )
-    timeline["director_track"]["sections"].extend(
-        [
-            {
-                "item_id": "image_section",
-                "type": SECTION_TYPE_IMAGE,
-                "start_time": 0.0,
-                "end_time": 79 / 16,
-                "image": {"asset_id": "image_001"},
-                "prompt": "woman in frame",
-            },
-            {
-                "item_id": "text_001",
-                "type": SECTION_TYPE_TEXT,
-                "start_time": 79 / 16,
-                "end_time": 120 / 16,
-                "prompt": "she turns toward the window",
-            },
-            {
-                "item_id": "text_002",
-                "type": SECTION_TYPE_TEXT,
-                "start_time": 120 / 16,
-                "end_time": 140 / 16,
-                "prompt": "she walks forward",
-            },
-            {
-                "item_id": "text_003",
-                "type": SECTION_TYPE_TEXT,
-                "start_time": 140 / 16,
-                "end_time": 10.0,
-                "prompt": "she looks back",
-            },
-        ]
-    )
+    timeline = _timeline_with_start_image_and_three_text_sections()
 
     plan, validation, _debug = build_wan_timeline_plan(
         timeline,
@@ -279,6 +288,28 @@ def test_wan_segment_padding_does_not_create_extra_hidden_generation_with_start_
     assert segmented["segments"][1]["generation_frame_count"] == 89
     assert segmented["segments"][1]["continuity"]["continuity_frame_count"] == 5
     assert segmented["segments"][1]["continuity"]["source"] == "previous_tail"
+
+
+def test_wan_segment_plan_does_not_leak_original_start_keyframe_into_continuation():
+    timeline = _timeline_with_start_image_and_three_text_sections()
+
+    plan, validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(max_generation_duration=5.0),
+    )
+
+    assert validation["is_valid"] is True
+    segment = plan["model_specific"]["wan"]["segmented_generation"]["segments"][1]
+    tail = torch.zeros((5, 512, 384, 3), dtype=torch.float32)
+    segment_plan = build_segment_plan(plan, segment, model_key="wan", previous_tail_images=tail)
+    _apply_wan_segment_continuity(segment_plan, tail=tail)
+    visual = segment_plan["model_specific"]["wan"]["visual_conditioning"]
+
+    assert "image_section" not in segment["source_section_ids"]
+    assert visual["requested_keyframes"] == []
+    assert visual["applied_keyframes"] == []
+    assert visual["continuation_source"] == "previous_tail"
+    assert visual["transient_start_image"] is tail
 
 
 def test_wan_bernini_allows_text_first_segmented_generation():

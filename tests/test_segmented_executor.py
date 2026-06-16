@@ -12,6 +12,8 @@ from shared.segmented_executor import (
     trim_visible_segment_images,
 )
 import shared.wan.runtime.segmented as wan_segmented
+import shared.wan.runtime.runtime as wan_runtime
+import shared.wan.runtime.visual as wan_visual
 from shared.timeline.segmentation import build_generation_segments
 
 
@@ -169,6 +171,82 @@ def test_stitch_segment_images_trims_configured_preroll_frames():
     )
 
     assert torch.equal(stitched[5:], second[5:9])
+
+
+def test_wan_visual_prefers_continuation_tail_over_stale_start_keyframe(monkeypatch):
+    calls = []
+
+    def fake_execute_helper(*args):
+        calls.append(args)
+        return "positive", "negative", {"samples": torch.zeros((1, 48, 2, 2, 2))}, "FakeHelper"
+
+    monkeypatch.setattr(wan_visual, "execute_comfy_core_visual_helper", fake_execute_helper)
+    tail = torch.ones((5, 8, 8, 3), dtype=torch.float32)
+
+    _positive, _negative, _latent, debug = wan_visual.apply_comfy_core_visual_keyframes(
+        "positive",
+        "negative",
+        vae=object(),
+        visual={
+            "continuation_source": "previous_tail",
+            "transient_start_image": tail,
+            "applied_keyframes": [
+                {
+                    "role": "Start",
+                    "section_id": "original_image",
+                    "asset_id": "image_001",
+                    "path": "/mnt/media/woman.png",
+                }
+            ],
+            "unsupported_keyframes": [],
+        },
+        width=8,
+        height=8,
+        frame_count=13,
+        batch_size=1,
+        latent_spec={},
+        model_mode="I2V-A14B",
+    )
+
+    assert calls[0][7] is tail
+    assert calls[0][8] is None
+    assert debug["applied_keyframes"] == [{"role": "Start", "section_id": "segment_previous_tail", "transient": True}]
+    assert debug["media_decisions"][0]["section_id"] == "segment_previous_tail"
+    assert any("overrode copied visual keyframes" in item for item in debug["diagnostics"])
+
+
+def test_wan_i2v_validation_accepts_previous_tail_start_conditioning():
+    validation_entries = []
+    tail = torch.ones((5, 8, 8, 3), dtype=torch.float32)
+
+    wan_runtime._validate_comfy_core_visual_requirements(
+        {"model_mode": "I2V-A14B"},
+        {
+            "continuation_source": "previous_tail",
+            "transient_start_image": tail,
+            "applied_keyframes": [],
+        },
+        validation_entries,
+    )
+
+    assert [entry["code"] for entry in validation_entries] == ["WAN_CONTINUATION_TAIL_IMAGE_CONDITIONING"]
+
+
+def test_wan_i2v_validation_still_rejects_missing_image_conditioning():
+    validation_entries = []
+
+    try:
+        wan_runtime._validate_comfy_core_visual_requirements(
+            {"model_mode": "I2V-A14B"},
+            {"applied_keyframes": []},
+            validation_entries,
+        )
+    except ValueError as exc:
+        assert "WAN_REQUIRED_IMAGE_CONDITIONING_MISSING" in str(exc)
+    else:
+        raise AssertionError("Expected WAN I2V validation to reject missing image conditioning.")
+
+    assert [entry["code"] for entry in validation_entries] == ["WAN_REQUIRED_IMAGE_CONDITIONING_MISSING"]
 
 
 def test_segment_spill_store_plain_round_trips_and_cleans_up(tmp_path):
