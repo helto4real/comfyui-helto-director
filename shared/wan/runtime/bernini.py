@@ -25,6 +25,7 @@ def build_bernini_runtime_payload(
     diagnostics: list[str] = []
     _validate_bernini_latent_spec(latent_spec)
     source_video = _load_source_video_tensor(bernini, plan, width, height, frame_count, media_decisions, diagnostics)
+    reference_images = _load_reference_image_tensors(bernini, media_decisions, diagnostics)
     nodes_bernini = _load_comfy_core_bernini_nodes()
     output = nodes_bernini.BerniniConditioning.execute(
         positive,
@@ -36,19 +37,21 @@ def build_bernini_runtime_payload(
         batch_size,
         source_video=source_video,
         reference_video=None,
-        reference_images=None,
+        reference_images=reference_images,
         ref_max_size=848,
     )
     positive, negative, latent = _node_output_args(output)
     helper_name = "BerniniConditioning"
     _validate_bernini_output_latent(latent)
     source_video_debug = _source_video_debug(source_video)
+    reference_images_debug = _reference_images_debug(reference_images)
     context_debug = _context_latents_debug(positive)
     conditioning_prompt_debug = _positive_prompt_debug(positive, bernini, prompt_debug)
     media_decisions.append({
         "type": "bernini_conditioning_debug",
         "bernini_role": "conditioning_debug",
         "source_video": source_video_debug,
+        "reference_images": reference_images_debug,
         "context_latents": context_debug,
         "positive_prompt": conditioning_prompt_debug,
         "task_type": bernini.get("task_type"),
@@ -71,6 +74,8 @@ def build_bernini_runtime_payload(
         "ignored_timeline_media": bernini.get("ignored_timeline_media") or [],
         "deferred_task_types": bernini.get("deferred_task_types") or [],
         "reference_image_support": bernini.get("reference_image_support"),
+        "reference_image_count": len(reference_images or {}),
+        "character_references": bernini.get("character_references") or {},
         "media_decisions": media_decisions,
         "diagnostics": diagnostics,
         "core_helper": helper_name,
@@ -84,12 +89,12 @@ def bernini_visual_debug(plan: dict[str, Any], visual: dict[str, Any]) -> dict[s
     media_used = bernini.get("media_used") or {}
     applied = []
     unsupported = []
-    if task_type == "i2v" and media_used.get("item_id"):
+    if task_type in {"i2v", "rv2v"} and media_used.get("item_id"):
         for keyframe in requested:
             if keyframe.get("section_id") == media_used.get("item_id"):
                 applied.append({**keyframe, "backend_role": "Bernini source_video_single_frame"})
             else:
-                unsupported.append({**keyframe, "reason": "Bernini first-pass runtime uses only the first image as single-frame source_video context; reference images are deferred."})
+                unsupported.append({**keyframe, "reason": "Bernini uses only the first timeline image as source/background context; subject references come from Director character references."})
     else:
         unsupported = [
             {**keyframe, "reason": f"Bernini {task_type} does not use timeline image keyframes as reference images in this version."}
@@ -131,8 +136,7 @@ def _load_source_video_tensor(
         media_decisions[-1]["source_video_frame_count"] = int(image.shape[0])
         _annotate_source_video_aspect(media_decisions[-1], width, height, diagnostics)
         diagnostics.append(
-            "Bernini i2v requested; ComfyUI Bernini has no dedicated start-image input, "
-            "so the first timeline image was passed as single-frame source_video."
+            f"Bernini {bernini.get('task_type') or 'i2v'} requested; the first timeline image was passed as single-frame source_video background context."
         )
         return image
     if media.get("section_type") == "Video":
@@ -150,6 +154,49 @@ def _load_source_video_tensor(
         })
         return frames
     return None
+
+
+def _load_reference_image_tensors(
+    bernini: dict[str, Any],
+    media_decisions: list[dict[str, Any]],
+    diagnostics: list[str],
+) -> dict[str, Any] | None:
+    references = bernini.get("character_references") or {}
+    specs = references.get("reference_specs") if isinstance(references, dict) else []
+    if not specs:
+        return None
+    output: dict[str, Any] = {}
+    for index, spec in enumerate(specs):
+        image = spec.get("image") if isinstance(spec, dict) else None
+        path = image.get("path") if isinstance(image, dict) else None
+        label = spec.get("label") or spec.get("id") or f"reference_{index}"
+        if not path:
+            raise ValueError(f"BERNINI_CHARACTER_REFERENCE_MISSING_IMAGE: Bernini character reference '{label}' is missing an image path.")
+        try:
+            tensor = load_keyframe_image(
+                {
+                    "section_id": spec.get("section_id"),
+                    "asset_id": spec.get("id"),
+                    "path": path,
+                },
+                1,
+                1,
+                media_decisions,
+                resize=False,
+            )
+        except ValueError as exc:
+            raise ValueError(f"BERNINI_CHARACTER_REFERENCE_LOAD_FAILED: Could not load Bernini character reference '{label}' from '{path}': {exc}") from exc
+        key = f"reference_image_{index}"
+        output[key] = tensor
+        media_decisions[-1]["bernini_role"] = "subject_reference_image"
+        media_decisions[-1]["reference_key"] = key
+        media_decisions[-1]["label"] = label
+        media_decisions[-1]["reference_id"] = spec.get("id")
+        media_decisions[-1]["description"] = spec.get("description") or ""
+        media_decisions[-1]["strength"] = spec.get("strength")
+        media_decisions[-1]["tokens"] = list(spec.get("tokens") or [])
+    diagnostics.append(f"Bernini loaded {len(output)} Director character reference image(s) as subject reference_images.")
+    return output
 
 
 def _load_video_source_frames(media: dict[str, Any], plan: dict[str, Any], frame_count: int):
@@ -242,6 +289,23 @@ def _source_video_debug(source_video) -> dict[str, Any]:
         "frame_count": int(source_video.shape[0]),
         "tensor_shape": _tensor_shape(source_video),
         "tensor_stats": _tensor_stats(source_video),
+    }
+
+
+def _reference_images_debug(reference_images) -> dict[str, Any]:
+    if not reference_images:
+        return {
+            "present": False,
+            "count": 0,
+            "keys": [],
+            "tensor_shapes": [],
+        }
+    keys = sorted(reference_images)
+    return {
+        "present": True,
+        "count": len(keys),
+        "keys": keys,
+        "tensor_shapes": [_tensor_shape(reference_images[key]) for key in keys if hasattr(reference_images[key], "shape")],
     }
 
 
@@ -355,6 +419,13 @@ class _FallbackBerniniNodes:
             context = []
             if source_video is not None:
                 context.append(vae.encode(source_video[:, :, :, :3]))
+            if reference_images:
+                for name in sorted(reference_images):
+                    imgs = reference_images[name]
+                    if imgs is None:
+                        continue
+                    for i in range(imgs.shape[0]):
+                        context.append(vae.encode(imgs[i:i + 1, :, :, :3]))
             if context:
                 values = {"context_latents": context}
                 positive = conditioning_set_values(positive, values)

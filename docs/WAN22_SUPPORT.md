@@ -60,13 +60,15 @@ Bernini Task Prompt controls the trained task system prompt prepended before T5 
 
 - `Auto`: choose `t2v`, `i2v`, or `v2v` from timeline media.
 - `Off`: run Bernini mode without adding a Bernini system prompt.
-- `t2v`, `i2v`, `v2v`: force a supported first-pass task prompt.
+- `t2v`, `i2v`, `v2v`, `r2v`, `rv2v`: force a supported task prompt.
 
 Auto rules are conservative:
 
 - text-only timelines use `t2v`.
 - one or more Image Sections use `i2v`; multiple images remain timeline keyframes/storyboard beats, not `r2v` references.
 - any Video Section uses `v2v`; the first usable video is passed as Bernini `source_video`.
+- prompt-tagged Director character references use `r2v` when no timeline media is present.
+- prompt-tagged Director character references plus Image/Video Sections use `rv2v`, with the first timeline image/video as source/background context.
 
 The first-pass runtime passes only one timeline source into Bernini:
 
@@ -75,7 +77,11 @@ The first-pass runtime passes only one timeline source into Bernini:
 
 Image-only `i2v` uses a compatibility mapping because ComfyUI Core does not expose a dedicated Bernini start-image input. The runtime keeps the Bernini `i2v` system prompt and passes the first timeline image as single-frame `source_video`, producing Bernini `context_latents`. It does not pass normal timeline images into `reference_images`, because that implies Bernini reference-token tasks such as `r2v`.
 
-Additional timeline images/videos are preserved in planner/runtime debug as deferred media. Reference-image Bernini tasks (`r2v`, `rv2v`, `ads2v`, `vi2v`, `vrc2v`, `mv2v`) are intentionally not auto-selected yet; they are reserved for future out-of-timeline reference-image support.
+Director character references are the Bernini subject-reference path. Add them from the Director reference manager and mention them in section prompts with tags such as `@image1:character` or `@image1:character[0.8]`. Tagged, enabled references are loaded as Bernini `reference_images`; the tag text is replaced with the reference description before WAN prompt encoding. Strength overrides are preserved in debug, but ComfyUI Core `BerniniConditioning` does not expose per-reference strength control.
+
+Only prompt-tagged references are passed to Bernini. Untagged active references stay available in the Director UI but do not influence WAN generation. Bernini accepts up to eight subject reference images through the current ComfyUI Core autogrow input; extra tagged references are reported and ignored.
+
+Additional timeline images/videos are preserved in planner/runtime debug as deferred media. Timeline media is never reclassified as a Bernini subject reference; timeline images/videos are source/background context, and Director references are subject references. `ads2v`, `vi2v`, `vrc2v`, and `mv2v` remain deferred.
 
 Bernini system prompts are prefixes only. ComfyUI Core execution fails with `BERNINI_NO_USER_CONDITIONING` if Bernini receives no user prompt text and no timeline image/video media, because generating from only the trained task prefix usually indicates an unconnected or unserialized Director timeline.
 
@@ -101,9 +107,9 @@ For default `I2V-A14B` execution, at least one usable Image Section is required.
 
 ## Video, Audio, And References
 
-- Video Sections are prompt-only fallback in Phase 16 unless policy is set to error.
+- Video Sections are prompt-only fallback for vanilla WAN unless policy is set to error; Bernini can use the first Video Section as `source_video`.
 - Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned in Phase 16.
-- Reference library, Animate, S2V, arbitrary Timed keyframe tensor application, and WanVideoWrapper runtime integration are not implemented in Phase 16.
+- Bernini subject references come from Director character references. Vanilla WAN A14B subject reference images, Animate, S2V, arbitrary Timed keyframe tensor application, and WanVideoWrapper runtime integration are not implemented in Phase 16.
 
 ## Debugging
 

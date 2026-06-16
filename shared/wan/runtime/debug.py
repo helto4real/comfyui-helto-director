@@ -270,7 +270,7 @@ def _known_limitations(plan: dict[str, Any], visual: dict[str, Any], capabilitie
     if visual.get("unsupported_keyframes"):
         limitations.append("Some requested visual keyframes are preserved in debug but unsupported by the selected backend.")
     if bernini.get("enabled") and bernini.get("ignored_timeline_media"):
-        limitations.append("Bernini reference-image task support is deferred; ignored timeline media is reported in runtime_debug.bernini.")
+        limitations.append("Bernini uses only the first usable timeline image/video as source/background context; ignored timeline media is reported in runtime_debug.bernini.")
     return limitations
 
 

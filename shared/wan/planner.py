@@ -39,6 +39,7 @@ from .bernini import (
     apply_bernini_prompt_prefix,
     build_bernini_plan,
 )
+from .references import build_bernini_character_reference_plan
 
 
 WAN_PLAN_SCHEMA_VERSION = "1.0"
@@ -69,9 +70,30 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
     prompt_entries = _build_prompt_plan(timeline, section_entries)
     media_entries = _build_media_plan(timeline, section_entries)
     audio_entries = _build_audio_plan(timeline, frame_rate)
-    prompt_relay = _build_prompt_relay(timeline, config, section_entries, prompt_entries, total_frames, latent_chunk_count)
+    character_references, prompt_entries, reference_validation_entries = build_bernini_character_reference_plan(
+        timeline,
+        config,
+        section_entries,
+        prompt_entries,
+    )
+    prompt_relay = _build_prompt_relay(
+        timeline,
+        config,
+        section_entries,
+        prompt_entries,
+        total_frames,
+        latent_chunk_count,
+        character_references,
+    )
     visual_conditioning = _build_visual_conditioning(config, section_entries, prompt_entries, media_entries)
-    bernini = build_bernini_plan(config, section_entries, media_entries, prompt_entries, prompt_relay.get("global_prompt"))
+    bernini = build_bernini_plan(
+        config,
+        section_entries,
+        media_entries,
+        prompt_entries,
+        prompt_relay.get("global_prompt"),
+        character_references,
+    )
     prompt_relay = apply_bernini_prompt_prefix(prompt_relay, bernini)
 
     wan_validation = _validate_wan_inputs(
@@ -85,6 +107,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         prompt_relay,
         frame_info,
         bernini,
+        reference_validation_entries,
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
@@ -275,10 +298,14 @@ def _build_prompt_relay(
     prompt_entries: list[dict[str, Any]],
     video_frame_count: int,
     latent_chunk_count: int,
+    character_references: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     prompts_by_id = {entry.get("item_id"): entry for entry in prompt_entries}
     project_global = timeline.get("project", {}).get("global_prompt", {})
-    global_prompt = str(project_global.get("prompt") or "") if project_global.get("enabled") else ""
+    if project_global.get("enabled"):
+        global_prompt = str((character_references or {}).get("runtime_global_prompt") or project_global.get("prompt") or "")
+    else:
+        global_prompt = ""
     segments = []
     for entry in section_entries:
         if int(entry.get("frame_count") or 0) <= 0:
@@ -286,11 +313,12 @@ def _build_prompt_relay(
         prompt_entry = prompts_by_id.get(entry.get("item_id"), {})
         effective_prompt = str(prompt_entry.get("effective_prompt") or "").strip()
         raw_prompt = str(prompt_entry.get("raw_prompt") or "").strip()
+        runtime_prompt = str(prompt_entry.get("runtime_prompt") or "").strip()
         if entry.get("type") == "Gap" or entry.get("role") == "No Guidance":
             prompt = ""
             guidance_type = "No Guidance"
         else:
-            prompt = raw_prompt or effective_prompt
+            prompt = runtime_prompt or raw_prompt or effective_prompt
             guidance_type = "Prompt"
         segments.append({
             "item_id": entry.get("item_id"),
@@ -395,8 +423,9 @@ def _validate_wan_inputs(
     prompt_relay: dict[str, Any],
     frame_info: dict[str, Any],
     bernini: dict[str, Any],
+    reference_validation_entries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    entries = []
+    entries = list(reference_validation_entries or [])
     if not director_validation.get("is_valid", False):
         entries.append(_entry(
             "WAN_DIRECTOR_TIMELINE_INVALID",
@@ -514,8 +543,10 @@ def _validate_wan_inputs(
                 "timeline_image_count": bernini.get("timeline_image_count"),
                 "timeline_video_count": bernini.get("timeline_video_count"),
                 "timeline_prompt_count": bernini.get("timeline_prompt_count"),
+                "reference_image_count": bernini.get("reference_image_count"),
                 "has_user_prompt_text": bernini.get("has_user_prompt_text"),
                 "has_media_conditioning": bernini.get("has_media_conditioning"),
+                "has_reference_conditioning": bernini.get("has_reference_conditioning"),
             },
         ))
         if not bernini.get("has_user_conditioning"):
@@ -530,6 +561,7 @@ def _validate_wan_inputs(
                     "timeline_image_count": bernini.get("timeline_image_count"),
                     "timeline_video_count": bernini.get("timeline_video_count"),
                     "timeline_prompt_count": bernini.get("timeline_prompt_count"),
+                    "reference_image_count": bernini.get("reference_image_count"),
                 },
             ))
         if bernini.get("ignored_timeline_media"):
@@ -539,7 +571,7 @@ def _validate_wan_inputs(
                 "Bernini",
                 None,
                 "Some timeline media is not passed to Bernini conditioning in this version.",
-                "Reference-image tasks remain deferred until out-of-timeline reference support is added.",
+                "Timeline images are source/background candidates; subject references come from the Director reference manager.",
                 {"ignored_timeline_media": bernini.get("ignored_timeline_media")},
             ))
 
@@ -606,6 +638,7 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
         "runtime_backend_profile": config["runtime_backend_profile"],
         "bernini_task_type": bernini.get("task_type") if bernini.get("enabled") else None,
         "bernini_prompt_prefix_enabled": bool(bernini.get("prompt_prefix_enabled")),
+        "bernini_reference_image_count": int(bernini.get("reference_image_count") or 0),
         "width": plan["resolved_output"]["width"],
         "height": plan["resolved_output"]["height"],
         "requested_frame_count": plan["resolved_output"].get("requested_frame_count"),

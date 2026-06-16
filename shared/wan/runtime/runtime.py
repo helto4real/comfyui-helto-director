@@ -330,18 +330,20 @@ def _validate_bernini_user_conditioning(plan: dict[str, Any], validation_entries
         "timeline_image_count": bernini.get("timeline_image_count"),
         "timeline_video_count": bernini.get("timeline_video_count"),
         "timeline_prompt_count": bernini.get("timeline_prompt_count"),
+        "reference_image_count": bernini.get("reference_image_count"),
         "has_user_prompt_text": bernini.get("has_user_prompt_text"),
         "has_media_conditioning": bernini.get("has_media_conditioning"),
+        "has_reference_conditioning": bernini.get("has_reference_conditioning"),
     }
     validation_entries.append(error(
         "BERNINI_NO_USER_CONDITIONING",
-        "Bernini received no user prompt and no timeline media.",
-        "Add a Text Section, Image Section, Video Section, or verify the Director timeline is connected/serialized.",
+        "Bernini received no user prompt, no timeline media, and no character reference images.",
+        "Add a Text Section, Image Section, Video Section, character reference tag, or verify the Director timeline is connected/serialized.",
         details,
     ))
     raise ValueError(
-        "BERNINI_NO_USER_CONDITIONING: Bernini received no user prompt and no timeline media. "
-        "Add a Text Section, Image Section, Video Section, or verify the Director timeline is connected/serialized."
+        "BERNINI_NO_USER_CONDITIONING: Bernini received no user prompt, no timeline media, and no character reference images. "
+        "Add a Text Section, Image Section, Video Section, character reference tag, or verify the Director timeline is connected/serialized."
     )
 
 

@@ -8,7 +8,7 @@ BERNINI_MODEL_MODE = "Bernini-A14B"
 
 BERNINI_TASK_PROMPT_AUTO = "Auto"
 BERNINI_TASK_PROMPT_OFF = "Off"
-BERNINI_SUPPORTED_TASK_TYPES = ("t2v", "i2v", "v2v")
+BERNINI_SUPPORTED_TASK_TYPES = ("t2v", "i2v", "v2v", "r2v", "rv2v")
 BERNINI_TASK_PROMPT_MODES = (
     BERNINI_TASK_PROMPT_AUTO,
     BERNINI_TASK_PROMPT_OFF,
@@ -19,9 +19,7 @@ BERNINI_DEFERRED_TASK_TYPES = (
     "t2i",
     "i2i",
     "r2i",
-    "r2v",
     "vi2v",
-    "rv2v",
     "ads2v",
     "vrc2v",
     "mv2v",
@@ -54,12 +52,16 @@ def build_bernini_plan(
     media_entries: list[dict[str, Any]],
     prompt_entries: list[dict[str, Any]] | None = None,
     global_prompt: str | None = None,
+    character_references: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     enabled = is_bernini_config(config)
     image_media = _sorted_media(media_entries, section_entries, "Image")
     video_media = _sorted_media(media_entries, section_entries, "Video")
     prompt_stats = _prompt_stats(prompt_entries or [], global_prompt)
-    auto_task, reason = _auto_task_type(image_media, video_media, prompt_stats["timeline_prompt_count"])
+    references = character_references or {}
+    reference_specs = references.get("reference_specs") if isinstance(references, dict) else []
+    reference_count = len(reference_specs) if isinstance(reference_specs, list) else 0
+    auto_task, reason = _auto_task_type(image_media, video_media, reference_count, prompt_stats["timeline_prompt_count"])
     policy = str(config.get("bernini_task_prompt") or BERNINI_TASK_PROMPT_AUTO)
     if policy not in BERNINI_TASK_PROMPT_MODES:
         policy = BERNINI_TASK_PROMPT_AUTO
@@ -90,11 +92,14 @@ def build_bernini_plan(
         "timeline_image_count": len(image_media),
         "timeline_video_count": len(video_media),
         "timeline_prompt_count": prompt_stats["timeline_prompt_count"],
+        "reference_image_count": reference_count,
+        "character_references": deepcopy(references),
         "has_user_prompt_text": prompt_stats["has_user_prompt_text"],
         "has_media_conditioning": bool(image_media or video_media),
-        "has_user_conditioning": bool(prompt_stats["has_user_prompt_text"] or image_media or video_media),
+        "has_reference_conditioning": reference_count > 0,
+        "has_user_conditioning": bool(prompt_stats["has_user_prompt_text"] or image_media or video_media or reference_count > 0),
         "deferred_task_types": list(BERNINI_DEFERRED_TASK_TYPES),
-        "reference_image_support": "Deferred; timeline image sections are keyframes/storyboard images in this version.",
+        "reference_image_support": "Director character references tagged in prompts are passed as Bernini subject reference_images; timeline images remain source/background context.",
     }
 
 
@@ -111,7 +116,18 @@ def apply_bernini_prompt_prefix(prompt_relay: dict[str, Any], bernini: dict[str,
     return output
 
 
-def _auto_task_type(image_media: list[dict[str, Any]], video_media: list[dict[str, Any]], prompt_count: int = 0) -> tuple[str, str]:
+def _auto_task_type(
+    image_media: list[dict[str, Any]],
+    video_media: list[dict[str, Any]],
+    reference_count: int = 0,
+    prompt_count: int = 0,
+) -> tuple[str, str]:
+    if reference_count > 0:
+        if video_media:
+            return "rv2v", "Prompt-tagged Director character references and Video Section media are present, so Bernini Auto selected rv2v with the first video as source_video."
+        if image_media:
+            return "rv2v", "Prompt-tagged Director character references and Image Section media are present, so Bernini Auto selected rv2v with the first image as single-frame source_video."
+        return "r2v", "Prompt-tagged Director character references are present without timeline media, so Bernini Auto selected r2v."
     if video_media:
         if image_media:
             return "v2v", "Video Section media is present, so Bernini Auto selected v2v; timeline images remain normal keyframes and are not reference images."
@@ -129,15 +145,15 @@ def _select_bernini_media(
     video_media: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     ignored: list[dict[str, Any]] = []
-    if task_type == "v2v" and video_media:
+    if task_type in {"v2v", "rv2v"} and video_media:
         media_used = _media_selection(video_media[0], "source_video")
         ignored.extend(_ignored_media(video_media[1:], "Only the first video section is used as Bernini source_video in this version."))
-        ignored.extend(_ignored_media(image_media, "Timeline images are not Bernini reference images in this version."))
+        ignored.extend(_ignored_media(image_media, "Timeline images are source/background candidates, not Bernini subject reference images."))
         return media_used, ignored
-    if task_type == "i2v" and image_media:
+    if task_type in {"i2v", "rv2v"} and image_media:
         media_used = _media_selection(image_media[0], "source_video_single_frame")
         ignored.extend(_ignored_media(image_media[1:], "Only the first image section is used as Bernini single-frame source_video in this version."))
-        ignored.extend(_ignored_media(video_media, "Video sections are not used by the selected Bernini i2v task."))
+        ignored.extend(_ignored_media(video_media, f"Video sections are not used by the selected Bernini {task_type} task."))
         return media_used, ignored
     ignored.extend(_ignored_media(image_media, f"Timeline image media is not used by Bernini {task_type}."))
     ignored.extend(_ignored_media(video_media, f"Timeline video media is not used by Bernini {task_type}."))
