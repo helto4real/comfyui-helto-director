@@ -6,6 +6,7 @@ from typing import Any
 
 BACKEND_PLAN_ONLY = "Plan Only"
 BACKEND_COMFYUI_CORE = "ComfyUI Core"
+BACKEND_FMLF_ADVANCED_I2V = "FMLF Advanced I2V"
 BACKEND_WAN_VIDEO_WRAPPER = "WanVideoWrapper"
 
 
@@ -13,6 +14,8 @@ def resolve_backend(profile: Any, *, high_noise_model=None, low_noise_model=None
     entries = []
     if profile == BACKEND_COMFYUI_CORE:
         return BACKEND_COMFYUI_CORE, entries
+    if profile == BACKEND_FMLF_ADVANCED_I2V:
+        return BACKEND_FMLF_ADVANCED_I2V, entries
     if profile == BACKEND_WAN_VIDEO_WRAPPER:
         return BACKEND_WAN_VIDEO_WRAPPER, entries
     if profile == "Auto":
@@ -41,6 +44,19 @@ def backend_capabilities(backend: str) -> dict[str, Any]:
             "supports_video_sections": False,
             "supports_audio_conditioning": False,
             "supports_i2v_a14b": True,
+        }
+    if backend == BACKEND_FMLF_ADVANCED_I2V:
+        return {
+            "supports_start_image": True,
+            "supports_end_image": True,
+            "supports_timed_keyframes": False,
+            "max_visual_keyframes": 2,
+            "supports_prompt_relay": True,
+            "supports_video_sections": False,
+            "supports_audio_conditioning": False,
+            "supports_i2v_a14b": True,
+            "supports_fmlf_advanced_i2v": True,
+            "supports_latent_continuation": True,
         }
     if backend == BACKEND_WAN_VIDEO_WRAPPER:
         return {

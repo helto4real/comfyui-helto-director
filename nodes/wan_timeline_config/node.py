@@ -9,6 +9,7 @@ from ...shared.wan.config import (
     DEFAULT_SEGMENT_SEAM_BLEND_FRAMES,
     DEFAULT_PAINTER_MOTION_AMPLITUDE,
     GAP_POLICIES,
+    FMLF_CONTINUATION_MODES,
     MODEL_MODES,
     PAINTER_MOTION_BOOST_MODES,
     PROMPT_ROUTING_MODES,
@@ -168,6 +169,13 @@ class WANTimelineConfig(io.ComfyNode):
                     default=str(DEFAULT_SEGMENT_SEAM_BLEND_FRAMES),
                     socketless=True,
                 ),
+                io.Combo.Input(
+                    "fmlf_continuation_mode",
+                    display_name="FMLF Continuation Mode",
+                    options=list(FMLF_CONTINUATION_MODES),
+                    default="SVI",
+                    socketless=True,
+                ),
             ],
             outputs=[
                 WAN_TIMELINE_CONFIG.Output(
@@ -198,6 +206,7 @@ class WANTimelineConfig(io.ComfyNode):
         painter_motion_boost: str = "Off",
         painter_motion_amplitude: float = DEFAULT_PAINTER_MOTION_AMPLITUDE,
         segment_seam_blend_frames: str = str(DEFAULT_SEGMENT_SEAM_BLEND_FRAMES),
+        fmlf_continuation_mode: str = "SVI",
     ) -> io.NodeOutput:
         config = create_wan_timeline_config(
             resolution_profile=resolution_profile,
@@ -218,5 +227,6 @@ class WANTimelineConfig(io.ComfyNode):
             painter_motion_boost=painter_motion_boost,
             painter_motion_amplitude=painter_motion_amplitude,
             segment_seam_blend_frames=segment_seam_blend_frames,
+            fmlf_continuation_mode=fmlf_continuation_mode,
         )
         return io.NodeOutput(config)

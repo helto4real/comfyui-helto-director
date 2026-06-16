@@ -11,6 +11,7 @@ from ..bernini import BERNINI_MODEL_MODE
 from .bernini import bernini_visual_debug, build_bernini_runtime_payload
 from .capabilities import (
     BACKEND_COMFYUI_CORE,
+    BACKEND_FMLF_ADVANCED_I2V,
     BACKEND_PLAN_ONLY,
     BACKEND_WAN_VIDEO_WRAPPER,
     backend_capabilities,
@@ -18,6 +19,7 @@ from .capabilities import (
     resolve_visual_conditioning,
 )
 from .debug import build_runtime_debug, error, info, warning
+from .fmlf import build_fmlf_advanced_i2v_payload
 from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
 from .visual import apply_comfy_core_visual_keyframes
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
@@ -34,6 +36,10 @@ def build_wan_runtime_outputs(
     batch_size: int = 1,
     status_reporter: TimelineStatusReporter | None = None,
     complete_status: bool = True,
+    split_conditioning: bool = False,
+    fmlf_prev_latent: dict[str, Any] | None = None,
+    fmlf_motion_frames: torch.Tensor | None = None,
+    fmlf_video_frame_offset: int = 0,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any], dict[str, Any]]:
     status_reporter = ensure_timeline_status_reporter(status_reporter, model="wan", total=4)
     status_reporter.report("timeline.prepare", "WAN Runtime: resolving backend")
@@ -129,8 +135,11 @@ def build_wan_runtime_outputs(
 
     if is_bernini:
         _validate_bernini_user_conditioning(plan, validation_entries)
-    _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries)
-    _validate_comfy_core_visual_requirements(config, visual, validation_entries)
+    if resolved_backend == BACKEND_FMLF_ADVANCED_I2V:
+        _validate_fmlf_inputs(config, clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries)
+    else:
+        _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries)
+        _validate_comfy_core_visual_requirements(config, visual, validation_entries)
 
     runtime_high_model = high_noise_model
     runtime_low_model = low_noise_model
@@ -150,6 +159,7 @@ def build_wan_runtime_outputs(
             "Enable Prompt Relay when comparing against manual Bernini workflows that rely on temporal prompt routing.",
         ))
     runtime_negative = _resolve_negative_conditioning(negative, positive)
+    fmlf_debug = None
     if is_bernini:
         status_reporter.report("bernini.conditioning", "WAN Runtime: building Bernini conditioning")
         positive, runtime_negative, video_latent, guide_debug = build_bernini_runtime_payload(
@@ -162,6 +172,39 @@ def build_wan_runtime_outputs(
             prompt_debug=prompt_debug,
         )
         _append_bernini_source_aspect_warnings(guide_debug, validation_entries)
+    elif resolved_backend == BACKEND_FMLF_ADVANCED_I2V:
+        status_reporter.report("timeline.conditioning", "WAN Runtime: building FMLF Advanced I2V conditioning")
+        positive_high, positive_low, runtime_negative, video_latent, trim_latent, trim_image, next_offset, guide_debug = build_fmlf_advanced_i2v_payload(
+            positive,
+            runtime_negative,
+            vae,
+            visual,
+            width,
+            height,
+            frame_count,
+            batch_size,
+            latent_spec,
+            config,
+            prev_latent=fmlf_prev_latent,
+            motion_frames=fmlf_motion_frames,
+            video_frame_offset=fmlf_video_frame_offset,
+        )
+        fmlf_debug = {
+            **guide_debug,
+            "trim_latent": int(trim_latent),
+            "trim_image": int(trim_image),
+            "next_offset": int(next_offset),
+        }
+        positive = (
+            {
+                "high": positive_high,
+                "low": positive_low,
+                "default": positive_high,
+                "_helto_wan_conditioning_split": True,
+            }
+            if split_conditioning
+            else positive_high
+        )
     else:
         status_reporter.report("timeline.conditioning", "WAN Runtime: applying visual conditioning")
         positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
@@ -193,11 +236,25 @@ def build_wan_runtime_outputs(
             "helper": guide_debug["core_helper"],
             "output_payload_type": "COMFYUI_CORE_CONDITIONING_LATENT",
         })
-    validation_entries.append(info(
-        "BERNINI_RUNTIME_PAYLOAD_BUILT" if is_bernini else "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT",
-        "Built Bernini runtime conditioning payload for the selected backend." if is_bernini else "Built WAN visual keyframe runtime payload for the selected backend.",
-        "Inspect runtime_debug.bernini and runtime_debug.visual_conditioning for applied and deferred media." if is_bernini else "Inspect runtime_debug.visual_conditioning for applied and unsupported keyframes.",
-    ))
+    if guide_debug.get("helper") == "FMLF Advanced I2V":
+        media_decisions.append({
+            "type": "fmlf_advanced_i2v_helper",
+            "helper": "FMLF Advanced I2V",
+            "output_payload_type": "FMLF_ADVANCED_I2V_CONDITIONING_LATENT",
+        })
+    if is_bernini:
+        payload_code = "BERNINI_RUNTIME_PAYLOAD_BUILT"
+        payload_message = "Built Bernini runtime conditioning payload for the selected backend."
+        payload_hint = "Inspect runtime_debug.bernini and runtime_debug.visual_conditioning for applied and deferred media."
+    elif resolved_backend == BACKEND_FMLF_ADVANCED_I2V:
+        payload_code = "WAN_FMLF_ADVANCED_I2V_PAYLOAD_BUILT"
+        payload_message = "Built FMLF Advanced I2V runtime conditioning payload for the selected backend."
+        payload_hint = "Inspect runtime_debug.fmlf_advanced_i2v for continuation and high/low conditioning details."
+    else:
+        payload_code = "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT"
+        payload_message = "Built WAN visual keyframe runtime payload for the selected backend."
+        payload_hint = "Inspect runtime_debug.visual_conditioning for applied and unsupported keyframes."
+    validation_entries.append(info(payload_code, payload_message, payload_hint))
     runtime_debug = build_runtime_debug(
         plan=plan,
         requested_backend=requested_backend,
@@ -210,6 +267,7 @@ def build_wan_runtime_outputs(
         media_decisions=media_decisions,
         model_patch_status=model_patch_status,
         status_events=status_reporter.snapshot(),
+        fmlf_debug=fmlf_debug,
     )
     if complete_status:
         status_reporter.done("WAN Runtime: ready")
@@ -326,6 +384,44 @@ def _validate_comfy_core_inputs(clip, vae, prompt_relay, high_noise_model, low_n
             "Connect high_noise_model and/or low_noise_model, disable Prompt Relay, or switch Runtime Backend Profile to Plan Only.",
         ))
         raise ValueError("WAN_RUNTIME_REQUIRED_INPUT_MISSING: WAN Prompt Relay requires at least one connected high or low noise model.")
+
+
+def _validate_fmlf_inputs(config: dict[str, Any], clip, vae, prompt_relay, high_noise_model, low_noise_model, validation_entries):
+    model_mode = str(config.get("model_mode") or "I2V-A14B")
+    if model_mode != "I2V-A14B":
+        validation_entries.append(error(
+            "WAN_FMLF_UNSUPPORTED_MODEL_MODE",
+            f"FMLF Advanced I2V supports I2V-A14B only, got {model_mode}.",
+            "Select WAN model mode I2V-A14B or switch Runtime Backend Profile to ComfyUI Core.",
+            {"model_mode": model_mode},
+        ))
+        raise ValueError(f"WAN_FMLF_UNSUPPORTED_MODEL_MODE: FMLF Advanced I2V supports I2V-A14B only, got {model_mode}.")
+    missing = []
+    if clip is None:
+        missing.append("clip")
+    if vae is None:
+        missing.append("vae")
+    if missing:
+        validation_entries.append(error(
+            "WAN_FMLF_REQUIRED_INPUT_MISSING",
+            f"FMLF Advanced I2V runtime requires {', '.join(missing)}.",
+            "Connect the missing backend input(s), or switch Runtime Backend Profile to Plan Only.",
+            {"missing": missing},
+        ))
+        raise ValueError(f"WAN_FMLF_REQUIRED_INPUT_MISSING: FMLF Advanced I2V runtime requires {', '.join(missing)}.")
+    if prompt_relay.get("enabled", True) and high_noise_model is None and low_noise_model is None:
+        validation_entries.append(error(
+            "WAN_FMLF_REQUIRED_INPUT_MISSING",
+            "FMLF Advanced I2V Prompt Relay requires at least one connected high or low noise model.",
+            "Connect high_noise_model and/or low_noise_model, disable Prompt Relay, or switch Runtime Backend Profile to Plan Only.",
+        ))
+        raise ValueError("WAN_FMLF_REQUIRED_INPUT_MISSING: FMLF Advanced I2V Prompt Relay requires at least one connected high or low noise model.")
+    if high_noise_model is None or low_noise_model is None:
+        validation_entries.append(warning(
+            "WAN_FMLF_TWO_PHASE_MODEL_PAIR_RECOMMENDED",
+            "FMLF Advanced I2V A14B segmented sampling expects both high_noise_model and low_noise_model.",
+            "Connect both model phases before using the segmented executor.",
+        ))
 
 
 def _validate_comfy_core_visual_requirements(config: dict[str, Any], visual: dict[str, Any], validation_entries):

@@ -233,6 +233,119 @@ def test_phase16_painter_motion_boost_preserves_wan22_latent_shape(tmp_path):
     assert "noise_mask" in video_latent
 
 
+def test_phase16_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+    )
+
+    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        low_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+        split_conditioning=True,
+    )
+
+    assert runtime_debug["backend"]["resolved_profile"] == "FMLF Advanced I2V"
+    assert runtime_debug["output_payload_type"] == "FMLF_ADVANCED_I2V_CONDITIONING_LATENT"
+    assert positive["_helto_wan_conditioning_split"] is True
+    assert positive["high"][0][1]["concat_latent_image"].shape[1] == 16
+    assert positive["low"][0][1]["concat_latent_image"].shape[1] == 16
+    assert negative[0][1]["concat_mask"].shape[1] == 4
+    assert video_latent["samples"].shape[1] == 16
+    assert runtime_debug["fmlf_advanced_i2v"]["helper"] == "FMLF Advanced I2V"
+    assert runtime_debug["fmlf_advanced_i2v"]["conditioning_split"] is True
+    assert all("path" not in decision for decision in runtime_debug["fmlf_advanced_i2v"]["media_decisions"])
+
+
+def test_phase16_fmlf_svi_uses_previous_latent(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            fmlf_continuation_mode="SVI",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+    )
+    prev_latent = {"samples": torch.ones((1, 16, 2, 8, 8))}
+    motion_frames = torch.ones((3, 32, 32, 3)) * 0.25
+
+    *_outputs, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        low_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+        split_conditioning=True,
+        fmlf_prev_latent=prev_latent,
+        fmlf_motion_frames=motion_frames,
+    )
+
+    fmlf = runtime_debug["fmlf_advanced_i2v"]
+    assert fmlf["continuation_mode"] == "SVI"
+    assert fmlf["algorithm"] == "svi_latent_continuation"
+    assert fmlf["used_prev_latent"] is True
+    assert fmlf["prev_latent_shape"] == [1, 16, 2, 8, 8]
+    assert fmlf["used_motion_frames"] is True
+
+
+def test_phase16_fmlf_auto_continue_uses_motion_frames(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            fmlf_continuation_mode="AUTO_CONTINUE",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+    )
+    motion_frames = torch.ones((4, 32, 32, 3)) * 0.5
+
+    *_outputs, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        low_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+        split_conditioning=True,
+        fmlf_motion_frames=motion_frames,
+    )
+
+    fmlf = runtime_debug["fmlf_advanced_i2v"]
+    assert fmlf["continuation_mode"] == "AUTO_CONTINUE"
+    assert fmlf["algorithm"] == "auto_continue_motion_frames"
+    assert fmlf["used_prev_latent"] is False
+    assert fmlf["used_motion_frames"] is True
+    assert fmlf["motion_frame_count"] == 4
+
+
+def test_phase16_fmlf_rejects_unsupported_model_mode(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _text_timeline(),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            model_mode="T2V-A14B",
+            debug_mode="Full",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="WAN_FMLF_UNSUPPORTED_MODEL_MODE"):
+        build_wan_runtime_outputs(
+            high_noise_model=FakeModel(),
+            low_noise_model=FakeModel(),
+            clip=FakeClip(),
+            vae=FakeVAE(),
+            wan_timeline_plan=plan,
+        )
+
+
 def test_phase16_text_capable_core_mode_can_run_without_image_keyframes():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),

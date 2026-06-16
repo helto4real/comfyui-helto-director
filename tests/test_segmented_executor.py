@@ -631,6 +631,43 @@ def test_wan_two_phase_sampling_runs_high_then_low(monkeypatch):
     assert calls[1]["force_full_denoise"] is True
 
 
+def test_wan_two_phase_sampling_uses_split_conditionings(monkeypatch):
+    calls = []
+
+    def fake_sample_latent(**kwargs):
+        calls.append(kwargs)
+        return kwargs["latent"]
+
+    monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
+    positive = {
+        "high": [["positive_high"]],
+        "low": [["positive_low"]],
+        "default": [["positive_default"]],
+        "_helto_wan_conditioning_split": True,
+    }
+
+    _sampled, debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        positive=positive,
+        negative=[["negative"]],
+        latent={"samples": torch.zeros((1, 16, 3, 2, 2))},
+        model_mode="I2V-A14B",
+        seed=1,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_step=6,
+    )
+
+    assert calls[0]["positive"] == [["positive_high"]]
+    assert calls[1]["positive"] == [["positive_low"]]
+    assert debug["phases"][0]["conditioning"] == "positive_high"
+    assert debug["phases"][1]["conditioning"] == "positive_low"
+
+
 def test_wan_two_phase_split_step_fallback_uses_half_rounded_down(monkeypatch):
     calls = []
 
@@ -896,6 +933,86 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
     assert "timeline.spill" in stages
     assert "timeline.cleanup" in stages
     assert stages[-3:] == ["timeline.stitch", "timeline.audio", "timeline.done"]
+
+
+def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, tmp_path):
+    runtime_calls = []
+    sample_calls = []
+
+    def fake_build_runtime_outputs(**kwargs):
+        runtime_calls.append(kwargs)
+        runtime_debug = {
+            "visual_conditioning": {
+                "requested_keyframes": [],
+                "applied_keyframes": [],
+                "media_decisions": [],
+            },
+            "bernini": None,
+            "fmlf_advanced_i2v": {
+                "helper": "FMLF Advanced I2V",
+                "continuation_mode": "SVI",
+                "used_prev_latent": kwargs.get("fmlf_prev_latent") is not None,
+            },
+            "summary": {},
+        }
+        positive = {
+            "high": [["positive_high"]],
+            "low": [["positive_low"]],
+            "default": [["positive_high"]],
+            "_helto_wan_conditioning_split": True,
+        }
+        latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
+        return object(), object(), positive, [], latent, runtime_debug
+
+    def fake_sample_wan_segment_latent(**kwargs):
+        sample_calls.append(kwargs)
+        samples = torch.ones((1, 16, 3, 2, 2)) * len(sample_calls)
+        return {"samples": samples}, {"sampling_policy": "two_phase", "unload_events": []}
+
+    def fake_decode(_vae, latent):
+        value = float(latent["samples"].mean().item())
+        return torch.ones((5, 2, 2, 3)) * value
+
+    monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
+    monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
+    monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
+    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(
+        wan_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    plan = _two_segment_executor_plan("wan")
+    wan_config = plan["model_specific"]["wan"]["config"]
+    wan_config["runtime_backend_profile"] = "FMLF Advanced I2V"
+    wan_config["fmlf_continuation_mode"] = "SVI"
+    wan_config["model_mode"] = "I2V-A14B"
+    plan["model_specific"]["wan"]["segmented_generation"]["segments"][1]["continuity"]["continuity_frame_count"] = 5
+    plan["model_specific"]["wan"]["segmented_generation"]["segments"][1]["trim_leading_frames"] = 1
+
+    _images, _audio, _fps, debug = wan_segmented.build_wan_segmented_executor_outputs(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        clip=object(),
+        vae=object(),
+        wan_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Increment Per Segment",
+    )
+
+    assert runtime_calls[0]["split_conditioning"] is True
+    assert runtime_calls[0]["fmlf_prev_latent"] is None
+    assert runtime_calls[1]["fmlf_prev_latent"]["samples"].shape == (1, 16, 2, 2, 2)
+    assert runtime_calls[1]["fmlf_motion_frames"].shape[0] == 5
+    assert debug["segments"][1]["fmlf_advanced_i2v"]["used_prev_latent"] is True
+    assert len(sample_calls) == 2
 
 
 def _two_segment_executor_plan(model_key):

@@ -65,8 +65,13 @@ AUDIO_POLICIES = (
 RUNTIME_BACKEND_PROFILES = (
     "Auto",
     "ComfyUI Core",
+    "FMLF Advanced I2V",
     "WanVideoWrapper",
     "Plan Only",
+)
+FMLF_CONTINUATION_MODES = (
+    "SVI",
+    "AUTO_CONTINUE",
 )
 DEBUG_MODES = (
     "Off",
@@ -105,6 +110,7 @@ def create_wan_timeline_config(
     max_generation_duration: float = 0.0,
     segment_continuity_tail_frames: int = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
     segment_seam_blend_frames: int = DEFAULT_SEGMENT_SEAM_BLEND_FRAMES,
+    fmlf_continuation_mode: str = "SVI",
     vram_unload_policy: str = "Off",
     debug_mode: str | bool = "Off",
     painter_motion_boost: str = "Off",
@@ -137,6 +143,7 @@ def create_wan_timeline_config(
         ),
         "audio_policy": _choice(audio_policy, AUDIO_POLICIES, "Final Mix Only"),
         "runtime_backend_profile": _choice(runtime_backend_profile, RUNTIME_BACKEND_PROFILES, "Plan Only"),
+        "fmlf_continuation_mode": _choice(fmlf_continuation_mode, FMLF_CONTINUATION_MODES, "SVI"),
         "max_generation_duration": _non_negative_float(max_generation_duration),
         "segment_continuity_tail_frames": _segment_tail_frames(segment_continuity_tail_frames),
         "segment_seam_blend_frames": _segment_seam_blend_frames(segment_seam_blend_frames),
@@ -204,6 +211,11 @@ def normalize_wan_timeline_config(config: Any) -> dict[str, Any]:
         normalized.get("runtime_backend_profile"),
         RUNTIME_BACKEND_PROFILES,
         "Plan Only",
+    )
+    normalized["fmlf_continuation_mode"] = _choice(
+        normalized.get("fmlf_continuation_mode"),
+        FMLF_CONTINUATION_MODES,
+        "SVI",
     )
     normalized["max_generation_duration"] = _non_negative_float(normalized.get("max_generation_duration", 0.0))
     normalized["segment_continuity_tail_frames"] = _segment_tail_frames(

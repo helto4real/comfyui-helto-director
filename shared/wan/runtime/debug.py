@@ -48,6 +48,7 @@ def build_runtime_debug(
     media_decisions: list[dict[str, Any]] | None = None,
     model_patch_status: dict[str, Any] | None = None,
     status_events: list[dict[str, Any]] | None = None,
+    fmlf_debug: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     wan = plan.get("model_specific", {}).get("wan", {})
     config = wan.get("config", {})
@@ -74,6 +75,8 @@ def build_runtime_debug(
             "model_mode": config.get("model_mode"),
             "bernini_task_type": bernini.get("task_type") if bernini.get("enabled") else None,
             "bernini_prompt_prefix_enabled": bool(bernini.get("prompt_prefix_enabled")),
+            "fmlf_continuation_mode": (fmlf_debug or {}).get("continuation_mode"),
+            "fmlf_used_prev_latent": bool((fmlf_debug or {}).get("used_prev_latent")),
             "prompt_routing": config.get("prompt_routing"),
             "prompt_relay_patched": bool(prompt_debug.get("patched")),
             "prompt_relay_status": prompt_debug.get("status", "not_built"),
@@ -96,6 +99,7 @@ def build_runtime_debug(
         },
         "prompt_relay": deepcopy(prompt_debug),
         "bernini": bernini,
+        "fmlf_advanced_i2v": deepcopy(fmlf_debug or {}),
         "model_patch_status": deepcopy(model_patch_status or {}),
         "status_events": deepcopy(status_events or []),
         "media_decisions": deepcopy(media_decisions or []),
@@ -129,7 +133,7 @@ def build_backend_report(
         validation,
         model_patch_status,
     )
-    available = resolved_backend == "ComfyUI Core" and not missing_requirements
+    available = resolved_backend in {"ComfyUI Core", "FMLF Advanced I2V"} and not missing_requirements
     return {
         "requested_profile": requested_backend,
         "resolved_profile": resolved_backend,
@@ -160,7 +164,7 @@ def summarize_wan_runtime_status(plan: dict[str, Any], runtime_result: dict[str,
     unsupported = visual.get("unsupported_keyframes") or []
     audio_plan = plan.get("audio_plan") or []
     return {
-        "runtime_executed": backend.get("resolved_profile") == "ComfyUI Core" and bool(backend.get("available")),
+        "runtime_executed": backend.get("resolved_profile") in {"ComfyUI Core", "FMLF Advanced I2V"} and bool(backend.get("available")),
         "plan_only": backend.get("resolved_profile") == "Plan Only",
         "prompt_relay": {
             "enabled": plan.get("model_specific", {}).get("wan", {}).get("prompt_relay", {}).get("enabled", False),
@@ -258,6 +262,8 @@ def _output_payload_type(resolved_backend: str, media_decisions: list[dict[str, 
             return str(decision["output_payload_type"])
     if resolved_backend == "ComfyUI Core":
         return "COMFYUI_CORE_CONDITIONING_LATENT"
+    if resolved_backend == "FMLF Advanced I2V":
+        return "FMLF_ADVANCED_I2V_CONDITIONING_LATENT"
     return "UNAVAILABLE"
 
 
@@ -335,6 +341,8 @@ def _recommended_next_action(
         return "Inspect unsupported_features and unsupported_keyframes; use Start/End image guidance for the current ComfyUI Core backend."
     if prompt_debug.get("patched"):
         return "Continue to a compatible WAN sampler using the patched high/low model outputs, conditioning, and video_latent."
+    if resolved_backend == "FMLF Advanced I2V":
+        return "Continue to WAN two-phase sampling with the FMLF high/low conditionings and video_latent."
     return "Continue to a compatible WAN sampler, or enable Prompt Relay for temporal prompt routing."
 
 

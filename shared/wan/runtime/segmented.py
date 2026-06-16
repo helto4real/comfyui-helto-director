@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+import torch
+
 from ..bernini import BERNINI_MODEL_MODE, BERNINI_SYSTEM_PROMPTS
 from ..planner import _build_prompt_relay, _latent_chunk_count
 from ...ltx.runtime.audio import mix_timeline_audio
@@ -77,6 +79,7 @@ def build_wan_segmented_executor_outputs(
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     spill_records = []
     previous_images = None
+    previous_latent = None
     segment_debug = []
     cleanup_events = []
     config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
@@ -122,6 +125,10 @@ def build_wan_segmented_executor_outputs(
                 batch_size=batch_size,
                 status_reporter=status_reporter,
                 complete_status=False,
+                split_conditioning=True,
+                fmlf_prev_latent=previous_latent,
+                fmlf_motion_frames=tail,
+                fmlf_video_frame_offset=int(segment.get("start_frame") or 0),
             )
             segment_seed_value = segment_seed(seed, index, seed_mode)
             sampled, sampling_debug = sample_wan_segment_latent(
@@ -164,6 +171,11 @@ def build_wan_segmented_executor_outputs(
             )
             next_previous_frame_count = max(next_tail_count, configured_seam_blend_frames)
             previous_images = previous_tail(visible_images.detach().cpu(), next_previous_frame_count)
+            previous_latent = (
+                _previous_latent_tail(sampled, next_previous_frame_count)
+                if index + 1 < len(segments)
+                else None
+            )
             status_reporter.report(
                 "timeline.spill",
                 f"WAN Executor: segment {segment_index}/{segment_count} - saving {'encrypted ' if privacy_mode else ''}segment frames",
@@ -181,7 +193,7 @@ def build_wan_segmented_executor_outputs(
                 segment_count=segment_count,
             )
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
-            wan_debug = runtime_debug.get("wan", {}) if isinstance(runtime_debug, dict) else {}
+            wan_debug = runtime_debug.get("wan", runtime_debug) if isinstance(runtime_debug, dict) else {}
             visual_debug = wan_debug.get("visual_conditioning", {}) if isinstance(wan_debug, dict) else {}
             segment_debug.append({
                 "id": segment.get("id"),
@@ -197,6 +209,7 @@ def build_wan_segmented_executor_outputs(
                 "seam_blend": seam_blend_debug,
                 "sampling": sampling_debug,
                 "bernini": wan_debug.get("bernini"),
+                "fmlf_advanced_i2v": wan_debug.get("fmlf_advanced_i2v"),
                 "visual_conditioning": {
                     "requested_keyframes": visual_debug.get("requested_keyframes") or [],
                     "applied_keyframes": visual_debug.get("applied_keyframes") or [],
@@ -259,6 +272,7 @@ def sample_wan_segment_latent(
     segment_index: int | None = None,
     segment_count: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    positive_high, positive_low, positive_default, conditioning_split = _split_phase_conditioning(positive)
     if _uses_single_phase_sampling(model_mode):
         model = high_noise_model or low_noise_model
         if model is None:
@@ -272,7 +286,7 @@ def sample_wan_segment_latent(
             )
         sampled = sample_latent(
             model=model,
-            positive=positive,
+            positive=positive_default,
             negative=negative,
             latent=latent,
             seed=seed,
@@ -316,7 +330,7 @@ def sample_wan_segment_latent(
         )
     sampled_high = sample_latent(
         model=high_noise_model,
-        positive=positive,
+        positive=positive_high,
         negative=negative,
         latent=latent,
         seed=seed,
@@ -340,7 +354,7 @@ def sample_wan_segment_latent(
         )
     sampled_low = sample_latent(
         model=low_noise_model,
-        positive=positive,
+        positive=positive_low,
         negative=negative,
         latent=sampled_high,
         seed=seed,
@@ -372,6 +386,7 @@ def sample_wan_segment_latent(
                 "last_step": int(split_step),
                 "force_full_denoise": False,
                 "disable_noise": False,
+                "conditioning": "positive_high" if conditioning_split else "positive",
             },
             {
                 "role": "low_noise",
@@ -380,11 +395,30 @@ def sample_wan_segment_latent(
                 "last_step": int(steps),
                 "force_full_denoise": True,
                 "disable_noise": True,
+                "conditioning": "positive_low" if conditioning_split else "positive",
             },
         ],
         "vram_unload_policy": vram_unload_policy,
         "unload_events": unload_events,
     }
+
+
+def _split_phase_conditioning(positive):
+    if isinstance(positive, dict) and positive.get("_helto_wan_conditioning_split"):
+        high = positive.get("high")
+        low = positive.get("low")
+        default = positive.get("default")
+        return high if high is not None else default, low if low is not None else default, default if default is not None else high, True
+    return positive, positive, positive, False
+
+
+def _previous_latent_tail(latent: dict[str, Any], frame_count: int) -> dict[str, Any] | None:
+    samples = latent.get("samples") if isinstance(latent, dict) else None
+    if not torch.is_tensor(samples) or int(samples.shape[2]) <= 0:
+        return None
+    latent_frames = ((max(1, int(frame_count)) - 1) // 4) + 1
+    tail = samples[:, :, -min(int(samples.shape[2]), latent_frames) :].detach().cpu().clone()
+    return {"samples": tail}
 
 
 def _report_unload_events(

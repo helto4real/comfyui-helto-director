@@ -128,6 +128,11 @@ def test_wan_nodes_register_with_custom_sockets_and_mappings():
     assert seam_blend_input.default == "3"
     painter_boost_input = next(input_item for input_item in config_schema.inputs if input_item.id == "painter_motion_boost")
     painter_amplitude_input = next(input_item for input_item in config_schema.inputs if input_item.id == "painter_motion_amplitude")
+    backend_profile_input = next(input_item for input_item in config_schema.inputs if input_item.id == "runtime_backend_profile")
+    fmlf_mode_input = next(input_item for input_item in config_schema.inputs if input_item.id == "fmlf_continuation_mode")
+    assert "FMLF Advanced I2V" in backend_profile_input.options
+    assert fmlf_mode_input.options == ["SVI", "AUTO_CONTINUE"]
+    assert fmlf_mode_input.default == "SVI"
     assert painter_boost_input.options == ["Off", "Auto"]
     assert painter_boost_input.default == "Off"
     assert painter_amplitude_input.default == 1.15
@@ -165,6 +170,7 @@ def test_wan_config_defaults_include_skeleton_rules():
     assert config["segment_continuity_tail_frames"] == 5
     assert config["segment_seam_blend_frames"] == 3
     assert config["vram_unload_policy"] == "Off"
+    assert config["fmlf_continuation_mode"] == "SVI"
     assert config["painter_motion_boost"] == "Off"
     assert config["painter_motion_amplitude"] == 1.15
     assert config["rules"] == {
@@ -248,6 +254,22 @@ def test_wan_config_normalizes_painter_motion_boost():
     assert low["painter_motion_amplitude"] == 1.0
     assert high["painter_motion_amplitude"] == 2.0
     assert invalid["painter_motion_amplitude"] == 1.15
+
+
+def test_wan_config_normalizes_fmlf_continuation_mode():
+    normalized = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "fmlf_continuation_mode": "AUTO_CONTINUE",
+    })
+    fallback = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "fmlf_continuation_mode": "Unexpected",
+    })
+    legacy = normalize_wan_timeline_config({"type": "WAN_TIMELINE_CONFIG"})
+
+    assert normalized["fmlf_continuation_mode"] == "AUTO_CONTINUE"
+    assert fallback["fmlf_continuation_mode"] == "SVI"
+    assert legacy["fmlf_continuation_mode"] == "SVI"
 
 
 def test_wan_config_node_keeps_old_vram_and_debug_widget_positions():
