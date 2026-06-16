@@ -27,11 +27,14 @@ import { showPromptOptimizer } from "./prompt_optimizer.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
   addCharacterReference,
+  applyReferencePromptCompletion,
   areCharacterReferencesEnabled,
   ensureCharacterReferences,
+  filterReferencePromptCompletions,
   formatCharacterReferenceTag,
   getCharacterReferences,
   getReferencePromptCompletions,
+  referencePromptCompletionContext,
   removeCharacterReference,
 } from "./references.js";
 import {
@@ -530,7 +533,141 @@ export class TimelineRenderer {
     });
     input.dataset.referenceTrigger = PROMPT_REFERENCE_TRIGGER;
     input._heltoCharacterReferenceCompletions = getReferencePromptCompletions(this.controller.timeline);
-    return input;
+    return this.wrapPromptReferenceIntellisense(input, item);
+  }
+
+  wrapPromptReferenceIntellisense(input, item) {
+    const wrapper = el("div", "htd-prompt-wrap");
+    const popup = el("div", "htd-reference-completions");
+    popup.hidden = true;
+    popup.setAttribute("role", "listbox");
+    popup.setAttribute("aria-label", "Character reference suggestions");
+    wrapper.append(input, popup);
+    this.attachPromptReferenceIntellisense(input, popup, item);
+    return wrapper;
+  }
+
+  attachPromptReferenceIntellisense(input, popup, item) {
+    const state = {
+      items: [],
+      selectedIndex: 0,
+      query: null,
+    };
+
+    const close = () => {
+      popup.hidden = true;
+      popup.replaceChildren();
+      state.items = [];
+      state.selectedIndex = 0;
+      state.query = null;
+      input.removeAttribute("aria-activedescendant");
+    };
+
+    const selectCompletion = (completion) => {
+      const result = applyReferencePromptCompletion(
+        input.value,
+        input.selectionStart ?? input.value.length,
+        completion,
+        PROMPT_REFERENCE_TRIGGER,
+      );
+      if (!result) return;
+      input.value = result.value;
+      input.setSelectionRange(result.caret, result.caret);
+      setLiveItemField(this.controller.timeline, item, "prompt", input.value);
+      this.controller.scheduleDebouncedCommit("prompt typing", { rerender: false });
+      close();
+    };
+
+    const render = () => {
+      popup.replaceChildren();
+      state.items.forEach((completion, index) => {
+        const option = el("button", `htd-reference-completion${index === state.selectedIndex ? " is-selected" : ""}`);
+        const shortcut = index < 9 ? String(index + 1) : "";
+        option.type = "button";
+        option.id = `htd-reference-completion-${completion.id || index}`;
+        option.setAttribute("role", "option");
+        option.setAttribute("aria-selected", index === state.selectedIndex ? "true" : "false");
+        option.tabIndex = -1;
+        if (shortcut) {
+          const badge = el("span", "htd-reference-completion-key");
+          badge.textContent = shortcut;
+          option.append(badge);
+        }
+        const text = el("span", "htd-reference-completion-text");
+        const tag = el("span", "htd-reference-completion-tag");
+        tag.textContent = completion.tag;
+        text.append(tag);
+        if (completion.description) {
+          const description = el("span", "htd-reference-completion-description");
+          description.textContent = completion.description;
+          text.append(description);
+        }
+        option.append(text);
+        option.addEventListener("mousedown", (event) => event.preventDefault());
+        option.addEventListener("click", () => selectCompletion(completion));
+        popup.append(option);
+      });
+      const selected = popup.children[state.selectedIndex];
+      if (selected?.id) input.setAttribute("aria-activedescendant", selected.id);
+    };
+
+    const update = () => {
+      const context = referencePromptCompletionContext(
+        input.value,
+        input.selectionStart ?? input.value.length,
+        PROMPT_REFERENCE_TRIGGER,
+      );
+      const completions = getReferencePromptCompletions(this.controller.timeline);
+      input._heltoCharacterReferenceCompletions = completions;
+      if (!context || completions.length === 0) {
+        close();
+        return;
+      }
+      const items = filterReferencePromptCompletions(completions, context.query);
+      if (items.length === 0) {
+        close();
+        return;
+      }
+      state.items = items;
+      state.selectedIndex = state.query === context.query
+        ? Math.max(0, Math.min(state.selectedIndex, items.length - 1))
+        : 0;
+      state.query = context.query;
+      popup.hidden = false;
+      render();
+    };
+
+    input.setAttribute("aria-autocomplete", "list");
+    input.addEventListener("input", update);
+    input.addEventListener("click", update);
+    input.addEventListener("blur", close);
+    input.addEventListener("keydown", (event) => {
+      if (popup.hidden) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        state.selectedIndex = (state.selectedIndex + direction + state.items.length) % state.items.length;
+        render();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        selectCompletion(state.items[state.selectedIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (/^[1-9]$/.test(event.key)) {
+        const index = Number(event.key) - 1;
+        if (state.items[index]) {
+          event.preventDefault();
+          selectCompletion(state.items[index]);
+        }
+      }
+    });
   }
 
   renderInspectorRow(label, control, className = "") {
@@ -1824,7 +1961,16 @@ function installStyles(documentRef) {
     .htd-inspector-compact-field.is-strength { flex: 1 1 320px; }
     .htd-inspector-compact-label { flex: 0 0 auto; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
     .htd-inspector-compact-field .htd-menu { flex: 0 0 auto; }
+    .htd-prompt-wrap { position: relative; width: 100%; min-width: 0; flex: 1 1 auto; display: flex; align-items: stretch; }
     .htd-prompt { width: 100%; min-width: 0; flex: 1 1 auto; height: 86px; min-height: 86px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 6px 8px; line-height: 1.3; resize: none; }
+    .htd-reference-completions { position: absolute; left: 0; right: 0; bottom: calc(100% + 4px); z-index: 45; max-height: 148px; overflow: auto; padding: 4px; border: 1px solid #465064; border-radius: 4px; background: #151c29; box-shadow: 0 10px 24px rgba(0,0,0,0.44); }
+    .htd-reference-completions[hidden] { display: none; }
+    .htd-reference-completion { width: 100%; min-height: 28px; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: 3px; background: transparent; color: #d8dde8; text-align: left; cursor: pointer; }
+    .htd-reference-completion:hover, .htd-reference-completion.is-selected { background: #293244; color: #f7f9fc; }
+    .htd-reference-completion-key { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #d6b65a; color: #141922; font-size: 10px; font-weight: 700; line-height: 1; }
+    .htd-reference-completion-text { min-width: 0; display: grid; gap: 1px; }
+    .htd-reference-completion-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff1b8; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .htd-reference-completion-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; font-size: 10px; }
     .htd-field { min-width: 0; width: 100%; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
     .htd-number { width: 64px; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 6px; }
     .htd-strength-control { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 6px; }

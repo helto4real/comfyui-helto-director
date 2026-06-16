@@ -275,6 +275,17 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes("this.renderReferenceManager(timeline)"), true);
   assert.equal(rendererSource.includes('mode: "reference"'), true);
   assert.equal(rendererSource.includes("input.dataset.referenceTrigger = PROMPT_REFERENCE_TRIGGER"), true);
+  assert.equal(rendererSource.includes("return this.wrapPromptReferenceIntellisense(input, item);"), true);
+  assert.equal(rendererSource.includes("attachPromptReferenceIntellisense(input, popup, item)"), true);
+  assert.equal(rendererSource.includes("applyReferencePromptCompletion("), true);
+  assert.equal(rendererSource.includes("filterReferencePromptCompletions(completions, context.query)"), true);
+  assert.equal(rendererSource.includes('event.key === "ArrowDown" || event.key === "ArrowUp"'), true);
+  assert.equal(rendererSource.includes('event.key === "Enter"'), true);
+  assert.equal(rendererSource.includes('event.key === "Escape"'), true);
+  assert.equal(rendererSource.includes("/^[1-9]$/.test(event.key)"), true);
+  assert.equal(rendererSource.includes('this.controller.scheduleDebouncedCommit("prompt typing", { rerender: false });'), true);
+  assert.equal(rendererSource.includes(".htd-prompt-wrap { position: relative;"), true);
+  assert.equal(rendererSource.includes(".htd-reference-completions { position: absolute;"), true);
   assert.equal(rendererSource.includes("showPromptOptimizer({"), true);
   assert.equal(rendererSource.includes("promptOptimizerButton,"), true);
   assert.equal(rendererSource.indexOf("promptOptimizerButton,") < rendererSource.indexOf("settingsButton,"), true);

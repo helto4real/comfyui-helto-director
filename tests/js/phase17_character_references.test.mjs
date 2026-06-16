@@ -3,11 +3,14 @@ import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
 import { addSection } from "../../web/timeline/operations.js";
 import {
   addCharacterReference,
+  applyReferencePromptCompletion,
   areCharacterReferencesEnabled,
+  filterReferencePromptCompletions,
   formatCharacterReferenceTag,
   getCharacterReferences,
   getReferencePromptCompletions,
   parseReferenceTags,
+  referencePromptCompletionContext,
   removeCharacterReference,
 } from "../../web/timeline/references.js";
 import { validateVideoTimeline } from "../../web/timeline/validation.js";
@@ -79,6 +82,34 @@ function testGlobalReferenceToggleDisablesCompletions() {
   assert.deepEqual(getReferencePromptCompletions(timeline), []);
 }
 
+function testPromptReferenceIntellisenseHelpers() {
+  const timeline = createDefaultVideoTimeline();
+  const hero = addCharacterReference(timeline, pickedItem("/media/hero.png", "hero.png"));
+  hero.description = "red jacket";
+  const villain = addCharacterReference(timeline, pickedItem("/media/villain.png", "villain.png"));
+  villain.description = "silver mask";
+  const completions = getReferencePromptCompletions(timeline);
+
+  assert.deepEqual(referencePromptCompletionContext("hello @", 7), {
+    trigger: "@",
+    triggerStart: 6,
+    replaceStart: 6,
+    replaceEnd: 7,
+    query: "",
+  });
+  assert.equal(referencePromptCompletionContext("email@test", 10), null);
+  assert.equal(filterReferencePromptCompletions(completions, "mask")[0].label, "image2");
+  assert.equal(filterReferencePromptCompletions(completions, "image1")[0].label, "image1");
+
+  const inserted = applyReferencePromptCompletion("walk with @im toward camera", 13, completions[1]);
+  assert.equal(inserted.value, "walk with @image2:character toward camera");
+  assert.equal(inserted.caret, "walk with @image2:character ".length);
+
+  const insertedAtEnd = applyReferencePromptCompletion("@", 1, completions[0]);
+  assert.equal(insertedAtEnd.value, "@image1:character ");
+  assert.equal(insertedAtEnd.caret, insertedAtEnd.value.length);
+}
+
 function testReferenceValidation() {
   const timeline = createDefaultVideoTimeline();
   addCharacterReference(timeline, pickedItem("/media/hero.png", "hero.png"));
@@ -144,6 +175,7 @@ testDefaultTimelineHasEmptyCharacterReferences();
 testAddRemoveReferenceDoesNotCreateTimelineMedia();
 testReferenceTagParsingAndCompletions();
 testGlobalReferenceToggleDisablesCompletions();
+testPromptReferenceIntellisenseHelpers();
 testReferenceValidation();
 testPromptReferenceWarnings();
 testGlobalReferenceToggleWarningsAreDisabled();

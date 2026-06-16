@@ -33,6 +33,56 @@ export function getReferencePromptCompletions(timeline) {
   }));
 }
 
+export function referencePromptCompletionContext(value, caretIndex, trigger = PROMPT_REFERENCE_TRIGGER) {
+  const text = String(value ?? "");
+  const caret = Math.max(0, Math.min(text.length, Number(caretIndex) || 0));
+  const prefix = text.slice(0, caret);
+  const triggerStart = prefix.lastIndexOf(trigger);
+  if (triggerStart < 0) return null;
+  const previous = triggerStart > 0 ? text[triggerStart - 1] : "";
+  if (previous && !/[\s([,{]/.test(previous)) return null;
+  const query = prefix.slice(triggerStart + trigger.length);
+  if (/\s/.test(query)) return null;
+  return {
+    trigger,
+    triggerStart,
+    replaceStart: triggerStart,
+    replaceEnd: caret,
+    query,
+  };
+}
+
+export function filterReferencePromptCompletions(completions, query = "") {
+  const entries = Array.isArray(completions) ? completions : [];
+  const needle = String(query ?? "").trim().toLowerCase();
+  if (!needle) return entries;
+  return entries.filter((completion) => {
+    const label = String(completion?.label ?? "").toLowerCase();
+    const tag = String(completion?.tag ?? "").toLowerCase();
+    const description = String(completion?.description ?? "").toLowerCase();
+    return label.includes(needle) || tag.includes(needle) || description.includes(needle);
+  });
+}
+
+export function applyReferencePromptCompletion(value, caretIndex, completion, trigger = PROMPT_REFERENCE_TRIGGER) {
+  const context = referencePromptCompletionContext(value, caretIndex, trigger);
+  const tag = String(completion?.tag ?? "").trim();
+  if (!context || !tag) return null;
+  const text = String(value ?? "");
+  const before = text.slice(0, context.replaceStart);
+  const after = text.slice(context.replaceEnd);
+  const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
+  const inserted = needsTrailingSpace ? `${tag} ` : tag;
+  const nextValue = `${before}${inserted}${after}`;
+  const caretOffset = !needsTrailingSpace && after[0] === " " ? 1 : 0;
+  return {
+    value: nextValue,
+    caret: before.length + inserted.length + caretOffset,
+    completion,
+    context,
+  };
+}
+
 export function formatCharacterReferenceTag(referenceOrLabel, strengthOverride = null) {
   const label = normalizeReferenceLabel(
     typeof referenceOrLabel === "string" ? referenceOrLabel : referenceOrLabel?.label,
