@@ -137,6 +137,11 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
             **reference_metadata,
         })
 
+    _append_character_reference_guides(plan, guide_data, target_width, target_height)
+    character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
+    if isinstance(character_references, dict):
+        diagnostics.extend(str(item) for item in character_references.get("diagnostics", []) if item)
+
     if not guide_data["images"]:
         guide_data["images"].append(empty_image(target_width, target_height))
         guide_data["insert_frames"].append(0)
@@ -144,6 +149,56 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
         diagnostics.append("No image or video guides were available; inserted a zero-strength dummy guide image.")
 
     return guide_data, diagnostics
+
+
+def _append_character_reference_guides(plan: dict[str, Any], guide_data: dict[str, Any], target_width: int, target_height: int) -> None:
+    character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
+    specs = character_references.get("guide_specs") if isinstance(character_references, dict) else []
+    if not isinstance(specs, list) or not specs:
+        return
+    clean_latent_frames = int(guide_data.get("clean_latent_frames") or 1)
+    divisible_by = int(plan["resolved_output"].get("divisible_by") or 32)
+    guide_data["reference_mode"] = "timeline_guides+character_references"
+    guide_data["hidden_reference_count"] = len(specs)
+
+    for index, spec in enumerate(specs):
+        image = spec.get("image")
+        path = image.get("path") or image.get("file_path") if isinstance(image, dict) else None
+        if not path:
+            raise ValueError(
+                f"LTX character reference '{spec.get('label') or spec.get('id') or index}' is missing an image path."
+            )
+        try:
+            raw_tensor = load_image_tensor(path)
+        except Exception as exc:
+            raise ValueError(
+                f"LTX character reference '{spec.get('label') or spec.get('id') or index}' could not load image '{path}': {exc}"
+            ) from exc
+        tensor = resize_image_frames(
+            raw_tensor,
+            target_width,
+            target_height,
+            CROP_MODE_PAD,
+            divisible_by,
+        )
+        insert_frame = (clean_latent_frames + index) * 8
+        strength = _safe_float(spec.get("strength"), 1.0)
+        guide_data["images"].append(tensor)
+        guide_data["insert_frames"].append(insert_frame)
+        guide_data["strengths"].append(strength)
+        guide_data["reference_images"].append({
+            "id": spec.get("id"),
+            "label": spec.get("label"),
+            "kind": "character",
+            "description": spec.get("description") or "",
+            "section_id": spec.get("section_id"),
+            "insert_frame": insert_frame,
+            "strength": strength,
+            "image": tensor,
+            "hidden_tail": True,
+            "clean_latent_frames": clean_latent_frames,
+            "clean_pixel_frames": guide_data.get("clean_pixel_frames"),
+        })
 
 
 def source_video_outputs(plan: dict[str, Any], target_width: int, target_height: int):

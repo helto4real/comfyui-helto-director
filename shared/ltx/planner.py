@@ -35,6 +35,7 @@ from .config import (
     RESOLUTION_PROFILE_AUTO,
     normalize_ltx_timeline_config,
 )
+from .references import build_ltx_character_reference_plan
 
 
 LTX_PLAN_SCHEMA_VERSION = "1.0"
@@ -53,12 +54,6 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
     timeline = normalize_video_timeline(video_timeline)
     config = normalize_ltx_timeline_config(ltx_config)
     director_validation = validate_video_timeline(timeline)
-    ltx_validation = _validate_ltx_inputs(timeline, config, director_validation)
-    validation = create_validation_result([
-        *flatten_validation_result(director_validation),
-        *flatten_validation_result(ltx_validation),
-    ])
-
     frame_rate = float(timeline["project"].get("frame_rate") or 24.0)
     total_frames = _ltx_frame_count(
         float(timeline["project"].get("duration_seconds") or 0.0),
@@ -67,7 +62,19 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
     )
     resolved_output = _resolve_output(timeline["project"], config)
     section_entries = _build_section_plan(timeline, frame_rate, total_frames)
-    prompt_entries = _build_prompt_plan(timeline, section_entries)
+    character_references, character_validation_entries = build_ltx_character_reference_plan(timeline, config, section_entries)
+    ltx_validation = _validate_ltx_inputs(
+        timeline,
+        config,
+        director_validation,
+        character_validation_entries,
+    )
+    validation = create_validation_result([
+        *flatten_validation_result(director_validation),
+        *flatten_validation_result(ltx_validation),
+    ])
+
+    prompt_entries = _build_prompt_plan(timeline, section_entries, character_references)
     media_entries = _build_media_plan(timeline, section_entries, config)
     audio_entries = _build_audio_plan(timeline, frame_rate)
 
@@ -95,6 +102,7 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
                     "enabled": config["reference_mode"] == "Prompt Relay",
                     "epsilon": config["prompt_relay_epsilon"],
                 },
+                "character_references": character_references,
                 "rules": deepcopy(config["rules"]),
             },
         },
@@ -104,8 +112,13 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
     return plan, validation, debug
 
 
-def _validate_ltx_inputs(timeline: dict[str, Any], config: dict[str, Any], director_validation: dict[str, Any]) -> dict[str, Any]:
-    entries = []
+def _validate_ltx_inputs(
+    timeline: dict[str, Any],
+    config: dict[str, Any],
+    director_validation: dict[str, Any],
+    character_validation_entries: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    entries = [*(character_validation_entries or [])]
     if not director_validation.get("is_valid", False):
         entries.append(
             create_validation_entry(
@@ -198,8 +211,17 @@ def _build_section_plan(timeline: dict[str, Any], frame_rate: float, total_frame
     return sorted(sections, key=lambda item: (item["start_frame"], item["end_frame_exclusive"], item["item_id"]))
 
 
-def _build_prompt_plan(timeline: dict[str, Any], section_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_prompt_plan(
+    timeline: dict[str, Any],
+    section_entries: list[dict[str, Any]],
+    character_references: dict[str, Any],
+) -> list[dict[str, Any]]:
     global_prompt = timeline["project"].get("global_prompt", {})
+    runtime_global_prompt = character_references.get("runtime_global_prompt", global_prompt.get("prompt", ""))
+    runtime_prompts_by_id = {
+        entry.get("item_id"): entry.get("runtime_prompt", "")
+        for entry in character_references.get("section_usage", [])
+    }
     sections_by_id = {
         section.get("item_id"): section
         for section in timeline["director_track"]["sections"]
@@ -208,13 +230,21 @@ def _build_prompt_plan(timeline: dict[str, Any], section_entries: list[dict[str,
     for entry in section_entries:
         section = sections_by_id.get(entry["item_id"])
         raw_prompt = section.get("prompt", "") if section else ""
+        runtime_prompt = runtime_prompts_by_id.get(entry["item_id"], raw_prompt)
         prompts.append({
             "item_id": entry["item_id"],
             "type": entry["type"],
             "raw_prompt": raw_prompt,
-            "effective_prompt": merge_prompts(
+            "runtime_prompt": runtime_prompt,
+            "original_effective_prompt": merge_prompts(
                 raw_prompt,
                 global_prompt.get("prompt", ""),
+                bool(global_prompt.get("enabled")),
+                global_prompt.get("position", "Prefix"),
+            ),
+            "effective_prompt": merge_prompts(
+                runtime_prompt,
+                runtime_global_prompt,
                 bool(global_prompt.get("enabled")),
                 global_prompt.get("position", "Prefix"),
             ),

@@ -33,6 +33,7 @@ from shared.contracts.video_timeline import (
     VIDEO_TIMING_USE_SOURCE_TIMING,
 )
 from shared.ltx import build_ltx_runtime_outputs, build_ltx_timeline_plan, create_ltx_timeline_config
+from shared.ltx.identity import crop_latent_to_frame_count
 from shared.timeline import create_default_video_timeline
 
 
@@ -229,6 +230,49 @@ def _image_plan(path: Path):
         }
     )
     plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+    return plan
+
+
+def _character_reference_plan(path: Path, reference_mode="Prompt Relay", duplicate=False):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["project"]["metadata"]["character_references"].append(
+        {
+            "id": "ref_hero",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "red jacket hero",
+            "strength": 0.9,
+            "image": {"path": str(path), "name": path.name},
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 0.5 if duplicate else 1.0,
+            "prompt": "follow @image1:character[0.6]",
+        }
+    )
+    if duplicate:
+        timeline["director_track"]["sections"].append(
+            {
+                "item_id": "section_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.5,
+                "end_time": 1.0,
+                "prompt": "track @image1:character[0.6]",
+            }
+        )
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(reference_mode=reference_mode, debug_mode=True),
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -553,7 +597,7 @@ def test_director_to_ltx_runtime_smoke_graph_with_image_and_audio(tmp_path):
     Runtime = _registered_node("HeltoLTX23TimelineRuntime")
 
     authored_timeline = _image_audio_timeline(image_path, audio_path)
-    video_timeline, director_validation = Director.execute(
+    video_timeline, director_validation, _director_frame_rate = Director.execute(
         duration_seconds=1.0,
         frame_rate=24.0,
         quality_preset=QUALITY_PRESET_QUICK_DRAFT,
@@ -831,6 +875,71 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.5
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.5
     assert runtime_debug["summary"]["applied_guides"] == 1
+
+
+def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(tmp_path):
+    reference_path = tmp_path / "hero.png"
+    Image.new("RGB", (64, 64), (220, 30, 20)).save(reference_path)
+    plan = _character_reference_plan(reference_path)
+
+    _, positive, negative, video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    assert runtime_debug["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
+    assert "@" not in runtime_debug["prompt_relay"]["full_prompt"]
+    assert guide_data["hidden_reference_count"] == 1
+    assert guide_data["strengths"] == [0.6]
+    assert guide_data["insert_frames"] == [guide_data["clean_latent_frames"] * 8]
+    assert guide_data["reference_images"][0]["label"] == "image1"
+    assert guide_data["reference_images"][0]["hidden_tail"] is True
+    assert guide_data["reference_images"][0]["image"].shape == guide_data["images"][0].shape
+    assert video_latent["samples"].shape[2] > guide_data["clean_latent_frames"]
+    assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert runtime_debug["character_references"]["guide_count"] == 1
+
+    cropped = crop_latent_to_frame_count(
+        video_latent,
+        guide_data["clean_latent_frames"],
+        guide_data["hidden_reference_count"],
+    )
+    assert cropped["samples"].shape[2] == guide_data["clean_latent_frames"]
+    assert cropped["noise_mask"].shape[2] == guide_data["clean_latent_frames"]
+
+
+def test_character_references_work_in_guide_data_mode_without_prompt_relay(tmp_path):
+    reference_path = tmp_path / "hero-guide-data.png"
+    Image.new("RGB", (64, 64), (80, 200, 120)).save(reference_path)
+    plan = _character_reference_plan(reference_path, reference_mode="Guide Data")
+
+    runtime_model, positive, _negative, _video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    assert runtime_model.object_patches == {}
+    assert positive[0][1]["text"] == "follow red jacket hero"
+    assert guide_data["hidden_reference_count"] == 1
+    assert guide_data["reference_images"][0]["hidden_tail"] is True
+    assert runtime_debug["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
+    assert runtime_debug["character_references"]["active"] is True
+
+
+def test_duplicate_character_reference_same_strength_reuses_hidden_guide(tmp_path):
+    reference_path = tmp_path / "hero-dedupe.png"
+    Image.new("RGB", (64, 64), (30, 80, 220)).save(reference_path)
+    plan = _character_reference_plan(reference_path, duplicate=True)
+    specs = plan["model_specific"]["ltx"]["character_references"]["guide_specs"]
+
+    _, _positive, _negative, _video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+        **_runtime_args(plan)
+    )
+
+    assert len(specs) == 1
+    assert specs[0]["section_id"] == "section_001,section_002"
+    assert guide_data["hidden_reference_count"] == 1
+    assert len([entry for entry in guide_data["reference_images"] if entry.get("hidden_tail")]) == 1
+    assert runtime_debug["character_references"]["guide_count"] == 1
 
 
 def test_video_section_creates_source_guide_data_and_outputs(tmp_path):

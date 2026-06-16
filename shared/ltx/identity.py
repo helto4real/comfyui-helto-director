@@ -164,13 +164,8 @@ def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int 
         return crop_tensor(value)
 
     before_frames = tensor_frame_count(first_video_stream(cropped.get("samples")))
-    candidate_targets = [metadata_target]
-    extra_tail_latent_frames = 2 if hidden_reference_count > 0 else 0
-    if hidden_reference_count > 0 and before_frames is not None:
-        tail_count_target = before_frames - hidden_reference_count - extra_tail_latent_frames
-        if tail_count_target > 0:
-            candidate_targets.append(tail_count_target)
-    target_frames = min(candidate_targets)
+    extra_tail_latent_frames = 0
+    target_frames = metadata_target
 
     if "samples" in cropped:
         cropped["samples"] = crop_value(cropped["samples"])

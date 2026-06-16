@@ -194,3 +194,111 @@ def test_ltx_planner_propagates_invalid_director_timeline_without_crash():
     assert "TEXT_SECTION_EMPTY_PROMPT" in [entry["code"] for entry in validation["errors"]]
     assert "LTX_DIRECTOR_TIMELINE_INVALID" in [entry["code"] for entry in validation["errors"]]
     assert debug["summary"]["error_count"] == 2
+
+
+def test_ltx_planner_records_character_reference_specs_and_replaces_prompt_tags():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["metadata"]["character_references"].append(
+        {
+            "id": "ref_hero",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "red jacket hero",
+            "strength": 0.9,
+            "image": {"path": "/mnt/media/hero.png", "name": "hero.png"},
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "follow @image1:character[0.8] through fog",
+        }
+    )
+
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config(debug_mode=True))
+    references = plan["model_specific"]["ltx"]["character_references"]
+
+    assert validation["is_valid"] is True
+    assert references["active"] is True
+    assert references["guide_specs"][0]["label"] == "image1"
+    assert references["guide_specs"][0]["strength"] == 0.8
+    assert references["guide_specs"][0]["image"]["path"] == "/mnt/media/hero.png"
+    assert references["section_usage"][0]["runtime_prompt"] == "follow red jacket hero through fog"
+    assert plan["prompt_plan"][0]["raw_prompt"] == "follow @image1:character[0.8] through fog"
+    assert plan["prompt_plan"][0]["runtime_prompt"] == "follow red jacket hero through fog"
+    assert plan["prompt_plan"][0]["effective_prompt"] == "follow red jacket hero through fog"
+
+
+def test_ltx_planner_errors_for_unknown_active_character_reference_tag():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["metadata"]["character_references"].append(
+        {
+            "id": "ref_hero",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "red jacket hero",
+            "strength": 1.0,
+            "image": {"path": "/mnt/media/hero.png", "name": "hero.png"},
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "follow @image2:character",
+        }
+    )
+
+    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    error_codes = [entry["code"] for entry in validation["errors"]]
+
+    assert validation["is_valid"] is False
+    assert "LTX_CHARACTER_REFERENCE_UNKNOWN" in error_codes
+    assert plan["model_specific"]["ltx"]["character_references"]["unknown_tags"] == ["@image2:character"]
+
+
+def test_ltx_reference_mode_disabled_strips_tags_without_specs():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["project"]["metadata"]["character_references"].append(
+        {
+            "id": "ref_hero",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "red jacket hero",
+            "strength": 1.0,
+            "image": {"path": "/mnt/media/hero.png", "name": "hero.png"},
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "follow @image1:character through fog",
+        }
+    )
+
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(reference_mode="Disabled", debug_mode=True),
+    )
+    references = plan["model_specific"]["ltx"]["character_references"]
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["ltx"]["prompt_relay"]["enabled"] is False
+    assert references["active"] is False
+    assert references["guide_specs"] == []
+    assert plan["prompt_plan"][0]["runtime_prompt"] == "follow through fog"

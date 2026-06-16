@@ -8,6 +8,7 @@ import torch
 from ..config import LTX_MODEL_FAMILY, LTX_MODEL_VERSION
 from ..identity import apply_identity_anchor
 from ..planner import LTX_PLAN_TYPE
+from ..references import planned_hidden_reference_count
 from .audio import build_audio_latent, build_native_audio_latent, mix_timeline_audio
 from .guides import apply_guide_data
 from .media import build_guide_data, source_video_outputs
@@ -35,8 +36,14 @@ def build_ltx_runtime_outputs(
     frame_count = int(plan["resolved_output"].get("frame_count") or 1)
     frame_rate = float(plan["resolved_output"].get("frame_rate") or 24.0)
     clean_latent_frames = ((frame_count - 1) // 8) + 1
+    hidden_reference_count = planned_hidden_reference_count(plan)
+    total_latent_frames = clean_latent_frames + hidden_reference_count
 
-    latent = clone_latent(optional_latent) if optional_latent is not None else empty_ltx_video_latent(width, height, clean_latent_frames)
+    latent = (
+        pad_latent_tail(clone_latent(optional_latent), hidden_reference_count)
+        if optional_latent is not None
+        else empty_ltx_video_latent(width, height, total_latent_frames)
+    )
     prompt_inputs = _prompt_relay_inputs(plan)
     prompt_relay = plan.get("model_specific", {}).get("ltx", {}).get("prompt_relay", {})
     if prompt_relay.get("enabled", True) and prompt_inputs["local_prompts"]:
@@ -134,6 +141,35 @@ def clone_latent(latent: dict[str, Any]) -> dict[str, Any]:
     return cloned
 
 
+def pad_latent_tail(latent: dict[str, Any], extra_latent_frames: int) -> dict[str, Any]:
+    if extra_latent_frames <= 0:
+        return latent
+    if not isinstance(latent, dict) or not torch.is_tensor(latent.get("samples")):
+        raise ValueError("LTX character references need optional_latent to be a LATENT dict with tensor samples.")
+    samples = latent["samples"]
+    if samples.ndim != 5:
+        raise ValueError(
+            "LTX character references can only auto-pad 5D video latent samples "
+            f"(got shape {tuple(samples.shape)})."
+        )
+    padded = dict(latent)
+    pad_shape = list(samples.shape)
+    pad_shape[2] = int(extra_latent_frames)
+    padded["samples"] = torch.cat(
+        [samples, torch.zeros(pad_shape, dtype=samples.dtype, device=samples.device)],
+        dim=2,
+    )
+    noise_mask = latent.get("noise_mask")
+    if torch.is_tensor(noise_mask) and noise_mask.ndim == 5:
+        mask_shape = list(noise_mask.shape)
+        mask_shape[2] = int(extra_latent_frames)
+        padded["noise_mask"] = torch.cat(
+            [noise_mask, torch.ones(mask_shape, dtype=noise_mask.dtype, device=noise_mask.device)],
+            dim=2,
+        )
+    return padded
+
+
 def zero_out_conditioning(conditioning):
     zeroed = []
     for tensor, metadata in conditioning:
@@ -166,7 +202,9 @@ def _validate_plan(plan: dict[str, Any]) -> None:
 def _prompt_relay_inputs(plan: dict[str, Any]) -> dict[str, Any]:
     prompts_by_id = {entry.get("item_id"): entry for entry in plan.get("prompt_plan", [])}
     project_global = plan.get("project", {}).get("global_prompt", {})
-    global_prompt = str(project_global.get("prompt") or "") if project_global.get("enabled") else ""
+    character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
+    runtime_global_prompt = character_references.get("runtime_global_prompt") if isinstance(character_references, dict) else None
+    global_prompt = str(runtime_global_prompt if runtime_global_prompt is not None else project_global.get("prompt") or "") if project_global.get("enabled") else ""
     local_prompts: list[str] = []
     pixel_lengths: list[int] = []
     frame_ranges: list[dict[str, int]] = []
@@ -176,7 +214,7 @@ def _prompt_relay_inputs(plan: dict[str, Any]) -> dict[str, Any]:
         if section.get("type") == "Gap" or section.get("role") == "No Guidance":
             continue
         prompt = prompts_by_id.get(section.get("item_id"), {})
-        raw_prompt = str(prompt.get("raw_prompt") or "").strip()
+        raw_prompt = str(prompt.get("runtime_prompt") if prompt.get("runtime_prompt") is not None else prompt.get("raw_prompt") or "").strip()
         effective_prompt = str(prompt.get("effective_prompt") or "").strip()
         local_prompt = raw_prompt or effective_prompt
         if not raw_prompt and section.get("type") in {"Image", "Video"}:
@@ -236,6 +274,7 @@ def _resolve_negative_conditioning(negative, positive):
 
 
 def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio):
+    character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     return {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
@@ -255,6 +294,14 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
             "clean_pixel_frames": guide_data.get("clean_pixel_frames"),
             "clean_latent_frames": guide_data.get("clean_latent_frames"),
             "hidden_reference_count": guide_data.get("hidden_reference_count"),
+        },
+        "character_references": {
+            "mode": character_references.get("mode") if isinstance(character_references, dict) else None,
+            "active": bool(character_references.get("active")) if isinstance(character_references, dict) else False,
+            "guide_count": len(character_references.get("guide_specs", [])) if isinstance(character_references, dict) else 0,
+            "hidden_reference_count": guide_data.get("hidden_reference_count"),
+            "substitutions": character_references.get("substitutions", []) if isinstance(character_references, dict) else [],
+            "diagnostics": character_references.get("diagnostics", []) if isinstance(character_references, dict) else [],
         },
         "diagnostics": diagnostics,
     }
