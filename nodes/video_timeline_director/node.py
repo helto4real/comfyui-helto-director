@@ -12,8 +12,8 @@ from ...shared.contracts.video_timeline import (
 )
 
 
-ASPECT_RATIO_OPTIONS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
-ORIENTATION_OPTIONS = ["Landscape", "Portrait", "Square"]
+ASPECT_RATIO_OPTIONS = ["16:9", "4:3", "3:2", "21:9", "1:1"]
+ORIENTATION_OPTIONS = ["Landscape", "Portrait"]
 
 
 class VideoTimelineDirector(io.ComfyNode):

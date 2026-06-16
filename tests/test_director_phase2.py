@@ -58,6 +58,8 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
     assert "AUDIO" not in input_types
     assert "width" not in input_ids
     assert "height" not in input_ids
+    assert schema.inputs[input_ids.index("aspect_ratio")].options == ["16:9", "4:3", "3:2", "21:9", "1:1"]
+    assert schema.inputs[input_ids.index("orientation")].options == ["Landscape", "Portrait"]
     assert schema.inputs[-1].extra_dict["hidden"] is True
 
 
@@ -95,7 +97,7 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     output_timeline, validation, frame_rate = VideoTimelineDirector.execute(
         duration_seconds=12.0,
         frame_rate=30.0,
-        aspect_ratio="9:16",
+        aspect_ratio="16:9",
         orientation="Portrait",
         quality_preset="High",
         video_timeline_json=json.dumps(timeline),
@@ -105,7 +107,7 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     assert output_timeline["project"]["duration_seconds"] == 12.0
     assert output_timeline["project"]["frame_rate"] == 30.0
     assert frame_rate == 30.0
-    assert output_timeline["project"]["aspect_ratio"] == "9:16"
+    assert output_timeline["project"]["aspect_ratio"] == "16:9"
     assert output_timeline["project"]["orientation"] == "Portrait"
     assert output_timeline["project"]["quality_preset"] == "High"
     assert output_timeline["project"]["metadata"]["character_references"][0]["id"] == "ref_hero"
