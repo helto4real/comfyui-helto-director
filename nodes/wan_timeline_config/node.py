@@ -6,6 +6,7 @@ from ...shared.wan.config import (
     BERNINI_TASK_PROMPT_MODES,
     DEBUG_MODES,
     DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
+    DEFAULT_SEGMENT_SEAM_BLEND_FRAMES,
     DEFAULT_PAINTER_MOTION_AMPLITUDE,
     GAP_POLICIES,
     MODEL_MODES,
@@ -15,6 +16,7 @@ from ...shared.wan.config import (
     RESOLUTION_PROFILES,
     RUNTIME_BACKEND_PROFILES,
     SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS,
+    SEGMENT_SEAM_BLEND_FRAME_OPTIONS,
     UNSUPPORTED_VIDEO_SECTION_POLICIES,
     UNSUPPORTED_VISUAL_KEYFRAME_POLICIES,
     VISUAL_CONDITIONING_MODES,
@@ -159,6 +161,13 @@ class WANTimelineConfig(io.ComfyNode):
                     round=0.01,
                     socketless=True,
                 ),
+                io.Combo.Input(
+                    "segment_seam_blend_frames",
+                    display_name="Segment Seam Blend Frames",
+                    options=[str(value) for value in SEGMENT_SEAM_BLEND_FRAME_OPTIONS],
+                    default=str(DEFAULT_SEGMENT_SEAM_BLEND_FRAMES),
+                    socketless=True,
+                ),
             ],
             outputs=[
                 WAN_TIMELINE_CONFIG.Output(
@@ -188,6 +197,7 @@ class WANTimelineConfig(io.ComfyNode):
         segment_continuity_tail_frames: str = str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
         painter_motion_boost: str = "Off",
         painter_motion_amplitude: float = DEFAULT_PAINTER_MOTION_AMPLITUDE,
+        segment_seam_blend_frames: str = str(DEFAULT_SEGMENT_SEAM_BLEND_FRAMES),
     ) -> io.NodeOutput:
         config = create_wan_timeline_config(
             resolution_profile=resolution_profile,
@@ -207,5 +217,6 @@ class WANTimelineConfig(io.ComfyNode):
             debug_mode=debug_mode,
             painter_motion_boost=painter_motion_boost,
             painter_motion_amplitude=painter_motion_amplitude,
+            segment_seam_blend_frames=segment_seam_blend_frames,
         )
         return io.NodeOutput(config)

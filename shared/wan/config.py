@@ -85,6 +85,8 @@ PAINTER_MOTION_BOOST_MODES = (
 )
 SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS = (1, 5, 9)
 DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES = 5
+SEGMENT_SEAM_BLEND_FRAME_OPTIONS = (0, 3, 5)
+DEFAULT_SEGMENT_SEAM_BLEND_FRAMES = 3
 DEFAULT_PAINTER_MOTION_AMPLITUDE = 1.15
 
 
@@ -102,6 +104,7 @@ def create_wan_timeline_config(
     runtime_backend_profile: str = "Plan Only",
     max_generation_duration: float = 0.0,
     segment_continuity_tail_frames: int = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
+    segment_seam_blend_frames: int = DEFAULT_SEGMENT_SEAM_BLEND_FRAMES,
     vram_unload_policy: str = "Off",
     debug_mode: str | bool = "Off",
     painter_motion_boost: str = "Off",
@@ -136,6 +139,7 @@ def create_wan_timeline_config(
         "runtime_backend_profile": _choice(runtime_backend_profile, RUNTIME_BACKEND_PROFILES, "Plan Only"),
         "max_generation_duration": _non_negative_float(max_generation_duration),
         "segment_continuity_tail_frames": _segment_tail_frames(segment_continuity_tail_frames),
+        "segment_seam_blend_frames": _segment_seam_blend_frames(segment_seam_blend_frames),
         "vram_unload_policy": _choice(vram_unload_policy, VRAM_UNLOAD_POLICIES, "Off"),
         "debug_mode": _debug_mode(debug_mode),
         "painter_motion_boost": _choice(painter_motion_boost, PAINTER_MOTION_BOOST_MODES, "Off"),
@@ -205,6 +209,9 @@ def normalize_wan_timeline_config(config: Any) -> dict[str, Any]:
     normalized["segment_continuity_tail_frames"] = _segment_tail_frames(
         normalized.get("segment_continuity_tail_frames", DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES)
     )
+    normalized["segment_seam_blend_frames"] = _segment_seam_blend_frames(
+        normalized.get("segment_seam_blend_frames", DEFAULT_SEGMENT_SEAM_BLEND_FRAMES)
+    )
     normalized["vram_unload_policy"] = _choice(
         normalized.get("vram_unload_policy"),
         VRAM_UNLOAD_POLICIES,
@@ -264,3 +271,11 @@ def _segment_tail_frames(value: Any) -> int:
     except (TypeError, ValueError):
         parsed = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES
     return parsed if parsed in SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS else DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES
+
+
+def _segment_seam_blend_frames(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SEGMENT_SEAM_BLEND_FRAMES
+    return parsed if parsed in SEGMENT_SEAM_BLEND_FRAME_OPTIONS else DEFAULT_SEGMENT_SEAM_BLEND_FRAMES

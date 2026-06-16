@@ -4,11 +4,13 @@ from ...shared.contracts.socket_types import LTX_TIMELINE_CONFIG
 from ...shared.ltx.config import (
     AUDIO_MODES,
     DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
+    DEFAULT_SEGMENT_SEAM_BLEND_FRAMES,
     IMAGE_GUIDANCE_MODES,
     REFERENCE_MODES,
     RESOLUTION_PROFILE_AUTO,
     RESOLUTION_PROFILES,
     SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS,
+    SEGMENT_SEAM_BLEND_FRAME_OPTIONS,
     VIDEO_SECTION_MODES,
     create_ltx_timeline_config,
 )
@@ -92,6 +94,13 @@ class LTXTimelineConfig(io.ComfyNode):
                     default=str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
                     socketless=True,
                 ),
+                io.Combo.Input(
+                    "segment_seam_blend_frames",
+                    display_name="Segment Seam Blend Frames",
+                    options=[str(value) for value in SEGMENT_SEAM_BLEND_FRAME_OPTIONS],
+                    default=str(DEFAULT_SEGMENT_SEAM_BLEND_FRAMES),
+                    socketless=True,
+                ),
             ],
             outputs=[
                 LTX_TIMELINE_CONFIG.Output(
@@ -113,6 +122,7 @@ class LTXTimelineConfig(io.ComfyNode):
         max_generation_duration: float = 0.0,
         debug_mode: bool = False,
         segment_continuity_tail_frames: str = str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
+        segment_seam_blend_frames: str = str(DEFAULT_SEGMENT_SEAM_BLEND_FRAMES),
     ) -> io.NodeOutput:
         config = create_ltx_timeline_config(
             resolution_profile=resolution_profile,
@@ -123,6 +133,7 @@ class LTXTimelineConfig(io.ComfyNode):
             audio_mode=audio_mode,
             max_generation_duration=max_generation_duration,
             segment_continuity_tail_frames=segment_continuity_tail_frames,
+            segment_seam_blend_frames=segment_seam_blend_frames,
             debug_mode=debug_mode,
         )
         return io.NodeOutput(config)

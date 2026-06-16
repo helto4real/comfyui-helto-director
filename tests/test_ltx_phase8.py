@@ -13,6 +13,7 @@ from shared.contracts.video_timeline import (
     VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
 )
 from shared.ltx import build_ltx_timeline_plan, create_ltx_timeline_config
+from shared.ltx.config import normalize_ltx_timeline_config
 from shared.timeline import create_default_video_timeline
 
 
@@ -71,6 +72,9 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
     tail_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_continuity_tail_frames")
     assert tail_input.options == ["1", "5", "9"]
     assert tail_input.default == "5"
+    seam_blend_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_seam_blend_frames")
+    assert seam_blend_input.options == ["0", "3", "5"]
+    assert seam_blend_input.default == "3"
 
     planner_schema = node_classes[2].define_schema()
     assert [input_item.io_type for input_item in planner_schema.inputs] == [
@@ -91,6 +95,7 @@ def test_ltx_config_defaults_include_locked_rules():
     assert config["model_version"] == "2.3"
     assert config["max_generation_duration"] == 0.0
     assert config["segment_continuity_tail_frames"] == 5
+    assert config["segment_seam_blend_frames"] == 3
     assert config["rules"] == {
         "divisible_by": 32,
         "frame_rule": "8n+1",
@@ -106,12 +111,29 @@ def test_ltx_config_normalizes_segment_continuity_tail_frames():
     assert fallback["segment_continuity_tail_frames"] == 5
 
 
+def test_ltx_config_normalizes_segment_seam_blend_frames():
+    normalized = normalize_ltx_timeline_config({
+        "type": "LTX_TIMELINE_CONFIG",
+        "segment_seam_blend_frames": "5",
+    })
+    fallback = normalize_ltx_timeline_config({
+        "type": "LTX_TIMELINE_CONFIG",
+        "segment_seam_blend_frames": 4,
+    })
+    legacy = normalize_ltx_timeline_config({"type": "LTX_TIMELINE_CONFIG"})
+
+    assert normalized["segment_seam_blend_frames"] == 5
+    assert fallback["segment_seam_blend_frames"] == 3
+    assert legacy["segment_seam_blend_frames"] == 3
+
+
 def test_ltx_config_node_keeps_old_debug_widget_position():
     node_classes = get_node_classes()
     config = node_classes[1].execute(debug_mode=True).result[0]
 
     assert config["debug_mode"] is True
     assert config["segment_continuity_tail_frames"] == 5
+    assert config["segment_seam_blend_frames"] == 3
 
 
 def test_ltx_planner_builds_serializable_plan_with_gaps_prompts_and_media():

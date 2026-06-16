@@ -8,11 +8,13 @@ from ..planner import _build_prompt_relay, _latent_chunk_count
 from ...ltx.runtime.audio import mix_timeline_audio
 from ...segmented_executor import (
     SegmentSpillStore,
+    blend_segment_seam,
     build_segment_plan,
     decode_latent_images,
     post_decode_memory_cleanup,
     previous_tail,
     sample_latent,
+    segment_seam_blend_frames,
     segment_seed,
     stitch_spilled_segment_images,
     trim_visible_segment_images,
@@ -77,6 +79,10 @@ def build_wan_segmented_executor_outputs(
     previous_images = None
     segment_debug = []
     cleanup_events = []
+    config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
+    configured_seam_blend_frames = segment_seam_blend_frames(
+        config.get("segment_seam_blend_frames", 3) if isinstance(config, dict) else 3
+    )
     try:
         for index, segment in enumerate(segments):
             segment_index = index + 1
@@ -146,12 +152,18 @@ def build_wan_segmented_executor_outputs(
             )
             images = decode_latent_images(vae, sampled)
             visible_images = trim_visible_segment_images(images, segment)
+            visible_images, seam_blend_debug = blend_segment_seam(
+                visible_images,
+                previous_images,
+                configured_seam_blend_frames if index > 0 else 0,
+            )
             next_tail_count = (
                 int(segments[index + 1].get("continuity", {}).get("continuity_frame_count") or 1)
                 if index + 1 < len(segments)
                 else 1
             )
-            previous_images = previous_tail(visible_images.detach().cpu(), next_tail_count)
+            next_previous_frame_count = max(next_tail_count, configured_seam_blend_frames)
+            previous_images = previous_tail(visible_images.detach().cpu(), next_previous_frame_count)
             status_reporter.report(
                 "timeline.spill",
                 f"WAN Executor: segment {segment_index}/{segment_count} - saving {'encrypted ' if privacy_mode else ''}segment frames",
@@ -182,6 +194,7 @@ def build_wan_segmented_executor_outputs(
                 "continuity": segment.get("continuity"),
                 "actual_tail_frame_count": int(tail.shape[0]) if tail is not None else 0,
                 "actual_tail_shape": [int(dim) for dim in tail.shape] if tail is not None else [],
+                "seam_blend": seam_blend_debug,
                 "sampling": sampling_debug,
                 "bernini": wan_debug.get("bernini"),
                 "visual_conditioning": {

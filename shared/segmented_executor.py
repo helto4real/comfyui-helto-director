@@ -21,6 +21,8 @@ SEED_MODES = (
     "Reuse Seed",
 )
 SEGMENT_CACHE_PURPOSE = "timeline-segment-cache"
+SEGMENT_SEAM_BLEND_FRAME_OPTIONS = (0, 3, 5)
+DEFAULT_SEGMENT_SEAM_BLEND_FRAMES = 3
 
 
 def segment_seed(seed: int, segment_index: int, seed_mode: str) -> int:
@@ -28,6 +30,14 @@ def segment_seed(seed: int, segment_index: int, seed_mode: str) -> int:
     if seed_mode == "Reuse Seed":
         return base
     return (base + int(segment_index)) & 0xFFFFFFFFFFFFFFFF
+
+
+def segment_seam_blend_frames(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SEGMENT_SEAM_BLEND_FRAMES
+    return parsed if parsed in SEGMENT_SEAM_BLEND_FRAME_OPTIONS else DEFAULT_SEGMENT_SEAM_BLEND_FRAMES
 
 
 def sample_latent(
@@ -259,6 +269,55 @@ def trim_visible_segment_images(images: torch.Tensor, segment: dict[str, Any]) -
     return trimmed[:visible]
 
 
+def blend_segment_seam(
+    current_visible_images: torch.Tensor,
+    previous_tail_images: torch.Tensor | None,
+    blend_frames: int,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    configured = _safe_non_negative_int(blend_frames)
+    debug = {
+        "configured_frame_count": configured,
+        "actual_frame_count": 0,
+        "status": "skipped",
+        "reason": None,
+    }
+    if configured <= 0:
+        debug["reason"] = "disabled"
+        return current_visible_images, debug
+    if not torch.is_tensor(current_visible_images) or current_visible_images.shape[0] <= 0:
+        debug["reason"] = "empty_current_segment"
+        return current_visible_images, debug
+    if previous_tail_images is None or not torch.is_tensor(previous_tail_images) or previous_tail_images.shape[0] <= 0:
+        debug["reason"] = "missing_previous_tail"
+        return current_visible_images, debug
+    actual = min(configured, int(current_visible_images.shape[0]), int(previous_tail_images.shape[0]))
+    if actual <= 0:
+        debug["reason"] = "no_available_frames"
+        return current_visible_images, debug
+    if tuple(previous_tail_images.shape[1:]) != tuple(current_visible_images.shape[1:]):
+        debug["reason"] = "frame_shape_mismatch"
+        return current_visible_images, debug
+    previous_anchor = previous_tail_images[-1:].to(
+        device=current_visible_images.device,
+        dtype=current_visible_images.dtype,
+    )
+    while previous_anchor.ndim < current_visible_images.ndim:
+        previous_anchor = previous_anchor.unsqueeze(0)
+    alpha = torch.linspace(
+        1.0 / (actual + 1),
+        actual / (actual + 1),
+        actual,
+        device=current_visible_images.device,
+        dtype=current_visible_images.dtype,
+    )
+    alpha = alpha.reshape((actual,) + (1,) * (current_visible_images.ndim - 1))
+    blended = current_visible_images.clone()
+    blended[:actual] = previous_anchor * (1.0 - alpha) + current_visible_images[:actual] * alpha
+    debug["actual_frame_count"] = actual
+    debug["status"] = "applied"
+    return blended, debug
+
+
 def stitch_spilled_segment_images(
     records: list[dict[str, Any]],
     store: SegmentSpillStore,
@@ -324,6 +383,13 @@ def previous_tail(images: torch.Tensor, frame_count: int) -> torch.Tensor | None
     if images is None or not torch.is_tensor(images) or images.shape[0] <= 0:
         return None
     return images[-max(1, int(frame_count or 1)) :].detach().clone()
+
+
+def _safe_non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _copy_segment_frames(output: torch.Tensor, tensor: torch.Tensor, cursor: int) -> int:

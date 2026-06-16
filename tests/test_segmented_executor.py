@@ -5,7 +5,9 @@ import torch
 from shared.privacy import CRYPTO_AVAILABLE
 from shared.segmented_executor import (
     SegmentSpillStore,
+    blend_segment_seam,
     post_decode_memory_cleanup,
+    segment_seam_blend_frames,
     segment_seed,
     stitch_segment_images,
     stitch_spilled_segment_images,
@@ -15,6 +17,7 @@ from shared.timeline_status import TimelineStatusReporter
 import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
+import shared.ltx.runtime.segmented as ltx_segmented
 from shared.timeline.segmentation import build_generation_segments
 
 
@@ -22,6 +25,14 @@ def test_segment_seed_modes_increment_or_reuse():
     assert segment_seed(10, 0, "Increment Per Segment") == 10
     assert segment_seed(10, 3, "Increment Per Segment") == 13
     assert segment_seed(10, 3, "Reuse Seed") == 10
+
+
+def test_segment_seam_blend_frame_options_normalize():
+    assert segment_seam_blend_frames("0") == 0
+    assert segment_seam_blend_frames("3") == 3
+    assert segment_seam_blend_frames("5") == 5
+    assert segment_seam_blend_frames("4") == 3
+    assert segment_seam_blend_frames("bad") == 3
 
 
 def test_timeline_status_reporter_records_progress_text_and_safe_events():
@@ -368,6 +379,37 @@ def test_trim_visible_segment_images_matches_legacy_stitch_trimming():
     assert torch.equal(trim_visible_segment_images(images, segment), images[1:5])
 
 
+def test_blend_segment_seam_preserves_shape_and_softens_first_frames():
+    previous = torch.zeros((5, 1, 1, 1), dtype=torch.float32)
+    current = torch.ones((6, 1, 1, 1), dtype=torch.float32)
+
+    blended, debug = blend_segment_seam(current, previous, 3)
+
+    assert blended.shape == current.shape
+    assert debug["status"] == "applied"
+    assert debug["configured_frame_count"] == 3
+    assert debug["actual_frame_count"] == 3
+    assert torch.allclose(blended[:3, 0, 0, 0], torch.tensor([0.25, 0.5, 0.75]))
+    assert torch.equal(blended[3:], current[3:])
+    assert blended[0].sub(previous[-1]).abs().item() < blended[2].sub(previous[-1]).abs().item()
+
+
+def test_blend_segment_seam_clamps_and_supports_disabled_mode():
+    previous = torch.zeros((2, 1, 1, 1), dtype=torch.float32)
+    current = torch.ones((4, 1, 1, 1), dtype=torch.float32)
+
+    disabled, disabled_debug = blend_segment_seam(current, previous, 0)
+    clamped, clamped_debug = blend_segment_seam(current, previous, 5)
+    missing, missing_debug = blend_segment_seam(current, None, 3)
+
+    assert torch.equal(disabled, current)
+    assert disabled_debug["reason"] == "disabled"
+    assert clamped_debug["actual_frame_count"] == 2
+    assert torch.allclose(clamped[:2, 0, 0, 0], torch.tensor([1 / 3, 2 / 3], dtype=torch.float32))
+    assert torch.equal(missing, current)
+    assert missing_debug["reason"] == "missing_previous_tail"
+
+
 def test_segment_spill_cleanup_after_stitch_failure(tmp_path):
     store = SegmentSpillStore(privacy_mode=False, root=tmp_path)
     first = torch.zeros((2, 2, 2, 3), dtype=torch.float32)
@@ -387,6 +429,122 @@ def test_segment_spill_cleanup_after_stitch_failure(tmp_path):
 
     assert summary["files_deleted"] == 2
     assert store.root.exists() is False
+
+
+def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_path):
+    decode_calls = {"count": 0}
+
+    def fake_build_runtime_outputs(**_kwargs):
+        runtime_debug = {
+            "wan": {
+                "visual_conditioning": {
+                    "requested_keyframes": [],
+                    "applied_keyframes": [],
+                    "media_decisions": [],
+                },
+                "bernini": None,
+            },
+            "summary": {},
+        }
+        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 1, 1))}, runtime_debug
+
+    def fake_decode(_vae, _latent):
+        decode_calls["count"] += 1
+        if decode_calls["count"] == 1:
+            return torch.zeros((5, 1, 1, 1), dtype=torch.float32)
+        return torch.ones((5, 1, 1, 1), dtype=torch.float32)
+
+    monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", lambda **kwargs: (kwargs["latent"], {"sampling_policy": "two_phase", "unload_events": []}))
+    monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
+    monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
+    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(
+        wan_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    plan = _two_segment_executor_plan("wan")
+
+    images, _audio, _fps, debug = wan_segmented.build_wan_segmented_executor_outputs(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        clip=object(),
+        vae=object(),
+        wan_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Increment Per Segment",
+    )
+
+    assert images.shape[0] == 8
+    assert torch.allclose(images[5:, 0, 0, 0], torch.tensor([0.25, 0.5, 0.75]))
+    assert debug["segments"][1]["spilled_frame_count"] == 3
+    assert debug["segments"][1]["seam_blend"]["actual_frame_count"] == 3
+    assert debug["stitching"]["output_frame_count"] == 8
+
+
+def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_path):
+    decode_calls = {"count": 0}
+
+    def fake_build_runtime_outputs(**_kwargs):
+        runtime_debug = {"summary": {}}
+        return (
+            object(),
+            [],
+            [],
+            {"samples": torch.zeros((1, 16, 3, 1, 1))},
+            None,
+            None,
+            {"clean_latent_frames": 3, "hidden_reference_count": 0},
+            None,
+            runtime_debug,
+        )
+
+    def fake_decode(_vae, _latent):
+        decode_calls["count"] += 1
+        if decode_calls["count"] == 1:
+            return torch.zeros((5, 1, 1, 1), dtype=torch.float32)
+        return torch.ones((5, 1, 1, 1), dtype=torch.float32)
+
+    monkeypatch.setattr(ltx_segmented, "build_ltx_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(ltx_segmented, "sample_latent", lambda **kwargs: kwargs["latent"])
+    monkeypatch.setattr(ltx_segmented, "crop_latent_to_frame_count", lambda latent, _clean, _hidden: latent)
+    monkeypatch.setattr(ltx_segmented, "decode_latent_images", fake_decode)
+    monkeypatch.setattr(ltx_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
+    monkeypatch.setattr(ltx_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(
+        ltx_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    plan = _two_segment_executor_plan("ltx")
+
+    images, _audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Increment Per Segment",
+    )
+
+    assert images.shape[0] == 8
+    assert torch.allclose(images[5:, 0, 0, 0], torch.tensor([0.25, 0.5, 0.75]))
+    assert debug["segments"][1]["spilled_frame_count"] == 3
+    assert debug["segments"][1]["seam_blend"]["actual_frame_count"] == 3
+    assert debug["stitching"]["output_frame_count"] == 8
 
 
 def test_post_decode_memory_cleanup_reports_event():
@@ -738,3 +896,64 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
     assert "timeline.spill" in stages
     assert "timeline.cleanup" in stages
     assert stages[-3:] == ["timeline.stitch", "timeline.audio", "timeline.done"]
+
+
+def _two_segment_executor_plan(model_key):
+    return {
+        "resolved_output": {"frame_count": 8, "frame_rate": 8.0},
+        "project": {"privacy": {"mode": False}},
+        "section_plan": [
+            {"item_id": "section_001", "type": "Text", "start_frame": 0, "end_frame_exclusive": 5, "frame_count": 5},
+            {"item_id": "section_002", "type": "Text", "start_frame": 5, "end_frame_exclusive": 8, "frame_count": 3},
+        ],
+        "prompt_plan": [
+            {"item_id": "section_001", "type": "Text", "raw_prompt": "first"},
+            {"item_id": "section_002", "type": "Text", "raw_prompt": "second"},
+        ],
+        "media_plan": [],
+        "audio_plan": [],
+        "model_specific": {
+            model_key: {
+                "config": {
+                    "model_mode": "I2V-A14B",
+                    "prompt_routing": "Prompt Relay",
+                    "prompt_relay_epsilon": 0.15,
+                    "vram_unload_policy": "Off",
+                    "segment_seam_blend_frames": 3,
+                },
+                "segmented_generation": {
+                    "enabled": True,
+                    "segments": [
+                        {
+                            "id": "gen_001",
+                            "index": 0,
+                            "start_frame": 0,
+                            "end_frame_exclusive": 5,
+                            "visible_frame_count": 5,
+                            "generation_frame_count": 5,
+                            "trim_leading_frames": 0,
+                            "trim_trailing_frames": 0,
+                            "continuity": {"mode": "initial", "continuity_frame_count": 0},
+                        },
+                        {
+                            "id": "gen_002",
+                            "index": 1,
+                            "start_frame": 5,
+                            "end_frame_exclusive": 8,
+                            "visible_frame_count": 3,
+                            "generation_frame_count": 5,
+                            "trim_leading_frames": 2,
+                            "trim_trailing_frames": 0,
+                            "continuity": {
+                                "mode": "model_auto",
+                                "source": "previous_tail",
+                                "source_segment": "gen_001",
+                                "continuity_frame_count": 2,
+                                "prompt_hint": True,
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    }

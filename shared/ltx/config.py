@@ -40,6 +40,8 @@ AUDIO_MODES = (
 )
 SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS = (1, 5, 9)
 DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES = 5
+SEGMENT_SEAM_BLEND_FRAME_OPTIONS = (0, 3, 5)
+DEFAULT_SEGMENT_SEAM_BLEND_FRAMES = 3
 
 
 def create_ltx_timeline_config(
@@ -51,6 +53,7 @@ def create_ltx_timeline_config(
     audio_mode: str = "Mix Timeline Audio",
     max_generation_duration: float = 0.0,
     segment_continuity_tail_frames: int = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
+    segment_seam_blend_frames: int = DEFAULT_SEGMENT_SEAM_BLEND_FRAMES,
     debug_mode: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -66,6 +69,7 @@ def create_ltx_timeline_config(
         "audio_mode": _choice(audio_mode, AUDIO_MODES, "Mix Timeline Audio"),
         "max_generation_duration": _non_negative_float(max_generation_duration),
         "segment_continuity_tail_frames": _segment_tail_frames(segment_continuity_tail_frames),
+        "segment_seam_blend_frames": _segment_seam_blend_frames(segment_seam_blend_frames),
         "debug_mode": bool(debug_mode),
         "rules": {
             "divisible_by": 32,
@@ -116,6 +120,9 @@ def normalize_ltx_timeline_config(config: Any) -> dict[str, Any]:
     normalized["segment_continuity_tail_frames"] = _segment_tail_frames(
         normalized.get("segment_continuity_tail_frames", DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES)
     )
+    normalized["segment_seam_blend_frames"] = _segment_seam_blend_frames(
+        normalized.get("segment_seam_blend_frames", DEFAULT_SEGMENT_SEAM_BLEND_FRAMES)
+    )
     normalized["debug_mode"] = bool(normalized.get("debug_mode"))
     normalized["rules"] = deepcopy(defaults["rules"]) | dict(normalized.get("rules") or {})
     return normalized
@@ -138,3 +145,11 @@ def _segment_tail_frames(value: Any) -> int:
     except (TypeError, ValueError):
         parsed = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES
     return parsed if parsed in SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS else DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES
+
+
+def _segment_seam_blend_frames(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SEGMENT_SEAM_BLEND_FRAMES
+    return parsed if parsed in SEGMENT_SEAM_BLEND_FRAME_OPTIONS else DEFAULT_SEGMENT_SEAM_BLEND_FRAMES

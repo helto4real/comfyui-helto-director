@@ -123,6 +123,9 @@ def test_wan_nodes_register_with_custom_sockets_and_mappings():
     tail_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_continuity_tail_frames")
     assert tail_input.options == ["1", "5", "9"]
     assert tail_input.default == "5"
+    seam_blend_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_seam_blend_frames")
+    assert seam_blend_input.options == ["0", "3", "5"]
+    assert seam_blend_input.default == "3"
     painter_boost_input = next(input_item for input_item in config_schema.inputs if input_item.id == "painter_motion_boost")
     painter_amplitude_input = next(input_item for input_item in config_schema.inputs if input_item.id == "painter_motion_amplitude")
     assert painter_boost_input.options == ["Off", "Auto"]
@@ -160,6 +163,7 @@ def test_wan_config_defaults_include_skeleton_rules():
     assert config["runtime_backend_profile"] == "Plan Only"
     assert config["max_generation_duration"] == 0.0
     assert config["segment_continuity_tail_frames"] == 5
+    assert config["segment_seam_blend_frames"] == 3
     assert config["vram_unload_policy"] == "Off"
     assert config["painter_motion_boost"] == "Off"
     assert config["painter_motion_amplitude"] == 1.15
@@ -202,6 +206,22 @@ def test_wan_config_normalizes_segment_continuity_tail_frames():
     assert legacy["segment_continuity_tail_frames"] == 5
 
 
+def test_wan_config_normalizes_segment_seam_blend_frames():
+    normalized = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "segment_seam_blend_frames": "5",
+    })
+    fallback = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "segment_seam_blend_frames": 4,
+    })
+    legacy = normalize_wan_timeline_config({"type": "WAN_TIMELINE_CONFIG"})
+
+    assert normalized["segment_seam_blend_frames"] == 5
+    assert fallback["segment_seam_blend_frames"] == 3
+    assert legacy["segment_seam_blend_frames"] == 3
+
+
 def test_wan_config_normalizes_painter_motion_boost():
     normalized = normalize_wan_timeline_config({
         "type": "WAN_TIMELINE_CONFIG",
@@ -241,6 +261,7 @@ def test_wan_config_node_keeps_old_vram_and_debug_widget_positions():
     assert config["vram_unload_policy"] == "Between High Low And Decode"
     assert config["debug_mode"] == "Full"
     assert config["segment_continuity_tail_frames"] == 5
+    assert config["segment_seam_blend_frames"] == 3
 
 
 def test_wan_planner_builds_serializable_text_plan_with_gap_no_guidance():
