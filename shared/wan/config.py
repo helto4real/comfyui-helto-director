@@ -73,6 +73,14 @@ DEBUG_MODES = (
     "Summary",
     "Full",
 )
+VRAM_UNLOAD_POLICIES = (
+    "Off",
+    "Between High Low",
+    "Before Decode",
+    "Between High Low And Decode",
+)
+SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS = (1, 5, 9)
+DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES = 5
 
 
 def create_wan_timeline_config(
@@ -87,6 +95,9 @@ def create_wan_timeline_config(
     unsupported_video_section_policy: str = "Warn And Use Prompt Only",
     audio_policy: str = "Final Mix Only",
     runtime_backend_profile: str = "Plan Only",
+    max_generation_duration: float = 0.0,
+    segment_continuity_tail_frames: int = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
+    vram_unload_policy: str = "Off",
     debug_mode: str | bool = "Off",
     audio_mode: str | None = None,
 ) -> dict[str, Any]:
@@ -116,6 +127,9 @@ def create_wan_timeline_config(
         ),
         "audio_policy": _choice(audio_policy, AUDIO_POLICIES, "Final Mix Only"),
         "runtime_backend_profile": _choice(runtime_backend_profile, RUNTIME_BACKEND_PROFILES, "Plan Only"),
+        "max_generation_duration": _non_negative_float(max_generation_duration),
+        "segment_continuity_tail_frames": _segment_tail_frames(segment_continuity_tail_frames),
+        "vram_unload_policy": _choice(vram_unload_policy, VRAM_UNLOAD_POLICIES, "Off"),
         "debug_mode": _debug_mode(debug_mode),
         "rules": {
             "divisible_by": 16,
@@ -173,6 +187,15 @@ def normalize_wan_timeline_config(config: Any) -> dict[str, Any]:
         RUNTIME_BACKEND_PROFILES,
         "Plan Only",
     )
+    normalized["max_generation_duration"] = _non_negative_float(normalized.get("max_generation_duration", 0.0))
+    normalized["segment_continuity_tail_frames"] = _segment_tail_frames(
+        normalized.get("segment_continuity_tail_frames", DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES)
+    )
+    normalized["vram_unload_policy"] = _choice(
+        normalized.get("vram_unload_policy"),
+        VRAM_UNLOAD_POLICIES,
+        "Off",
+    )
     normalized["debug_mode"] = _debug_mode(normalized.get("debug_mode"))
     normalized["rules"] = deepcopy(defaults["rules"]) | dict(normalized.get("rules") or {})
     normalized.pop("audio_mode", None)
@@ -193,3 +216,18 @@ def _legacy_audio_policy(value: Any) -> str:
     if value == "Plan Timeline Audio":
         return "Final Mix Only"
     return "Ignore"
+
+
+def _non_negative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _segment_tail_frames(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES
+    return parsed if parsed in SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS else DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES

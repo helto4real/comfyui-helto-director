@@ -28,7 +28,38 @@ def apply_comfy_core_visual_keyframes(
     end_keyframe = next((entry for entry in applied if entry.get("role") == "End"), None)
     diagnostics = []
     media_decisions = []
+    transient_start = visual.get("transient_start_image")
     if not start_keyframe and not end_keyframe:
+        if transient_start is not None and hasattr(transient_start, "shape") and int(transient_start.shape[0]) > 0:
+            positive, negative, latent, helper_name = execute_comfy_core_visual_helper(
+                positive,
+                negative,
+                vae,
+                width,
+                height,
+                frame_count,
+                batch_size,
+                transient_start,
+                None,
+                latent_spec,
+                model_mode,
+            )
+            diagnostics.append("WAN continuation segment used the previous decoded tail as transient start image.")
+            media_decisions.append({
+                "section_id": "segment_previous_tail",
+                "loaded": True,
+                "role": "Start",
+                "transient": True,
+                "tensor_shape": _tensor_shape(transient_start),
+                "tensor_stats": _tensor_stats(transient_start),
+            })
+            return positive, negative, latent, {
+                "applied_keyframes": [{"role": "Start", "section_id": "segment_previous_tail", "transient": True}],
+                "unsupported_keyframes": visual.get("unsupported_keyframes", []),
+                "media_decisions": media_decisions,
+                "diagnostics": diagnostics,
+                "core_helper": helper_name,
+            }
         diagnostics.append("No WAN visual keyframes were applied by the ComfyUI Core backend.")
         latent = execute_comfy_core_text_to_video_latent(
             positive,

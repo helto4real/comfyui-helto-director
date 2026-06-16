@@ -23,6 +23,7 @@ from ..contracts.video_timeline import (
     SECTION_TYPE_VIDEO,
 )
 from ..timeline import (
+    build_generation_segments,
     detect_director_gaps,
     merge_prompts,
     normalize_video_timeline,
@@ -67,6 +68,17 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
     frame_info = _wan_frame_info(requested_frames, total_frames, frame_rate)
     resolved_output = _resolve_output(timeline["project"], config)
     section_entries, gap_decisions = _build_section_plan(timeline, config, frame_rate, total_frames)
+    segmented_generation = build_generation_segments(
+        section_entries=section_entries,
+        frame_rate=frame_rate,
+        total_frames=total_frames,
+        requested_frame_count=requested_frames,
+        max_generation_duration=float(config.get("max_generation_duration") or 0.0),
+        segment_continuity_tail_frames=int(config.get("segment_continuity_tail_frames") or 5),
+        temporal_stride=WAN_TEMPORAL_STRIDE,
+        model="wan",
+        frame_rule=_wan_frame_count,
+    )
     prompt_entries = _build_prompt_plan(timeline, section_entries)
     media_entries = _build_media_plan(timeline, section_entries)
     audio_entries = _build_audio_plan(timeline, frame_rate)
@@ -107,6 +119,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         prompt_relay,
         frame_info,
         bernini,
+        segmented_generation,
         reference_validation_entries,
     )
     validation = create_validation_result([
@@ -143,6 +156,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
                 "prompt_relay": prompt_relay,
                 "visual_conditioning": visual_conditioning,
                 "bernini": bernini,
+                "segmented_generation": segmented_generation,
                 "gap_decisions": gap_decisions,
             },
         },
@@ -423,6 +437,7 @@ def _validate_wan_inputs(
     prompt_relay: dict[str, Any],
     frame_info: dict[str, Any],
     bernini: dict[str, Any],
+    segmented_generation: dict[str, Any],
     reference_validation_entries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     entries = list(reference_validation_entries or [])
@@ -573,6 +588,18 @@ def _validate_wan_inputs(
                 "Some timeline media is not passed to Bernini conditioning in this version.",
                 "Timeline images are source/background candidates; subject references come from the Director reference manager.",
                 {"ignored_timeline_media": bernini.get("ignored_timeline_media")},
+            ))
+    elif segmented_generation.get("enabled"):
+        keyframes = visual_conditioning.get("requested_keyframes") or []
+        has_start_or_end = any(str(entry.get("role")) in {"Start", "End"} for entry in keyframes)
+        if not has_start_or_end:
+            entries.append(_entry(
+                "WAN_SEGMENTED_GENERATION_REQUIRES_START_OR_END_FRAME",
+                SEVERITY_ERROR,
+                "Timeline",
+                None,
+                "Vanilla WAN segmented generation requires a usable start or end Image Section for the first segment.",
+                "Add a start/end Image Section, switch to Bernini, or disable Max Generation Duration.",
             ))
 
     if audio_entries:

@@ -5,6 +5,26 @@ from ...shared.contracts.socket_types import (
     WAN_TIMELINE_PLAN,
 )
 from ...shared.wan.runtime import build_wan_runtime_outputs
+from ...shared.wan.runtime.segmented import build_wan_segmented_executor_outputs
+from ...shared.segmented_executor import SEED_MODES
+
+
+def _samplers() -> list[str]:
+    try:
+        import comfy.samplers
+
+        return list(comfy.samplers.KSampler.SAMPLERS)
+    except Exception:
+        return ["euler"]
+
+
+def _schedulers() -> list[str]:
+    try:
+        import comfy.samplers
+
+        return list(comfy.samplers.KSampler.SCHEDULERS)
+    except Exception:
+        return ["normal"]
 
 
 class WANTimelineRuntime(io.ComfyNode):
@@ -55,6 +75,82 @@ class WANTimelineRuntime(io.ComfyNode):
                 clip=clip,
                 vae=vae,
                 wan_timeline_plan=wan_timeline_plan,
+                negative=negative,
+                batch_size=batch_size,
+            )
+        )
+
+
+class WANTimelineSegmentedExecutor(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="HeltoWAN22TimelineSegmentedExecutor",
+            display_name="WAN 2.2 Timeline Segmented Executor",
+            category="timeline/wan",
+            description="Automatically run segmented WAN/Bernini timeline generations and stitch decoded frames.",
+            inputs=[
+                io.Model.Input("high_noise_model", display_name="High Noise Model", optional=True),
+                io.Model.Input("low_noise_model", display_name="Low Noise Model", optional=True),
+                io.Clip.Input("clip", optional=True),
+                io.Vae.Input("vae"),
+                WAN_TIMELINE_PLAN.Input(
+                    "wan_timeline_plan",
+                    display_name="WAN_TIMELINE_PLAN",
+                ),
+                io.Int.Input("seed", display_name="Seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF, step=1, socketless=True),
+                io.Int.Input("steps", display_name="Steps", default=20, min=1, max=10000, step=1, socketless=True),
+                io.Float.Input("cfg", display_name="CFG", default=8.0, min=0.0, max=100.0, step=0.1, round=0.01, socketless=True),
+                io.Combo.Input("sampler_name", display_name="Sampler", options=_samplers(), default=_samplers()[0], socketless=True),
+                io.Combo.Input("scheduler", display_name="Scheduler", options=_schedulers(), default=_schedulers()[0], socketless=True),
+                io.Float.Input("denoise", display_name="Denoise", default=1.0, min=0.0, max=1.0, step=0.01, round=0.01, socketless=True),
+                io.Float.Input("phase_split_percent", display_name="Phase Split Percent", default=0.5, min=0.01, max=0.99, step=0.01, round=0.01, socketless=True),
+                io.Combo.Input("seed_mode", display_name="Seed Mode", options=list(SEED_MODES), default="Increment Per Segment", socketless=True),
+                io.Conditioning.Input("negative", optional=True),
+                io.Int.Input("batch_size", display_name="Batch Size", default=1, min=1, max=4096, step=1, socketless=True),
+            ],
+            outputs=[
+                io.Image.Output("images", display_name="images"),
+                io.Audio.Output("audio", display_name="audio"),
+                io.Float.Output("frame_rate", display_name="frame_rate"),
+                DEBUG_INFO.Output("executor_debug", display_name="executor_debug"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        high_noise_model=None,
+        low_noise_model=None,
+        clip=None,
+        vae=None,
+        wan_timeline_plan: dict | None = None,
+        seed: int = 0,
+        steps: int = 20,
+        cfg: float = 8.0,
+        sampler_name: str = "euler",
+        scheduler: str = "normal",
+        denoise: float = 1.0,
+        phase_split_percent: float = 0.5,
+        seed_mode: str = "Increment Per Segment",
+        negative=None,
+        batch_size: int = 1,
+    ) -> io.NodeOutput:
+        return io.NodeOutput(
+            *build_wan_segmented_executor_outputs(
+                high_noise_model=high_noise_model,
+                low_noise_model=low_noise_model,
+                clip=clip,
+                vae=vae,
+                wan_timeline_plan=wan_timeline_plan,
+                seed=seed,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                denoise=denoise,
+                phase_split_percent=phase_split_percent,
+                seed_mode=seed_mode,
                 negative=negative,
                 batch_size=batch_size,
             )

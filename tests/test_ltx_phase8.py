@@ -54,9 +54,11 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
         "HeltoLTX23TimelineConfig",
         "HeltoLTX23TimelinePlanner",
         "HeltoLTX23TimelineRuntime",
+        "HeltoLTX23TimelineSegmentedExecutor",
         "HeltoWAN22TimelineConfig",
         "HeltoWAN22TimelinePlanner",
         "HeltoWAN22TimelineRuntime",
+        "HeltoWAN22TimelineSegmentedExecutor",
         "HeltoLTX23TimelineCropReferenceTail",
         "HeltoLTX23TimelineReferenceImageSelector",
         "HeltoLTX23TimelineIdentityAnchorLatentAware",
@@ -64,6 +66,11 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
         "HeltoLTX23TimelineIdentityAnchorCombine",
         "HeltoLTX23TimelineApplyIdentityAnchor",
     ]
+
+    config_schema = node_classes[1].define_schema()
+    tail_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_continuity_tail_frames")
+    assert tail_input.options == ["1", "5", "9"]
+    assert tail_input.default == "5"
 
     planner_schema = node_classes[2].define_schema()
     assert [input_item.io_type for input_item in planner_schema.inputs] == [
@@ -82,11 +89,29 @@ def test_ltx_config_defaults_include_locked_rules():
 
     assert config["type"] == "LTX_TIMELINE_CONFIG"
     assert config["model_version"] == "2.3"
+    assert config["max_generation_duration"] == 0.0
+    assert config["segment_continuity_tail_frames"] == 5
     assert config["rules"] == {
         "divisible_by": 32,
         "frame_rule": "8n+1",
         "temporal_stride": 8,
     }
+
+
+def test_ltx_config_normalizes_segment_continuity_tail_frames():
+    normalized = create_ltx_timeline_config(segment_continuity_tail_frames=9)
+    fallback = create_ltx_timeline_config(segment_continuity_tail_frames=4)
+
+    assert normalized["segment_continuity_tail_frames"] == 9
+    assert fallback["segment_continuity_tail_frames"] == 5
+
+
+def test_ltx_config_node_keeps_old_debug_widget_position():
+    node_classes = get_node_classes()
+    config = node_classes[1].execute(debug_mode=True).result[0]
+
+    assert config["debug_mode"] is True
+    assert config["segment_continuity_tail_frames"] == 5
 
 
 def test_ltx_planner_builds_serializable_plan_with_gaps_prompts_and_media():
@@ -142,6 +167,35 @@ def test_ltx_planner_builds_serializable_plan_with_gaps_prompts_and_media():
     assert plan["media_plan"][0]["ltx_role"] == "Section Guides"
     assert validation["is_valid"] is True
     assert debug["summary"]["planned_ranges"] == 3
+
+
+def test_ltx_planner_builds_hidden_generation_segments_when_duration_is_capped():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 3.0
+    timeline["project"]["frame_rate"] = 8.0
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 3.0,
+            "prompt": "slow dolly shot",
+        }
+    )
+
+    plan, validation, _debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(max_generation_duration=1.0),
+    )
+
+    segmented = plan["model_specific"]["ltx"]["segmented_generation"]
+    assert validation["is_valid"] is True
+    assert segmented["enabled"] is True
+    assert [segment["visible_frame_count"] for segment in segmented["segments"]] == [8, 8, 9]
+    assert segmented["segments"][1]["trim_leading_frames"] == 5
+    assert segmented["segments"][1]["continuity"]["continuity_frame_count"] == 5
+    assert segmented["segments"][1]["generation_frame_count"] == 17
+    assert segmented["segments"][1]["continuity"]["source"] == "previous_tail"
 
 
 def test_ltx_planner_passes_video_guidance_fields_to_media_plan():

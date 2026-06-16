@@ -3,10 +3,12 @@ from comfy_api.latest import io
 from ...shared.contracts.socket_types import LTX_TIMELINE_CONFIG
 from ...shared.ltx.config import (
     AUDIO_MODES,
+    DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
     IMAGE_GUIDANCE_MODES,
     REFERENCE_MODES,
     RESOLUTION_PROFILE_AUTO,
     RESOLUTION_PROFILES,
+    SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS,
     VIDEO_SECTION_MODES,
     create_ltx_timeline_config,
 )
@@ -67,10 +69,27 @@ class LTXTimelineConfig(io.ComfyNode):
                     default="Mix Timeline Audio",
                     socketless=True,
                 ),
+                io.Float.Input(
+                    "max_generation_duration",
+                    display_name="Max Generation Duration",
+                    default=0.0,
+                    min=0.0,
+                    max=600.0,
+                    step=0.25,
+                    round=0.01,
+                    socketless=True,
+                ),
                 io.Boolean.Input(
                     "debug_mode",
                     display_name="Debug Mode",
                     default=False,
+                    socketless=True,
+                ),
+                io.Combo.Input(
+                    "segment_continuity_tail_frames",
+                    display_name="Segment Continuity Tail Frames",
+                    options=[str(value) for value in SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS],
+                    default=str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
                     socketless=True,
                 ),
             ],
@@ -91,7 +110,9 @@ class LTXTimelineConfig(io.ComfyNode):
         video_section_mode: str = "Source Video Guides",
         reference_mode: str = "Prompt Relay",
         audio_mode: str = "Mix Timeline Audio",
+        max_generation_duration: float = 0.0,
         debug_mode: bool = False,
+        segment_continuity_tail_frames: str = str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
     ) -> io.NodeOutput:
         config = create_ltx_timeline_config(
             resolution_profile=resolution_profile,
@@ -100,6 +121,8 @@ class LTXTimelineConfig(io.ComfyNode):
             video_section_mode=video_section_mode,
             reference_mode=reference_mode,
             audio_mode=audio_mode,
+            max_generation_duration=max_generation_duration,
+            segment_continuity_tail_frames=segment_continuity_tail_frames,
             debug_mode=debug_mode,
         )
         return io.NodeOutput(config)

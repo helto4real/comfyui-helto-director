@@ -38,6 +38,8 @@ AUDIO_MODES = (
     "Mix Timeline Audio",
     "Ignore Timeline Audio",
 )
+SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS = (1, 5, 9)
+DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES = 5
 
 
 def create_ltx_timeline_config(
@@ -47,6 +49,8 @@ def create_ltx_timeline_config(
     video_section_mode: str = "Source Video Guides",
     reference_mode: str = "Prompt Relay",
     audio_mode: str = "Mix Timeline Audio",
+    max_generation_duration: float = 0.0,
+    segment_continuity_tail_frames: int = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
     debug_mode: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -60,6 +64,8 @@ def create_ltx_timeline_config(
         "video_section_mode": _choice(video_section_mode, VIDEO_SECTION_MODES, "Source Video Guides"),
         "reference_mode": _choice(reference_mode, REFERENCE_MODES, "Prompt Relay"),
         "audio_mode": _choice(audio_mode, AUDIO_MODES, "Mix Timeline Audio"),
+        "max_generation_duration": _non_negative_float(max_generation_duration),
+        "segment_continuity_tail_frames": _segment_tail_frames(segment_continuity_tail_frames),
         "debug_mode": bool(debug_mode),
         "rules": {
             "divisible_by": 32,
@@ -106,6 +112,10 @@ def normalize_ltx_timeline_config(config: Any) -> dict[str, Any]:
         "Mix Timeline Audio",
     )
     normalized["prompt_relay_epsilon"] = max(0.0, float(normalized.get("prompt_relay_epsilon", 0.15)))
+    normalized["max_generation_duration"] = _non_negative_float(normalized.get("max_generation_duration", 0.0))
+    normalized["segment_continuity_tail_frames"] = _segment_tail_frames(
+        normalized.get("segment_continuity_tail_frames", DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES)
+    )
     normalized["debug_mode"] = bool(normalized.get("debug_mode"))
     normalized["rules"] = deepcopy(defaults["rules"]) | dict(normalized.get("rules") or {})
     return normalized
@@ -113,3 +123,18 @@ def normalize_ltx_timeline_config(config: Any) -> dict[str, Any]:
 
 def _choice(value: Any, options: tuple[str, ...], fallback: str) -> str:
     return value if value in options else fallback
+
+
+def _non_negative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _segment_tail_frames(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES
+    return parsed if parsed in SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS else DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES

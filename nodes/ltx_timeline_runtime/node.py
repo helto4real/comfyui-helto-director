@@ -8,6 +8,26 @@ from ...shared.contracts.socket_types import (
     LTX_TIMELINE_PLAN,
 )
 from ...shared.ltx.runtime import build_ltx_runtime_outputs
+from ...shared.ltx.runtime.segmented import build_ltx_segmented_executor_outputs
+from ...shared.segmented_executor import SEED_MODES
+
+
+def _samplers() -> list[str]:
+    try:
+        import comfy.samplers
+
+        return list(comfy.samplers.KSampler.SAMPLERS)
+    except Exception:
+        return ["euler"]
+
+
+def _schedulers() -> list[str]:
+    try:
+        import comfy.samplers
+
+        return list(comfy.samplers.KSampler.SCHEDULERS)
+    except Exception:
+        return ["normal"]
 
 
 class LTXTimelineRuntime(io.ComfyNode):
@@ -69,6 +89,88 @@ class LTXTimelineRuntime(io.ComfyNode):
                 clip=clip,
                 vae=vae,
                 ltx_timeline_plan=ltx_timeline_plan,
+                negative=negative,
+                optional_latent=optional_latent,
+                audio_vae=audio_vae,
+                identity_anchor=identity_anchor,
+                sigmas=sigmas,
+                iclora_parameters=iclora_parameters,
+            )
+        )
+
+
+class LTXTimelineSegmentedExecutor(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="HeltoLTX23TimelineSegmentedExecutor",
+            display_name="LTX 2.3 Timeline Segmented Executor",
+            category="timeline/ltx",
+            description="Automatically run segmented LTX timeline generations and stitch decoded frames.",
+            inputs=[
+                io.Model.Input("model"),
+                io.Clip.Input("clip"),
+                io.Vae.Input("vae"),
+                LTX_TIMELINE_PLAN.Input(
+                    "ltx_timeline_plan",
+                    display_name="LTX_TIMELINE_PLAN",
+                ),
+                io.Int.Input("seed", display_name="Seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF, step=1, socketless=True),
+                io.Int.Input("steps", display_name="Steps", default=20, min=1, max=10000, step=1, socketless=True),
+                io.Float.Input("cfg", display_name="CFG", default=8.0, min=0.0, max=100.0, step=0.1, round=0.01, socketless=True),
+                io.Combo.Input("sampler_name", display_name="Sampler", options=_samplers(), default=_samplers()[0], socketless=True),
+                io.Combo.Input("scheduler", display_name="Scheduler", options=_schedulers(), default=_schedulers()[0], socketless=True),
+                io.Float.Input("denoise", display_name="Denoise", default=1.0, min=0.0, max=1.0, step=0.01, round=0.01, socketless=True),
+                io.Combo.Input("seed_mode", display_name="Seed Mode", options=list(SEED_MODES), default="Increment Per Segment", socketless=True),
+                io.Conditioning.Input("negative", optional=True),
+                io.Latent.Input("optional_latent", optional=True),
+                io.Vae.Input("audio_vae", display_name="Audio VAE", optional=True),
+                LTX_IDENTITY_ANCHOR.Input("identity_anchor", display_name="LTX_IDENTITY_ANCHOR", optional=True),
+                io.Sigmas.Input("sigmas", optional=True),
+                IC_LORA_PARAMETERS.Input("iclora_parameters", display_name="IC_LORA_PARAMETERS", optional=True),
+            ],
+            outputs=[
+                io.Image.Output("images", display_name="images"),
+                io.Audio.Output("audio", display_name="audio"),
+                io.Float.Output("frame_rate", display_name="frame_rate"),
+                DEBUG_INFO.Output("executor_debug", display_name="executor_debug"),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        model,
+        clip,
+        vae,
+        ltx_timeline_plan: dict,
+        seed: int = 0,
+        steps: int = 20,
+        cfg: float = 8.0,
+        sampler_name: str = "euler",
+        scheduler: str = "normal",
+        denoise: float = 1.0,
+        seed_mode: str = "Increment Per Segment",
+        negative=None,
+        optional_latent=None,
+        audio_vae=None,
+        identity_anchor=None,
+        sigmas=None,
+        iclora_parameters=None,
+    ) -> io.NodeOutput:
+        return io.NodeOutput(
+            *build_ltx_segmented_executor_outputs(
+                model=model,
+                clip=clip,
+                vae=vae,
+                ltx_timeline_plan=ltx_timeline_plan,
+                seed=seed,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                denoise=denoise,
+                seed_mode=seed_mode,
                 negative=negative,
                 optional_latent=optional_latent,
                 audio_vae=audio_vae,

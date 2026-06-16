@@ -23,6 +23,7 @@ from ..contracts.video_timeline import (
     SECTION_TYPE_VIDEO,
 )
 from ..timeline import (
+    build_generation_segments,
     detect_director_gaps,
     merge_prompts,
     normalize_video_timeline,
@@ -55,13 +56,21 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
     config = normalize_ltx_timeline_config(ltx_config)
     director_validation = validate_video_timeline(timeline)
     frame_rate = float(timeline["project"].get("frame_rate") or 24.0)
-    total_frames = _ltx_frame_count(
-        float(timeline["project"].get("duration_seconds") or 0.0),
-        frame_rate,
-        int(config["rules"]["temporal_stride"]),
-    )
+    requested_frames = _requested_frame_count(float(timeline["project"].get("duration_seconds") or 0.0), frame_rate)
+    total_frames = _ltx_frame_count_from_requested(requested_frames, int(config["rules"]["temporal_stride"]))
     resolved_output = _resolve_output(timeline["project"], config)
     section_entries = _build_section_plan(timeline, frame_rate, total_frames)
+    segmented_generation = build_generation_segments(
+        section_entries=section_entries,
+        frame_rate=frame_rate,
+        total_frames=total_frames,
+        requested_frame_count=requested_frames,
+        max_generation_duration=float(config.get("max_generation_duration") or 0.0),
+        segment_continuity_tail_frames=int(config.get("segment_continuity_tail_frames") or 5),
+        temporal_stride=int(config["rules"]["temporal_stride"]),
+        model="ltx",
+        frame_rule=lambda requested: _ltx_frame_count_from_requested(requested, int(config["rules"]["temporal_stride"])),
+    )
     character_references, character_validation_entries = build_ltx_character_reference_plan(timeline, config, section_entries)
     ltx_validation = _validate_ltx_inputs(
         timeline,
@@ -103,6 +112,7 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
                     "epsilon": config["prompt_relay_epsilon"],
                 },
                 "character_references": character_references,
+                "segmented_generation": segmented_generation,
                 "rules": deepcopy(config["rules"]),
             },
         },
@@ -331,7 +341,15 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
 
 
 def _ltx_frame_count(duration_seconds: float, frame_rate: float, temporal_stride: int) -> int:
-    raw_frames = max(1, math.ceil(duration_seconds * frame_rate))
+    return _ltx_frame_count_from_requested(_requested_frame_count(duration_seconds, frame_rate), temporal_stride)
+
+
+def _requested_frame_count(duration_seconds: float, frame_rate: float) -> int:
+    return max(1, math.ceil(duration_seconds * frame_rate))
+
+
+def _ltx_frame_count_from_requested(raw_frames: int, temporal_stride: int) -> int:
+    raw_frames = max(1, int(raw_frames))
     if raw_frames <= 1:
         return 1
     return ((raw_frames - 1 + temporal_stride - 1) // temporal_stride) * temporal_stride + 1

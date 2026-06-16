@@ -116,6 +116,22 @@ def _load_source_video_tensor(
     media_decisions: list[dict[str, Any]],
     diagnostics: list[str],
 ):
+    continuity = bernini.get("segment_continuity") or plan.get("model_specific", {}).get("wan", {}).get("segment_continuity", {})
+    previous_tail = continuity.get("previous_tail_images") if isinstance(continuity, dict) else None
+    if previous_tail is not None and hasattr(previous_tail, "shape") and int(previous_tail.shape[0]) > 0:
+        media_decisions.append({
+            "section_id": "segment_previous_tail",
+            "asset_id": None,
+            "path": None,
+            "loaded": True,
+            "bernini_role": "source_video",
+            "source_video_frame_count": int(previous_tail.shape[0]),
+            "tensor_shape": _tensor_shape(previous_tail),
+            "tensor_stats": _tensor_stats(previous_tail),
+            "transient": True,
+        })
+        diagnostics.append("Bernini continuation segment used the previous decoded tail as transient source_video.")
+        return previous_tail
     media = bernini.get("media_used") or {}
     if not media:
         diagnostics.append("Bernini runtime has no timeline source media; running text-to-video conditioning.")

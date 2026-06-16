@@ -1,3 +1,3 @@
-from .node import LTXTimelineRuntime
+from .node import LTXTimelineRuntime, LTXTimelineSegmentedExecutor
 
-__all__ = ["LTXTimelineRuntime"]
+__all__ = ["LTXTimelineRuntime", "LTXTimelineSegmentedExecutor"]

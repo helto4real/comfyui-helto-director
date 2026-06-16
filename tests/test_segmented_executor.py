@@ -1,0 +1,407 @@
+from pathlib import Path
+
+import torch
+
+from shared.privacy import CRYPTO_AVAILABLE
+from shared.segmented_executor import (
+    SegmentSpillStore,
+    post_decode_memory_cleanup,
+    segment_seed,
+    stitch_segment_images,
+    stitch_spilled_segment_images,
+    trim_visible_segment_images,
+)
+import shared.wan.runtime.segmented as wan_segmented
+from shared.timeline.segmentation import build_generation_segments
+
+
+def test_segment_seed_modes_increment_or_reuse():
+    assert segment_seed(10, 0, "Increment Per Segment") == 10
+    assert segment_seed(10, 3, "Increment Per Segment") == 13
+    assert segment_seed(10, 3, "Reuse Seed") == 10
+
+
+def _wan_frame_rule(requested):
+    requested = max(1, int(requested))
+    return ((requested - 1 + 3) // 4) * 4 + 1
+
+
+def test_generation_segments_ignore_model_padding_for_segment_count():
+    segmented = build_generation_segments(
+        section_entries=[
+            {"item_id": "section_001", "start_frame": 0, "end_frame_exclusive": 161},
+        ],
+        frame_rate=16.0,
+        total_frames=161,
+        requested_frame_count=160,
+        max_generation_duration=5.0,
+        segment_continuity_tail_frames=5,
+        temporal_stride=4,
+        model="wan",
+        frame_rule=_wan_frame_rule,
+    )
+
+    assert segmented["enabled"] is True
+    assert [segment["visible_frame_count"] for segment in segmented["segments"]] == [80, 81]
+
+
+def test_generation_segments_absorb_padding_in_last_segment():
+    segmented = build_generation_segments(
+        section_entries=[
+            {"item_id": "section_001", "start_frame": 0, "end_frame_exclusive": 25},
+        ],
+        frame_rate=8.0,
+        total_frames=25,
+        requested_frame_count=24,
+        max_generation_duration=1.0,
+        segment_continuity_tail_frames=5,
+        temporal_stride=4,
+        model="wan",
+        frame_rule=_wan_frame_rule,
+    )
+
+    assert segmented["enabled"] is True
+    assert [segment["visible_frame_count"] for segment in segmented["segments"]] == [8, 8, 9]
+
+
+def test_generation_segments_prefers_nearby_natural_boundary_without_extra_segment():
+    segmented = build_generation_segments(
+        section_entries=[
+            {"item_id": "image_001", "start_frame": 0, "end_frame_exclusive": 79},
+            {"item_id": "text_001", "start_frame": 79, "end_frame_exclusive": 120},
+            {"item_id": "text_002", "start_frame": 120, "end_frame_exclusive": 161},
+        ],
+        frame_rate=16.0,
+        total_frames=161,
+        requested_frame_count=160,
+        max_generation_duration=5.0,
+        segment_continuity_tail_frames=5,
+        temporal_stride=4,
+        model="wan",
+        frame_rule=_wan_frame_rule,
+    )
+
+    assert [segment["visible_frame_count"] for segment in segmented["segments"]] == [79, 82]
+    assert segmented["segments"][0]["split_reason"] == "natural_boundary"
+    assert segmented["segments"][1]["continuity"]["continuity_frame_count"] == 5
+    assert segmented["segments"][1]["trim_leading_frames"] == 5
+
+
+def test_generation_segments_support_configurable_short_tail():
+    segmented = build_generation_segments(
+        section_entries=[
+            {"item_id": "section_001", "start_frame": 0, "end_frame_exclusive": 25},
+        ],
+        frame_rate=8.0,
+        total_frames=25,
+        requested_frame_count=24,
+        max_generation_duration=1.0,
+        segment_continuity_tail_frames=1,
+        temporal_stride=4,
+        model="wan",
+        frame_rule=_wan_frame_rule,
+    )
+
+    assert segmented["segments"][1]["continuity"]["continuity_frame_count"] == 1
+    assert segmented["segments"][1]["trim_leading_frames"] == 1
+
+
+def test_generation_segments_clamp_tail_to_previous_visible_segment():
+    segmented = build_generation_segments(
+        section_entries=[
+            {"item_id": "section_001", "start_frame": 0, "end_frame_exclusive": 2},
+            {"item_id": "section_002", "start_frame": 2, "end_frame_exclusive": 25},
+        ],
+        frame_rate=8.0,
+        total_frames=25,
+        requested_frame_count=24,
+        max_generation_duration=0.25,
+        segment_continuity_tail_frames=5,
+        temporal_stride=4,
+        model="wan",
+        frame_rule=_wan_frame_rule,
+    )
+
+    second = segmented["segments"][1]
+    assert segmented["segments"][0]["visible_frame_count"] == 2
+    assert second["continuity"]["continuity_frame_count"] == 2
+    assert second["trim_leading_frames"] == 2
+    assert second["generation_frame_count"] == _wan_frame_rule(second["visible_frame_count"] + 2)
+
+
+def test_stitch_segment_images_trims_seam_frames_and_clamps_to_target():
+    first = torch.zeros((5, 2, 2, 3), dtype=torch.float32)
+    second = torch.ones((6, 2, 2, 3), dtype=torch.float32)
+    stitched = stitch_segment_images(
+        [
+            {
+                "segment": {"visible_frame_count": 5, "trim_leading_frames": 0, "trim_trailing_frames": 0},
+                "images": first,
+            },
+            {
+                "segment": {"visible_frame_count": 4, "trim_leading_frames": 1, "trim_trailing_frames": 1},
+                "images": second,
+            },
+        ],
+        final_frame_count=9,
+    )
+
+    assert stitched.shape == (9, 2, 2, 3)
+    assert torch.equal(stitched[:5], first)
+    assert torch.equal(stitched[5:], second[1:5])
+
+
+def test_stitch_segment_images_trims_configured_preroll_frames():
+    first = torch.zeros((5, 2, 2, 3), dtype=torch.float32)
+    second = torch.arange(9 * 2 * 2 * 3, dtype=torch.float32).reshape(9, 2, 2, 3)
+    stitched = stitch_segment_images(
+        [
+            {
+                "segment": {"visible_frame_count": 5, "trim_leading_frames": 0, "trim_trailing_frames": 0},
+                "images": first,
+            },
+            {
+                "segment": {"visible_frame_count": 4, "trim_leading_frames": 5, "trim_trailing_frames": 0},
+                "images": second,
+            },
+        ],
+        final_frame_count=9,
+    )
+
+    assert torch.equal(stitched[5:], second[5:9])
+
+
+def test_segment_spill_store_plain_round_trips_and_cleans_up(tmp_path):
+    store = SegmentSpillStore(privacy_mode=False, root=tmp_path)
+    tensor = torch.arange(36, dtype=torch.float32).reshape(3, 2, 2, 3)
+
+    record = store.write_segment({"id": "gen_001"}, tensor)
+    path = Path(record["path"])
+    loaded = store.read_segment(record)
+    summary = store.cleanup()
+
+    assert torch.equal(loaded, tensor)
+    assert path.exists() is False
+    assert store.root.exists() is False
+    assert summary["encrypted"] is False
+    assert summary["files_written"] == 1
+    assert summary["files_read"] == 1
+    assert summary["files_deleted"] == 1
+
+
+def test_segment_spill_store_encrypted_round_trips_without_plaintext(tmp_path):
+    if not CRYPTO_AVAILABLE:
+        return
+    store = SegmentSpillStore(privacy_mode=True, root=tmp_path)
+    tensor = torch.arange(36, dtype=torch.float32).reshape(3, 2, 2, 3)
+
+    record = store.write_segment({"id": "secret_segment"}, tensor)
+    path = Path(record["path"])
+    encrypted_text = path.read_text(encoding="utf-8")
+    loaded = store.read_segment(record)
+    summary = store.cleanup()
+
+    assert torch.equal(loaded, tensor)
+    assert "secret_segment" not in encrypted_text
+    assert "tensor" not in encrypted_text
+    assert encrypted_text.startswith("{")
+    assert summary["encrypted"] is True
+    assert "path" not in summary["records"][0]
+
+
+def test_stitch_spilled_segments_loads_sequentially_and_clamps(tmp_path):
+    store = SegmentSpillStore(privacy_mode=False, root=tmp_path)
+    first = torch.zeros((5, 2, 2, 3), dtype=torch.float32)
+    second = torch.ones((6, 2, 2, 3), dtype=torch.float32)
+    records = [
+        store.write_segment({"id": "gen_001"}, first),
+        store.write_segment({"id": "gen_002"}, second),
+    ]
+
+    stitched = stitch_spilled_segment_images(records, store, final_frame_count=9)
+    summary = store.cleanup()
+
+    assert stitched.shape == (9, 2, 2, 3)
+    assert torch.equal(stitched[:5], first)
+    assert torch.equal(stitched[5:], second[:4])
+    assert summary["files_read"] == 2
+    assert summary["files_deleted"] == 2
+
+
+def test_trim_visible_segment_images_matches_legacy_stitch_trimming():
+    images = torch.arange(6 * 2 * 2 * 3, dtype=torch.float32).reshape(6, 2, 2, 3)
+    segment = {"visible_frame_count": 4, "trim_leading_frames": 1, "trim_trailing_frames": 1}
+
+    assert torch.equal(trim_visible_segment_images(images, segment), images[1:5])
+
+
+def test_segment_spill_cleanup_after_stitch_failure(tmp_path):
+    store = SegmentSpillStore(privacy_mode=False, root=tmp_path)
+    first = torch.zeros((2, 2, 2, 3), dtype=torch.float32)
+    second = torch.ones((2, 3, 2, 3), dtype=torch.float32)
+    records = [
+        store.write_segment({"id": "gen_001"}, first),
+        store.write_segment({"id": "gen_bad"}, second),
+    ]
+
+    try:
+        stitch_spilled_segment_images(records, store, final_frame_count=4)
+    except ValueError as exc:
+        assert "gen_bad" in str(exc)
+    else:
+        raise AssertionError("Expected stitch to fail for mismatched frame shapes.")
+    summary = store.cleanup()
+
+    assert summary["files_deleted"] == 2
+    assert store.root.exists() is False
+
+
+def test_post_decode_memory_cleanup_reports_event():
+    event = post_decode_memory_cleanup("post_decode_test")
+
+    assert event["stage"] == "post_decode_test"
+    assert event["attempted"] is True
+    assert "warnings" in event
+
+
+def test_wan_two_phase_sampling_requires_high_and_low_models():
+    latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
+
+    try:
+        wan_segmented.sample_wan_segment_latent(
+            high_noise_model=object(),
+            low_noise_model=None,
+            positive=[],
+            negative=[],
+            latent=latent,
+            model_mode="I2V-A14B",
+            seed=1,
+            steps=20,
+            cfg=5.0,
+            sampler_name="euler",
+            scheduler="normal",
+            denoise=1.0,
+            phase_split_percent=0.5,
+        )
+    except ValueError as exc:
+        assert "requires both high_noise_model and low_noise_model" in str(exc)
+    else:
+        raise AssertionError("Expected WAN two-phase sampling to require both models.")
+
+
+def test_wan_two_phase_sampling_runs_high_then_low(monkeypatch):
+    calls = []
+
+    def fake_sample_latent(**kwargs):
+        calls.append(kwargs)
+        output = dict(kwargs["latent"])
+        output["samples"] = kwargs["latent"]["samples"] + len(calls)
+        return output
+
+    monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
+    latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
+    high = object()
+    low = object()
+
+    sampled, debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=high,
+        low_noise_model=low,
+        positive=[["positive"]],
+        negative=[["negative"]],
+        latent=latent,
+        model_mode="Bernini-A14B",
+        seed=42,
+        steps=20,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_percent=0.5,
+    )
+
+    assert sampled["samples"].mean().item() == 3.0
+    assert debug["sampling_policy"] == "two_phase"
+    assert debug["split_step"] == 10
+    assert calls[0]["model"] is high
+    assert calls[0]["start_step"] == 0
+    assert calls[0]["last_step"] == 10
+    assert calls[0]["force_full_denoise"] is False
+    assert calls[1]["model"] is low
+    assert calls[1]["latent"]["samples"].mean().item() == 1.0
+    assert calls[1]["disable_noise"] is True
+    assert calls[1]["start_step"] == 10
+    assert calls[1]["last_step"] == 20
+    assert calls[1]["force_full_denoise"] is True
+
+
+def test_wan_ti2v_5b_uses_single_phase_sampling(monkeypatch):
+    calls = []
+
+    def fake_sample_latent(**kwargs):
+        calls.append(kwargs)
+        return kwargs["latent"]
+
+    monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
+    latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
+    high = object()
+
+    _sampled, debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=high,
+        low_noise_model=None,
+        positive=[],
+        negative=[],
+        latent=latent,
+        model_mode="TI2V-5B",
+        seed=7,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_percent=0.5,
+    )
+
+    assert debug["sampling_policy"] == "single_phase"
+    assert len(calls) == 1
+    assert calls[0]["model"] is high
+    assert calls[0]["force_full_denoise"] is True
+
+
+def test_wan_two_phase_vram_unload_policy_records_events(monkeypatch):
+    unload_calls = []
+
+    def fake_sample_latent(**kwargs):
+        return kwargs["latent"]
+
+    def fake_unload(stage, role, model):
+        unload_calls.append((stage, role, model))
+        return {"stage": stage, "role": role, "attempted": True, "success": True}
+
+    monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
+    monkeypatch.setattr(wan_segmented, "_unload_model", fake_unload)
+    latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
+    high = object()
+    low = object()
+
+    _sampled, debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=high,
+        low_noise_model=low,
+        positive=[],
+        negative=[],
+        latent=latent,
+        model_mode="T2V-A14B",
+        seed=7,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_percent=0.5,
+        vram_unload_policy="Between High Low And Decode",
+    )
+
+    assert unload_calls == [
+        ("between_high_low", "high_noise_model", high),
+        ("before_decode", "low_noise_model", low),
+    ]
+    assert [event["stage"] for event in debug["unload_events"]] == ["between_high_low", "before_decode"]

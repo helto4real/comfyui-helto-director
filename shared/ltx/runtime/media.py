@@ -138,6 +138,7 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
         })
 
     _append_character_reference_guides(plan, guide_data, target_width, target_height)
+    _append_segment_continuity_guides(plan, guide_data, target_width, target_height)
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     if isinstance(character_references, dict):
         diagnostics.extend(str(item) for item in character_references.get("diagnostics", []) if item)
@@ -149,6 +150,34 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
         diagnostics.append("No image or video guides were available; inserted a zero-strength dummy guide image.")
 
     return guide_data, diagnostics
+
+
+def _append_segment_continuity_guides(plan: dict[str, Any], guide_data: dict[str, Any], target_width: int, target_height: int) -> None:
+    continuity = plan.get("model_specific", {}).get("ltx", {}).get("segment_continuity", {})
+    images = continuity.get("previous_tail_images") if isinstance(continuity, dict) else None
+    if images is None or not torch.is_tensor(images) or images.shape[0] <= 0:
+        return
+    tensor = resize_image_frames(
+        images,
+        target_width,
+        target_height,
+        CROP_MODE_CROP,
+        int(plan["resolved_output"].get("divisible_by") or 32),
+    )
+    guide_data["images"].append(tensor)
+    guide_data["insert_frames"].append(0)
+    guide_data["strengths"].append(float(continuity.get("strength") or 1.0))
+    guide_data["reference_images"].append({
+        "id": "segment_previous_tail",
+        "label": "previous_tail",
+        "kind": "segment_continuity",
+        "section_type": "Transient",
+        "image": tensor,
+        "insert_frame": 0,
+        "strength": float(continuity.get("strength") or 1.0),
+        "hidden_tail": False,
+        "transient": True,
+    })
 
 
 def _append_character_reference_guides(plan: dict[str, Any], guide_data: dict[str, Any], target_width: int, target_height: int) -> None:
