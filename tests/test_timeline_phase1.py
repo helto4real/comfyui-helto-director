@@ -36,6 +36,7 @@ def test_create_default_video_timeline_shape():
     assert timeline["project"]["audio"]["use_native_audio"] is False
     assert timeline["project"]["privacy"] == {"mode": False}
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
+    assert timeline["project"]["metadata"]["character_references"] == []
     assert timeline["ui_state"]["view_start_seconds"] == 0
     assert timeline["ui_state"]["view_end_seconds"] == 5
     assert timeline["assets"] == []
@@ -139,6 +140,84 @@ def test_normalization_fills_asset_defaults():
     assert asset["asset_id"] == "asset_001"
     assert asset["name"] == "reference.png"
     assert asset["metadata"] == {}
+
+
+def test_character_reference_metadata_normalizes():
+    timeline = create_default_video_timeline()
+    timeline["project"]["metadata"]["character_references"].append(
+        {
+            "label": "Hero",
+            "strength": 3.0,
+            "image": {
+                "path": "/mnt/media/hero.png",
+                "name": "hero.png",
+                "thumbnail": "not-normalized-away",
+            },
+        }
+    )
+
+    normalized = normalize_video_timeline(timeline)
+    reference = normalized["project"]["metadata"]["character_references"][0]
+
+    assert reference["id"] == "image1"
+    assert reference["label"] == "image1"
+    assert reference["kind"] == "character"
+    assert reference["enabled"] is True
+    assert reference["description"] == ""
+    assert reference["strength"] == 1.0
+    assert reference["image"]["path"] == "/mnt/media/hero.png"
+    assert "asset_id" not in reference["image"]
+
+
+def test_character_reference_validation_and_prompt_warnings():
+    timeline = create_default_video_timeline()
+    timeline["project"]["metadata"]["character_references"] = [
+        {
+            "id": "ref_1",
+            "label": "image1",
+            "kind": "character",
+            "enabled": False,
+            "description": "",
+            "strength": 1.0,
+            "image": {"path": "/mnt/media/hero.png"},
+        },
+        {
+            "id": "ref_2",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "",
+            "strength": 1.0,
+            "image": {"path": "/mnt/media/other.png", "thumbnail": "data:image/png;base64,AAAA"},
+        },
+        {
+            "id": "ref_3",
+            "label": "image2",
+            "kind": "character",
+            "enabled": True,
+            "description": "",
+            "strength": 1.0,
+            "image": None,
+        },
+    ]
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "@image1:character and @image3:character",
+        }
+    )
+
+    validation = validate_video_timeline(timeline)
+    error_codes = [entry["code"] for entry in validation["errors"]]
+    warning_codes = [entry["code"] for entry in validation["warnings"]]
+
+    assert "CHARACTER_REFERENCE_DUPLICATE_LABEL" in error_codes
+    assert "CHARACTER_REFERENCE_EMBEDDED_MEDIA_NOT_ALLOWED" in error_codes
+    assert "CHARACTER_REFERENCE_MISSING_IMAGE" in error_codes
+    assert "PROMPT_REFERENCE_UNKNOWN" in warning_codes
 
 
 def test_text_section_empty_prompt_gives_error():

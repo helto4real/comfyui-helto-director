@@ -16,13 +16,22 @@ import {
   mediaLabel,
   resolveMediaReference,
 } from "./media.js";
-import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS } from "./media_cache.js";
+import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, thumbnailUrl } from "./media_cache.js";
 import {
   addPickedMediaItem,
   replacePickedSectionMedia,
 } from "./media_actions.js";
 import { showMediaPicker } from "./media_picker.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
+import {
+  PROMPT_REFERENCE_TRIGGER,
+  addCharacterReference,
+  ensureCharacterReferences,
+  formatCharacterReferenceTag,
+  getCharacterReferences,
+  getReferencePromptCompletions,
+  removeCharacterReference,
+} from "./references.js";
 import {
   AUDIO_LANE_HEIGHT,
   DIRECTOR_TRACK_HEIGHT,
@@ -70,6 +79,10 @@ const DELETE_MENU_LABELS = {
   Text: "Delete Text",
   "Audio Clip": "Delete Audio Clip",
 };
+const REPLACE_MENU_LABELS = {
+  Image: "Replace image",
+  Video: "Replace video",
+};
 
 export function getTimelineWidgetHeight(timeline) {
   return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
@@ -104,6 +117,7 @@ export class TimelineRenderer {
     this.container = container;
     this.drag = null;
     this.settingsOpen = false;
+    this.referencesOpen = false;
     this.openMenu = null;
     this.contextMenuElement = null;
     this.contextMenuDocument = null;
@@ -156,6 +170,7 @@ export class TimelineRenderer {
       root.append(status);
     }
     if (this.settingsOpen) root.append(this.renderProjectSettings(timeline));
+    if (this.referencesOpen) root.append(this.renderReferenceManager(timeline));
     this.container.append(root);
     this.scheduleViewportRemeasure();
   }
@@ -170,10 +185,13 @@ export class TimelineRenderer {
   renderToolbar() {
     const toolbar = el("div", "htd-toolbar");
     const hasOverflow = hasDirectorSectionOverflow(this.controller.timeline);
+    const referenceCount = getCharacterReferences(this.controller.timeline).length;
     const settingsButton = iconButton("settings", "Project Settings", () => {
       this.settingsOpen = true;
       this.render();
     });
+    const referenceManagerButton = iconButton("references", "Manage Character References", () => this.openReferenceManager());
+    const referencePresentButton = iconButton("reference-active", referenceCount ? `${referenceCount} Character References` : "No Character References", () => this.openReferenceManager());
     const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer", () => this.openPromptOptimizer());
     const repairButtons = hasOverflow
       ? [
@@ -186,6 +204,9 @@ export class TimelineRenderer {
         ]
       : [];
     promptOptimizerButton.classList.add("htd-prompt-optimizer-button");
+    referenceManagerButton.classList.add("htd-reference-manager-button");
+    referencePresentButton.classList.add("htd-reference-present-button");
+    referencePresentButton.classList.toggle("is-active", referenceCount > 0);
     settingsButton.classList.add("htd-settings-button");
     toolbar.append(
       iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
@@ -213,6 +234,9 @@ export class TimelineRenderer {
           timeline.project.audio.use_native_audio = !timeline.project.audio.use_native_audio;
         }, "settings change");
       }),
+      toolbarSpacer(),
+      referenceManagerButton,
+      referencePresentButton,
       toolbarSpacer(),
       iconButton("split", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
       iconButton("duplicate", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
@@ -488,13 +512,16 @@ export class TimelineRenderer {
     if (!shouldRenderPromptInput(this.controller.timeline, item)) {
       return null;
     }
-    return this.renderTextField(item, "prompt", "Prompt", {
+    const input = this.renderTextField(item, "prompt", "Prompt", {
       className: "htd-prompt",
       debounced: true,
       multiline: true,
       placeholder: "Write your prompt here...",
       rows: 5,
     });
+    input.dataset.referenceTrigger = PROMPT_REFERENCE_TRIGGER;
+    input._heltoCharacterReferenceCompletions = getReferencePromptCompletions(this.controller.timeline);
+    return input;
   }
 
   renderInspectorRow(label, control, className = "") {
@@ -691,6 +718,181 @@ export class TimelineRenderer {
     return overlay;
   }
 
+  renderReferenceManager(timeline) {
+    const privacyMode = Boolean(timeline.project.privacy.mode);
+    const references = getCharacterReferences(timeline);
+    const overlay = el("div", `htd-reference-overlay${privacyMode ? " privacy-mode" : ""}`);
+    const modal = el("div", "htd-reference-modal");
+    const header = el("div", "htd-reference-header");
+    const title = el("div", "htd-reference-title");
+    title.textContent = "Character References";
+    const addButton = iconButton("image-plus", "Add Character Reference", () => this.openReferenceImagePicker());
+    const closeButton = button("X", "Close Character References", () => this.closeReferenceManager());
+    const headerActions = el("div", "htd-reference-header-actions");
+    headerActions.append(addButton, closeButton);
+    header.append(title, headerActions);
+
+    const body = el("div", "htd-reference-body");
+    if (references.length === 0) {
+      const empty = el("div", "htd-reference-empty");
+      empty.textContent = "No character references.";
+      body.append(empty);
+    } else {
+      for (const reference of references) body.append(this.renderReferenceCard(reference, privacyMode));
+    }
+
+    modal.append(header, body);
+    overlay.append(modal);
+    return overlay;
+  }
+
+  renderReferenceCard(reference, privacyMode) {
+    const card = el("div", "htd-reference-card");
+    const image = reference.image;
+    const thumb = el("button", "htd-reference-thumb");
+    thumb.type = "button";
+    thumb.title = image?.path || reference.label || "Character reference";
+    if (image?.path) {
+      const img = el("img");
+      img.src = thumbnailUrl(image, 180, privacyMode);
+      img.alt = reference.label || "Character reference";
+      thumb.append(img);
+    } else {
+      thumb.append(createIconElement("references"));
+    }
+
+    const meta = el("div", "htd-reference-meta");
+    const labelRow = el("div", "htd-reference-row");
+    const tag = el("code", "htd-reference-tag");
+    tag.textContent = formatCharacterReferenceTag(reference);
+    tag.title = "Prompt reference tag";
+    const enabled = toggleButton("On", "Enable Character Reference", reference.enabled !== false, () => {
+      this.commitMutation((timeline) => {
+        setLiveReferenceField(timeline, reference, "enabled", !(findLiveReference(timeline, reference)?.enabled !== false));
+      }, "settings change");
+    });
+    labelRow.append(tag, enabled);
+
+    const description = el("textarea", "htd-reference-description");
+    description.value = reference.description || "";
+    description.placeholder = "Short character description...";
+    description.title = "Character Description";
+    description.rows = 3;
+    description.addEventListener("input", () => {
+      setLiveReferenceField(this.controller.timeline, reference, "description", description.value);
+      this.controller.scheduleDebouncedCommit("reference description", { delayMs: 150 });
+    });
+    description.addEventListener("blur", () => {
+      this.controller.flushDebouncedCommit("reference description", { rerender: false });
+    });
+
+    const strengthRow = el("div", "htd-reference-strength-row");
+    const strengthLabel = el("span", "htd-reference-strength-label");
+    strengthLabel.textContent = "Strength";
+    const strengthSlider = el("input", "htd-strength-slider");
+    const strengthNumber = el("input", "htd-number htd-strength-number");
+    strengthSlider.type = "range";
+    strengthSlider.min = "0";
+    strengthSlider.max = "1";
+    strengthSlider.step = "0.05";
+    strengthSlider.title = "Reference Strength";
+    strengthNumber.type = "number";
+    strengthNumber.min = "0";
+    strengthNumber.max = "1";
+    strengthNumber.step = "0.05";
+    strengthNumber.title = "Reference Strength";
+    const setStrengthControls = (value) => {
+      const strength = clampNumber(value, 0, 1, 1);
+      strengthSlider.value = String(strength);
+      strengthNumber.value = strength.toFixed(2);
+      return strength;
+    };
+    setStrengthControls(reference.strength);
+    strengthSlider.addEventListener("input", () => {
+      const strength = setStrengthControls(strengthSlider.value);
+      setLiveReferenceField(this.controller.timeline, reference, "strength", strength);
+      this.controller.scheduleDebouncedCommit("reference strength", { delayMs: 80 });
+    });
+    strengthNumber.addEventListener("change", () => {
+      const strength = setStrengthControls(strengthNumber.value);
+      this.commitMutation((timeline) => {
+        setLiveReferenceField(timeline, reference, "strength", strength);
+      }, "settings change");
+    });
+    strengthRow.append(strengthLabel, strengthSlider, strengthNumber);
+
+    const actions = el("div", "htd-reference-actions");
+    actions.append(
+      iconButton("copy", "Copy Reference Tag", () => this.copyReferenceTag(reference)),
+      iconButton("insert", "Insert Reference Tag", () => this.insertReferenceTag(reference)),
+      iconButton("delete", "Remove Character Reference", () => {
+        this.commitMutation((timeline) => removeCharacterReference(timeline, reference.id), "remove reference");
+      }),
+    );
+
+    meta.append(labelRow, description, strengthRow, actions);
+    card.append(thumb, meta);
+    return card;
+  }
+
+  openReferenceManager() {
+    const privacyMode = Boolean(this.controller.timeline.project.privacy.mode);
+    this.referencesOpen = true;
+    this.settingsOpen = false;
+    if (privacyMode) {
+      this.privacyExternalModalOpen = true;
+      this.privacyRevealActive = false;
+    }
+    this.render();
+  }
+
+  closeReferenceManager() {
+    this.referencesOpen = false;
+    if (this.privacyExternalModalOpen) this.privacyExternalModalOpen = false;
+    this.render();
+  }
+
+  async openReferenceImagePicker() {
+    try {
+      const item = await showMediaPicker({
+        assetType: ASSET_TYPE_IMAGE,
+        node: this.node,
+        documentRef: this.container.ownerDocument,
+        mode: "reference",
+        privacyMode: Boolean(this.controller.timeline.project.privacy.mode),
+      });
+      if (!item) return;
+      this.commitMutation((timeline) => {
+        addCharacterReference(timeline, item);
+      }, "add reference");
+    } catch (error) {
+      const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
+      alertFn?.(error.message);
+    }
+  }
+
+  async copyReferenceTag(reference) {
+    const tag = formatCharacterReferenceTag(reference);
+    try {
+      const writeText = this.container.ownerDocument.defaultView?.navigator?.clipboard?.writeText;
+      if (typeof writeText !== "function") throw new Error("Clipboard unavailable");
+      await writeText.call(this.container.ownerDocument.defaultView.navigator.clipboard, tag);
+    } catch (_error) {
+      const promptFn = this.container.ownerDocument.defaultView?.prompt ?? globalThis.prompt;
+      promptFn?.("Reference tag", tag);
+    }
+  }
+
+  insertReferenceTag(reference) {
+    const tag = formatCharacterReferenceTag(reference);
+    this.commitMutation((timeline) => {
+      const section = findSection(timeline, timeline.ui_state.selected_item_id);
+      if (!section || !("prompt" in section)) return;
+      const current = String(section.prompt ?? "").trimEnd();
+      section.prompt = current ? `${current} ${tag}` : tag;
+    }, "insert reference tag");
+  }
+
   renderSettingCheckbox(title, path) {
     const row = settingRow(title);
     row.append(toggleButton("On", title, Boolean(getPath(this.controller.timeline, path)), () => {
@@ -837,7 +1039,7 @@ export class TimelineRenderer {
     this.commitMutation((timeline) => selectItem(timeline, itemId), "select", { pushUndo: false });
 
     const documentRef = this.container.ownerDocument ?? globalThis.document;
-    const menu = this.renderItemContextMenu(itemId, deleteLabelForItemType(itemType), event.clientX, event.clientY, documentRef);
+    const menu = this.renderItemContextMenu(itemId, itemType, event.clientX, event.clientY, documentRef);
     (documentRef?.body ?? this.container).append(menu);
     this.contextMenuElement = menu;
     this.contextMenuDocument = documentRef;
@@ -845,7 +1047,7 @@ export class TimelineRenderer {
     this.contextMenuDocument?.addEventListener?.("keydown", this.onContextMenuKeyDown, true);
   }
 
-  renderItemContextMenu(itemId, label, clientX, clientY, documentRef) {
+  renderItemContextMenu(itemId, itemType, clientX, clientY, documentRef) {
     const menu = el("div", "htd-context-menu");
     const viewport = documentRef?.defaultView ?? globalThis.window;
     const viewportWidth = Number(viewport?.innerWidth ?? documentRef?.documentElement?.clientWidth ?? 0);
@@ -857,18 +1059,31 @@ export class TimelineRenderer {
     menu.setAttribute("role", "menu");
     menu.dataset.itemId = itemId;
 
-    const item = el("button", "htd-context-menu-item");
-    item.type = "button";
-    item.textContent = label;
-    item.title = label;
-    item.setAttribute("role", "menuitem");
-    item.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.closeContextMenu({ rerender: false });
+    const appendMenuItem = (label, onClick) => {
+      const item = el("button", "htd-context-menu-item");
+      item.type = "button";
+      item.textContent = label;
+      item.title = label;
+      item.setAttribute("role", "menuitem");
+      item.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeContextMenu({ rerender: false });
+        onClick();
+      });
+      menu.append(item);
+    };
+
+    const replaceLabel = replaceLabelForItemType(itemType);
+    if (replaceLabel) {
+      appendMenuItem(replaceLabel, () => {
+        this.openMediaPicker(itemType, { mode: "replace", itemId });
+      });
+    }
+
+    appendMenuItem(deleteLabelForItemType(itemType), () => {
       this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete");
     });
-    menu.append(item);
     return menu;
   }
 
@@ -1289,8 +1504,23 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, numeric));
 }
 
+function findLiveReference(timeline, reference) {
+  return getCharacterReferences(timeline).find((candidate) => candidate.id === reference.id) ?? null;
+}
+
+function setLiveReferenceField(timeline, reference, field, value) {
+  const references = ensureCharacterReferences(timeline);
+  const liveReference = references.find((candidate) => candidate.id === reference.id) ?? reference;
+  liveReference[field] = value;
+  return liveReference;
+}
+
 function deleteLabelForItemType(itemType) {
   return DELETE_MENU_LABELS[itemType] ?? "Delete Item";
+}
+
+function replaceLabelForItemType(itemType) {
+  return REPLACE_MENU_LABELS[itemType] ?? null;
 }
 
 function iconButton(iconName, title, onClick, options = {}) {
@@ -1403,6 +1633,11 @@ const ICONS = {
   timing: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`,
   "guide-range": `<svg viewBox="0 0 24 24"><path d="M5 7h14M5 17h14"/><path d="M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   "guide-frames": `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="12" rx="2"/><path d="M8 10h4M8 14h4"/><path d="M17 8l3-2v12l-3-2"/></svg>`,
+  references: `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="M4 5h4M16 5h4M4 5v4M20 5v4"/></svg>`,
+  "reference-active": `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="m17 4 2 2 3-4"/></svg>`,
+  "image-plus": `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="14" height="14" rx="2"/><path d="m7 16 3-3 2 2 2-2 3 3"/><path d="M19 8v6M16 11h6"/></svg>`,
+  copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
+  insert: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/><path d="M4 5h5M4 19h5M15 5h5M15 19h5"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M5 3l.7 1.8 1.8.7-1.8.7L5 8l-.7-1.8-1.8-.7 1.8-.7z"/></svg>`,
 };
 
@@ -1557,6 +1792,27 @@ function installStyles(documentRef) {
     .htd-setting-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .htd-setting-number, .htd-setting-text { width: 120px; min-width: 0; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
     textarea.htd-setting-text { height: 52px; padding: 6px 8px; resize: vertical; }
+    .htd-reference-overlay { position: absolute; inset: 0; z-index: 21; display: flex; align-items: stretch; justify-content: center; background: rgba(8, 11, 17, 0.84); padding: 10px; box-sizing: border-box; }
+    .htd-reference-modal { width: min(820px, 100%); min-height: 0; border: 1px solid #465064; border-radius: 6px; background: #121925; box-shadow: 0 12px 34px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
+    .htd-reference-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-bottom: 1px solid #30394c; }
+    .htd-reference-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #eef2f7; }
+    .htd-reference-header-actions { display: inline-flex; align-items: center; gap: 4px; }
+    .htd-reference-body { min-height: 0; overflow: auto; padding: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+    .htd-reference-empty { grid-column: 1 / -1; padding: 18px 8px; text-align: center; color: #9ba8bd; }
+    .htd-reference-card { min-width: 0; display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; padding: 8px; border: 1px solid #30394c; border-radius: 6px; background: rgba(17, 23, 34, 0.58); }
+    .htd-reference-thumb { width: 88px; height: 88px; border: 1px solid #3d4658; border-radius: 4px; background: #101722; color: #9ba8bd; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0; }
+    .htd-reference-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .htd-reference-meta { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+    .htd-reference-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .htd-reference-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff1b8; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .htd-reference-description { width: 100%; min-width: 0; height: 58px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 6px 8px; resize: vertical; }
+    .htd-reference-strength-row { min-width: 0; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
+    .htd-reference-strength-label { flex: 0 0 auto; color: #9ba8bd; }
+    .htd-reference-actions { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+    .htd-reference-overlay.privacy-mode .htd-reference-thumb img,
+    .htd-reference-overlay.privacy-mode .htd-reference-description { opacity: 0; }
+    .htd-reference-overlay.privacy-mode .htd-reference-card:hover .htd-reference-thumb img,
+    .htd-reference-overlay.privacy-mode .htd-reference-card:hover .htd-reference-description { opacity: 1; }
   `;
   documentRef.head.append(style);
 }

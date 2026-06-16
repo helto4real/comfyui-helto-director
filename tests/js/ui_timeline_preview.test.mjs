@@ -213,9 +213,13 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes('this.showItemContextMenu(event, clip.item_id, "Audio Clip")'), true);
   assert.equal(rendererSource.includes('Image: "Delete Image"'), true);
   assert.equal(rendererSource.includes('Video: "Delete Video"'), true);
+  assert.equal(rendererSource.includes('Image: "Replace image"'), true);
+  assert.equal(rendererSource.includes('Video: "Replace video"'), true);
   assert.equal(rendererSource.includes('Text: "Delete Text"'), true);
   assert.equal(rendererSource.includes('"Audio Clip": "Delete Audio Clip"'), true);
   assert.equal(rendererSource.includes("deleteLabelForItemType"), true);
+  assert.equal(rendererSource.includes("replaceLabelForItemType"), true);
+  assert.equal(rendererSource.includes('this.openMediaPicker(itemType, { mode: "replace", itemId })'), true);
   assert.equal(rendererSource.includes("deleteSelectedItem(timeline)"), true);
   assert.equal(rendererSource.includes("if (!this.contextMenuElement) this.setPrivacyRevealActive(false);"), true);
   assert.equal(rendererSource.includes("this.setPrivacyRevealActive(true);"), true);
@@ -243,6 +247,12 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes("...repairButtons"), true);
   assert.equal(rendererSource.includes("control.disabled = Boolean(options.disabled)"), true);
   assert.equal(rendererSource.includes('const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer"'), true);
+  assert.equal(rendererSource.includes('const referenceManagerButton = iconButton("references", "Manage Character References"'), true);
+  assert.equal(rendererSource.includes('const referencePresentButton = iconButton("reference-active"'), true);
+  assert.equal(rendererSource.includes("referencePresentButton.classList.toggle(\"is-active\", referenceCount > 0)"), true);
+  assert.equal(rendererSource.includes("this.renderReferenceManager(timeline)"), true);
+  assert.equal(rendererSource.includes('mode: "reference"'), true);
+  assert.equal(rendererSource.includes("input.dataset.referenceTrigger = PROMPT_REFERENCE_TRIGGER"), true);
   assert.equal(rendererSource.includes("showPromptOptimizer({"), true);
   assert.equal(rendererSource.includes("promptOptimizerButton,"), true);
   assert.equal(rendererSource.indexOf("promptOptimizerButton,") < rendererSource.indexOf("settingsButton,"), true);
@@ -251,6 +261,8 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes('toggleIconButton("native-audio", "Use Native Audio"'), true);
   assert.equal(rendererSource.includes("timeline.project.audio.use_native_audio = !timeline.project.audio.use_native_audio"), true);
   assert.equal(rendererSource.includes('"native-audio": `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes('references: `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes('"reference-active": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('"fit-last-section": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('"fit-all-sections": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('sparkle: `<svg viewBox="0 0 24 24">'), true);

@@ -78,6 +78,17 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     timeline["project"]["duration_seconds"] = 1.0
     timeline["project"]["frame_rate"] = 12.0
     timeline["project"]["aspect_ratio"] = "1:1"
+    timeline["project"]["metadata"]["character_references"].append(
+        {
+            "id": "ref_hero",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "red jacket and black bob haircut",
+            "strength": 0.75,
+            "image": {"path": "/mnt/media/hero.png", "name": "hero.png"},
+        }
+    )
     timeline["ui_state"]["view_start_seconds"] = 2
     timeline["ui_state"]["view_end_seconds"] = 4
 
@@ -97,6 +108,8 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     assert output_timeline["project"]["aspect_ratio"] == "9:16"
     assert output_timeline["project"]["orientation"] == "Portrait"
     assert output_timeline["project"]["quality_preset"] == "High"
+    assert output_timeline["project"]["metadata"]["character_references"][0]["id"] == "ref_hero"
+    assert output_timeline["project"]["metadata"]["character_references"][0]["description"] == "red jacket and black bob haircut"
     assert output_timeline["ui_state"]["view_start_seconds"] == 2
     assert output_timeline["ui_state"]["view_end_seconds"] == 4
 

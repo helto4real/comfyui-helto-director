@@ -142,6 +142,9 @@ export function createDefaultVideoTimeline() {
         show_thumbnails: true,
         show_audio_waveforms: true,
       },
+      metadata: {
+        character_references: [],
+      },
     },
     ui_state: {
       timeline_display_mode: "Sections",

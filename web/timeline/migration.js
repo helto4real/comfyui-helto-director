@@ -11,6 +11,7 @@ import {
   createDefaultVideoTimeline,
   deepClone,
 } from "./schema.js";
+import { normalizeCharacterReferences } from "./references.js";
 
 export function migrateVideoTimeline(value) {
   if (value == null || value === "") {
@@ -35,6 +36,7 @@ export function normalizeVideoTimeline(value) {
   normalized.assets = normalizeAssets(normalized.assets);
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
+  normalizeProjectMetadata(normalized);
   normalizePrivacy(normalized);
   normalizeUiStateViewRange(normalized);
   return normalized;
@@ -83,6 +85,14 @@ function normalizeAssets(assets) {
         : {};
       return normalized;
     });
+}
+
+function normalizeProjectMetadata(timeline) {
+  const project = timeline.project ??= {};
+  project.metadata = project.metadata && typeof project.metadata === "object" && !Array.isArray(project.metadata)
+    ? project.metadata
+    : {};
+  project.metadata.character_references = normalizeCharacterReferences(project.metadata.character_references);
 }
 
 function normalizeSection(section, index) {

@@ -23,6 +23,7 @@ from ..contracts.video_timeline import (
 )
 from .defaults import create_default_video_timeline
 from .migration import migrate_video_timeline
+from .references import normalize_character_references
 
 
 def normalize_video_timeline(timeline: Any) -> dict:
@@ -35,6 +36,7 @@ def normalize_video_timeline(timeline: Any) -> dict:
     normalized["audio_tracks"] = _normalize_audio_tracks(
         normalized.get("audio_tracks")
     )
+    _normalize_project_metadata(normalized)
     _normalize_privacy(normalized)
     _normalize_ui_state_view_range(normalized)
     return normalized
@@ -61,6 +63,17 @@ def _normalize_assets(assets: Any) -> list[dict]:
             normalized["metadata"] = {}
         normalized_assets.append(normalized)
     return normalized_assets
+
+
+def _normalize_project_metadata(timeline: dict) -> None:
+    project = timeline.setdefault("project", {})
+    metadata = project.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["character_references"] = normalize_character_references(
+        metadata.get("character_references")
+    )
+    project["metadata"] = metadata
 
 
 def _fill_missing(value: Any, defaults: Any) -> Any:

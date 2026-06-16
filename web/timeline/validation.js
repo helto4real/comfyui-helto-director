@@ -7,6 +7,11 @@ import {
 } from "./schema.js";
 import { normalizeVideoTimeline } from "./migration.js";
 import { containsEmbeddedMedia } from "./media.js";
+import {
+  REFERENCE_KIND_CHARACTER,
+  getCharacterReferences,
+  parseReferenceTags,
+} from "./references.js";
 
 export function createValidationEntry(code, severity, source, scope, itemId, message, hint = "", details = {}) {
   return {
@@ -43,6 +48,7 @@ export function validateVideoTimeline(timeline) {
   const duration = asNumber(normalized.project.duration_seconds);
   const assetsById = new Map(normalized.assets.map((asset) => [asset.asset_id, asset]));
   entries.push(...validateAssets(normalized.assets));
+  entries.push(...validateCharacterReferences(getCharacterReferences(normalized)));
   const sections = [...normalized.director_track.sections].sort(
     (a, b) => (asNumber(a.start_time) ?? 0) - (asNumber(b.start_time) ?? 0),
   );
@@ -122,6 +128,8 @@ export function validateVideoTimeline(timeline) {
     }
   }
 
+  entries.push(...validatePromptReferenceTags(sections, getCharacterReferences(normalized)));
+
   for (const track of normalized.audio_tracks) {
     const lanes = new Map();
     for (const clip of track.clips) {
@@ -183,6 +191,91 @@ export function validateVideoTimeline(timeline) {
   }
 
   return createValidationResult(entries);
+}
+
+function validateCharacterReferences(references) {
+  const entries = [];
+  const seenLabels = new Set();
+  for (const reference of references) {
+    const itemId = reference.id || reference.label || "reference";
+    if (seenLabels.has(reference.label)) {
+      entries.push(createValidationEntry(
+        "CHARACTER_REFERENCE_DUPLICATE_LABEL",
+        "Error",
+        "Director",
+        "CharacterReference",
+        itemId,
+        "Character reference labels must be unique.",
+        "Rename or remove the duplicate reference so prompt tags are unambiguous.",
+        { label: reference.label },
+      ));
+    }
+    seenLabels.add(reference.label);
+    if (containsEmbeddedMedia(reference) || containsEmbeddedMedia(reference.image)) {
+      entries.push(createValidationEntry(
+        "CHARACTER_REFERENCE_EMBEDDED_MEDIA_NOT_ALLOWED",
+        "Error",
+        "Director",
+        "CharacterReference",
+        itemId,
+        "Character references must not embed media, thumbnails, or waveform data in workflow JSON.",
+        "Store only a file/source reference and regenerate previews from cache.",
+      ));
+    }
+    if (reference.enabled !== false && !hasMediaReference(reference.image)) {
+      entries.push(createValidationEntry(
+        "CHARACTER_REFERENCE_MISSING_IMAGE",
+        "Error",
+        "Director",
+        "CharacterReference",
+        itemId,
+        "Enabled character reference requires an image.",
+        "Choose an image, disable the reference, or remove it.",
+        { label: reference.label },
+      ));
+    }
+  }
+  return entries;
+}
+
+function validatePromptReferenceTags(sections, references) {
+  const entries = [];
+  const referencesByLabel = new Map(references.map((reference) => [reference.label, reference]));
+  const seenWarnings = new Set();
+  for (const section of sections) {
+    const prompt = section.prompt ?? "";
+    for (const tag of parseReferenceTags(prompt)) {
+      if (tag.kind !== REFERENCE_KIND_CHARACTER) continue;
+      const reference = referencesByLabel.get(tag.label);
+      const key = `${section.item_id}:${tag.token}`;
+      if (seenWarnings.has(key)) continue;
+      seenWarnings.add(key);
+      if (!reference) {
+        entries.push(createValidationEntry(
+          "PROMPT_REFERENCE_UNKNOWN",
+          "Warning",
+          "Director",
+          "Section",
+          section.item_id,
+          "Prompt references a missing character reference.",
+          "Add the referenced character image or remove the tag.",
+          { token: tag.token, label: tag.label },
+        ));
+      } else if (reference.enabled === false) {
+        entries.push(createValidationEntry(
+          "PROMPT_REFERENCE_DISABLED",
+          "Warning",
+          "Director",
+          "Section",
+          section.item_id,
+          "Prompt references a disabled character reference.",
+          "Enable the reference or remove the tag.",
+          { token: tag.token, label: tag.label },
+        ));
+      }
+    }
+  }
+  return entries;
 }
 
 function validateAssets(assets) {

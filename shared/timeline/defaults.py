@@ -66,6 +66,9 @@ def create_default_video_timeline() -> dict:
                 "show_thumbnails": True,
                 "show_audio_waveforms": True,
             },
+            "metadata": {
+                "character_references": [],
+            },
         },
         "ui_state": {
             "timeline_display_mode": TIMELINE_DISPLAY_MODE_DEFAULT,

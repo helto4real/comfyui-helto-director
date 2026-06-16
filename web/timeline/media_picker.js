@@ -33,8 +33,9 @@ export function closeMediaPicker(documentRef = globalThis.document) {
 async function showVisualPicker({ assetType, node, documentRef, mode = "add", privacyMode = false }) {
   closeMediaPicker(documentRef);
   const mediaType = mediaTypeForAsset(assetType);
-  const title = `${mode === "replace" ? "Replace" : "Add"} Timeline ${assetType}`;
-  const okLabel = `${mode === "replace" ? "Replace" : "Add"} ${assetType}`;
+  const isReference = mode === "reference";
+  const title = isReference ? "Add Character Reference" : `${mode === "replace" ? "Replace" : "Add"} Timeline ${assetType}`;
+  const okLabel = isReference ? "Add Reference" : `${mode === "replace" ? "Replace" : "Add"} ${assetType}`;
   const noun = mediaType === "video" ? "videos" : "images";
 
   return new Promise((resolve) => {
@@ -169,9 +170,9 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
       } else if (!visibleItems.length) {
         meta.textContent = `No ${noun} match "${searchInput.value.trim()}".`;
       } else if (query) {
-        meta.textContent = `${visibleItems.length} of ${availableItems.length} ${noun} match. Select one to add.`;
+        meta.textContent = `${visibleItems.length} of ${availableItems.length} ${noun} match. Select one to ${isReference ? "use as a reference" : "add"}.`;
       } else if (!selectedItem) {
-        meta.textContent = `${availableItems.length} ${noun}. Select one to add.`;
+        meta.textContent = `${availableItems.length} ${noun}. Select one to ${isReference ? "use as a reference" : "add"}.`;
       }
       syncGridVisibility();
     };

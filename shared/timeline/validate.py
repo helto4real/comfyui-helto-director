@@ -5,6 +5,7 @@ from typing import Any
 from ..contracts.validation import (
     SEVERITY_ERROR,
     SEVERITY_INFO,
+    SEVERITY_WARNING,
     create_validation_entry,
     create_validation_result,
 )
@@ -17,6 +18,11 @@ from ..contracts.video_timeline import (
 )
 from .gaps import detect_director_gaps
 from .normalize import normalize_video_timeline
+from .references import (
+    REFERENCE_KIND_CHARACTER,
+    get_character_references,
+    parse_reference_tags,
+)
 
 
 def validate_video_timeline(timeline: Any) -> dict:
@@ -27,8 +33,11 @@ def validate_video_timeline(timeline: Any) -> dict:
     assets_by_id = {asset.get("asset_id"): asset for asset in assets}
 
     entries.extend(_validate_assets(assets))
+    references = get_character_references(normalized)
+    entries.extend(_validate_character_references(references))
     sections = normalized["director_track"]["sections"]
     entries.extend(_validate_director_sections(sections, duration, assets_by_id))
+    entries.extend(_validate_prompt_reference_tags(sections, references))
     entries.extend(_gap_entries(normalized))
     entries.extend(_validate_audio_tracks(normalized.get("audio_tracks", []), duration, assets_by_id))
 
@@ -91,6 +100,99 @@ def _validate_assets(assets: list[dict]) -> list[dict]:
                     "Store only a file/source reference and regenerate previews from cache.",
                 )
             )
+    return entries
+
+
+def _validate_character_references(references: list[dict]) -> list[dict]:
+    entries = []
+    seen_labels = set()
+    for reference in references:
+        item_id = reference.get("id") or reference.get("label") or "reference"
+        label = reference.get("label")
+        if label in seen_labels:
+            entries.append(
+                create_validation_entry(
+                    "CHARACTER_REFERENCE_DUPLICATE_LABEL",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "CharacterReference",
+                    item_id,
+                    "Character reference labels must be unique.",
+                    "Rename or remove the duplicate reference so prompt tags are unambiguous.",
+                    {"label": label},
+                )
+            )
+        seen_labels.add(label)
+        if _contains_embedded_media(reference) or _contains_embedded_media(reference.get("image")):
+            entries.append(
+                create_validation_entry(
+                    "CHARACTER_REFERENCE_EMBEDDED_MEDIA_NOT_ALLOWED",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "CharacterReference",
+                    item_id,
+                    "Character references must not embed media, thumbnails, or waveform data in workflow JSON.",
+                    "Store only a file/source reference and regenerate previews from cache.",
+                )
+            )
+        if reference.get("enabled") is not False and not _has_media_reference(reference.get("image")):
+            entries.append(
+                create_validation_entry(
+                    "CHARACTER_REFERENCE_MISSING_IMAGE",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "CharacterReference",
+                    item_id,
+                    "Enabled character reference requires an image.",
+                    "Choose an image, disable the reference, or remove it.",
+                    {"label": label},
+                )
+            )
+    return entries
+
+
+def _validate_prompt_reference_tags(sections: list[dict], references: list[dict]) -> list[dict]:
+    entries = []
+    references_by_label = {
+        reference.get("label"): reference
+        for reference in references
+    }
+    seen_warnings = set()
+    for section in sections:
+        for tag in parse_reference_tags(section.get("prompt")):
+            if tag.get("kind") != REFERENCE_KIND_CHARACTER:
+                continue
+            reference = references_by_label.get(tag["label"])
+            key = (section.get("item_id"), tag["token"])
+            if key in seen_warnings:
+                continue
+            seen_warnings.add(key)
+            if reference is None:
+                entries.append(
+                    create_validation_entry(
+                        "PROMPT_REFERENCE_UNKNOWN",
+                        SEVERITY_WARNING,
+                        "Director",
+                        "Section",
+                        section.get("item_id"),
+                        "Prompt references a missing character reference.",
+                        "Add the referenced character image or remove the tag.",
+                        {"token": tag["token"], "label": tag["label"]},
+                    )
+                )
+            elif reference.get("enabled") is False:
+                entries.append(
+                    create_validation_entry(
+                        "PROMPT_REFERENCE_DISABLED",
+                        SEVERITY_WARNING,
+                        "Director",
+                        "Section",
+                        section.get("item_id"),
+                        "Prompt references a disabled character reference.",
+                        "Enable the reference or remove the tag.",
+                        {"token": tag["token"], "label": tag["label"]},
+                    )
+                )
     return entries
 
 
