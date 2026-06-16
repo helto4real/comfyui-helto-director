@@ -321,28 +321,15 @@ function testWanSegmentedExecutorSplitStepWidgetSync() {
   assert.equal(extensionSource.includes("app.graph?.setDirtyCanvas?.(true, true)"), true);
 }
 
-function testTimelineStatusBarBridgeListensForRuntimeEvents() {
+function testTimelineStatusBarOverlayIsNotInstalled() {
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
 
-  assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), true);
-  assert.equal(extensionSource.includes('const TIMELINE_STATUS_EVENT = "helto_timeline_status"'), true);
-  assert.equal(extensionSource.includes("installTimelineStatusBarBridge(api)"), true);
-  assert.equal(
-    extensionSource.indexOf('const TIMELINE_STATUS_EVENT = "helto_timeline_status"') <
-      extensionSource.indexOf("installTimelineStatusBarBridge(api)"),
-    true,
-  );
-  assert.equal(extensionSource.includes("apiRef.addEventListener?.(TIMELINE_STATUS_EVENT"), true);
-  assert.equal(extensionSource.includes('apiRef.addEventListener?.("executing"'), true);
-  assert.equal(extensionSource.includes("latestByNodeId: new Map()"), true);
-  assert.equal(extensionSource.includes("normalizeTimelineStatusPayload"), true);
-  assert.equal(extensionSource.includes("payload.label.trim()"), true);
-  assert.equal(extensionSource.includes("path"), false);
-  assert.equal(extensionSource.includes("prompt"), false);
-  assert.equal(extensionSource.includes(".helto-timeline-status-bar-bridge"), true);
-  assert.equal(extensionSource.includes('overlay.setAttribute("aria-live", "polite")'), true);
-  assert.equal(extensionSource.includes('payload.stage === "timeline.done"'), true);
-  assert.equal(extensionSource.includes("TIMELINE_STATUS_STALE_MS"), true);
+  assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), false);
+  assert.equal(extensionSource.includes("installTimelineStatusBarBridge"), false);
+  assert.equal(extensionSource.includes("helto-timeline-status-bar-bridge"), false);
+  assert.equal(extensionSource.includes('apiRef.addEventListener?.("progress_state"'), false);
+  assert.equal(extensionSource.includes("latestByNodeId: new Map()"), false);
+  assert.equal(extensionSource.includes("aliasesByNodeId: new Map()"), false);
 }
 
 function testRendererUsesRealWaveformsOnly() {
@@ -453,7 +440,7 @@ testSharedMediaPreviewSupportsVideoControls();
 testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
 testWanSegmentedExecutorSplitStepWidgetSync();
-testTimelineStatusBarBridgeListensForRuntimeEvents();
+testTimelineStatusBarOverlayIsNotInstalled();
 testRendererUsesRealWaveformsOnly();
 testWaveformHelpersAdaptAndTrimPeaks();
 testViewportMeasurementIgnoresCollapsedChildWidth();
