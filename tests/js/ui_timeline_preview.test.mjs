@@ -267,7 +267,11 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes('const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer"'), true);
   assert.equal(rendererSource.includes('const referenceManagerButton = iconButton("references", "Manage Character References"'), true);
   assert.equal(rendererSource.includes('const referencePresentButton = iconButton("reference-active"'), true);
-  assert.equal(rendererSource.includes("referencePresentButton.classList.toggle(\"is-active\", referenceCount > 0)"), true);
+  assert.equal(rendererSource.includes("const referencesEnabled = areCharacterReferencesEnabled(this.controller.timeline)"), true);
+  assert.equal(rendererSource.includes("() => this.toggleCharacterReferences()"), true);
+  assert.equal(rendererSource.includes("{ disabled: referenceCount === 0 }"), true);
+  assert.equal(rendererSource.includes("referencePresentButton.classList.toggle(\"is-active\", referenceCount > 0 && referencesEnabled)"), true);
+  assert.equal(rendererSource.includes("timeline.project.metadata.character_references_enabled = !areCharacterReferencesEnabled(timeline)"), true);
   assert.equal(rendererSource.includes("this.renderReferenceManager(timeline)"), true);
   assert.equal(rendererSource.includes('mode: "reference"'), true);
   assert.equal(rendererSource.includes("input.dataset.referenceTrigger = PROMPT_REFERENCE_TRIGGER"), true);

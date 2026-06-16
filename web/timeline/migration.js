@@ -92,6 +92,7 @@ function normalizeProjectMetadata(timeline) {
   project.metadata = project.metadata && typeof project.metadata === "object" && !Array.isArray(project.metadata)
     ? project.metadata
     : {};
+  project.metadata.character_references_enabled = project.metadata.character_references_enabled !== false;
   project.metadata.character_references = normalizeCharacterReferences(project.metadata.character_references);
 }
 

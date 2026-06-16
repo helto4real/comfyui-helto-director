@@ -3,6 +3,7 @@ import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
 import { addSection } from "../../web/timeline/operations.js";
 import {
   addCharacterReference,
+  areCharacterReferencesEnabled,
   formatCharacterReferenceTag,
   getCharacterReferences,
   getReferencePromptCompletions,
@@ -25,6 +26,8 @@ function testDefaultTimelineHasEmptyCharacterReferences() {
   const timeline = createDefaultVideoTimeline();
 
   assert.deepEqual(timeline.project.metadata.character_references, []);
+  assert.equal(timeline.project.metadata.character_references_enabled, true);
+  assert.equal(areCharacterReferencesEnabled(timeline), true);
   assert.deepEqual(getCharacterReferences(timeline), []);
 }
 
@@ -63,6 +66,17 @@ function testReferenceTagParsingAndCompletions() {
     description: "black bob haircut and red jacket",
     trigger: "@",
   });
+}
+
+function testGlobalReferenceToggleDisablesCompletions() {
+  const timeline = createDefaultVideoTimeline();
+  addCharacterReference(timeline, pickedItem("/media/hero.png", "hero.png"));
+
+  assert.equal(getReferencePromptCompletions(timeline).length, 1);
+  timeline.project.metadata.character_references_enabled = false;
+
+  assert.equal(areCharacterReferencesEnabled(timeline), false);
+  assert.deepEqual(getReferencePromptCompletions(timeline), []);
 }
 
 function testReferenceValidation() {
@@ -111,10 +125,27 @@ function testPromptReferenceWarnings() {
   assert.equal(warningCodes.includes("PROMPT_REFERENCE_UNKNOWN"), true);
 }
 
+function testGlobalReferenceToggleWarningsAreDisabled() {
+  const timeline = createDefaultVideoTimeline();
+  addCharacterReference(timeline, pickedItem("/media/hero.png", "hero.png"));
+  timeline.project.metadata.character_references_enabled = false;
+  const section = addSection(timeline, "Text", 0);
+  section.prompt = "@image1:character and @image2:character walking forward";
+
+  const validation = validateVideoTimeline(timeline);
+  const warningCodes = validation.warnings.map((entry) => entry.code);
+
+  assert.equal(validation.errors.length, 0);
+  assert.equal(warningCodes.filter((code) => code === "PROMPT_REFERENCE_DISABLED").length, 2);
+  assert.equal(warningCodes.includes("PROMPT_REFERENCE_UNKNOWN"), false);
+}
+
 testDefaultTimelineHasEmptyCharacterReferences();
 testAddRemoveReferenceDoesNotCreateTimelineMedia();
 testReferenceTagParsingAndCompletions();
+testGlobalReferenceToggleDisablesCompletions();
 testReferenceValidation();
 testPromptReferenceWarnings();
+testGlobalReferenceToggleWarningsAreDisabled();
 
 console.log("phase17 character reference tests passed");

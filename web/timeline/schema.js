@@ -143,6 +143,7 @@ export function createDefaultVideoTimeline() {
         show_audio_waveforms: true,
       },
       metadata: {
+        character_references_enabled: true,
         character_references: [],
       },
     },

@@ -23,6 +23,15 @@ def get_character_references(timeline: dict[str, Any]) -> list[dict[str, Any]]:
     return references if isinstance(references, list) else []
 
 
+def are_character_references_enabled(timeline: dict[str, Any]) -> bool:
+    return (
+        timeline.get("project", {})
+        .get("metadata", {})
+        .get("character_references_enabled")
+        is not False
+    )
+
+
 def normalize_character_references(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []

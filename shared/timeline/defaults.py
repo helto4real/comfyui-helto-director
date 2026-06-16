@@ -67,6 +67,7 @@ def create_default_video_timeline() -> dict:
                 "show_audio_waveforms": True,
             },
             "metadata": {
+                "character_references_enabled": True,
                 "character_references": [],
             },
         },

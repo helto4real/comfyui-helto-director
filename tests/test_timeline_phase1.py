@@ -36,6 +36,7 @@ def test_create_default_video_timeline_shape():
     assert timeline["project"]["audio"]["use_native_audio"] is False
     assert timeline["project"]["privacy"] == {"mode": False}
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
+    assert timeline["project"]["metadata"]["character_references_enabled"] is True
     assert timeline["project"]["metadata"]["character_references"] == []
     assert timeline["ui_state"]["view_start_seconds"] == 0
     assert timeline["ui_state"]["view_end_seconds"] == 5
@@ -159,6 +160,7 @@ def test_character_reference_metadata_normalizes():
     normalized = normalize_video_timeline(timeline)
     reference = normalized["project"]["metadata"]["character_references"][0]
 
+    assert normalized["project"]["metadata"]["character_references_enabled"] is True
     assert reference["id"] == "image1"
     assert reference["label"] == "image1"
     assert reference["kind"] == "character"
@@ -218,6 +220,38 @@ def test_character_reference_validation_and_prompt_warnings():
     assert "CHARACTER_REFERENCE_EMBEDDED_MEDIA_NOT_ALLOWED" in error_codes
     assert "CHARACTER_REFERENCE_MISSING_IMAGE" in error_codes
     assert "PROMPT_REFERENCE_UNKNOWN" in warning_codes
+
+
+def test_character_reference_global_toggle_warns_disabled_not_unknown():
+    timeline = create_default_video_timeline()
+    timeline["project"]["metadata"]["character_references_enabled"] = False
+    timeline["project"]["metadata"]["character_references"] = [
+        {
+            "id": "ref_1",
+            "label": "image1",
+            "kind": "character",
+            "enabled": True,
+            "description": "",
+            "strength": 1.0,
+            "image": {"path": "/mnt/media/hero.png"},
+        },
+    ]
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "@image1:character and @image2:character",
+        }
+    )
+
+    validation = validate_video_timeline(timeline)
+    warning_codes = [entry["code"] for entry in validation["warnings"]]
+
+    assert validation["errors"] == []
+    assert warning_codes.count("PROMPT_REFERENCE_DISABLED") == 2
+    assert "PROMPT_REFERENCE_UNKNOWN" not in warning_codes
 
 
 def test_text_section_empty_prompt_gives_error():

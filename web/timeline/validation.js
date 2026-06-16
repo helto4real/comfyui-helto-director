@@ -9,6 +9,7 @@ import { normalizeVideoTimeline } from "./migration.js";
 import { containsEmbeddedMedia } from "./media.js";
 import {
   REFERENCE_KIND_CHARACTER,
+  areCharacterReferencesEnabled,
   getCharacterReferences,
   parseReferenceTags,
 } from "./references.js";
@@ -128,7 +129,7 @@ export function validateVideoTimeline(timeline) {
     }
   }
 
-  entries.push(...validatePromptReferenceTags(sections, getCharacterReferences(normalized)));
+  entries.push(...validatePromptReferenceTags(sections, getCharacterReferences(normalized), areCharacterReferencesEnabled(normalized)));
 
   for (const track of normalized.audio_tracks) {
     const lanes = new Map();
@@ -238,7 +239,7 @@ function validateCharacterReferences(references) {
   return entries;
 }
 
-function validatePromptReferenceTags(sections, references) {
+function validatePromptReferenceTags(sections, references, referencesEnabled) {
   const entries = [];
   const referencesByLabel = new Map(references.map((reference) => [reference.label, reference]));
   const seenWarnings = new Set();
@@ -250,7 +251,18 @@ function validatePromptReferenceTags(sections, references) {
       const key = `${section.item_id}:${tag.token}`;
       if (seenWarnings.has(key)) continue;
       seenWarnings.add(key);
-      if (!reference) {
+      if (!referencesEnabled) {
+        entries.push(createValidationEntry(
+          "PROMPT_REFERENCE_DISABLED",
+          "Warning",
+          "Director",
+          "Section",
+          section.item_id,
+          "Prompt references are currently disabled.",
+          "Turn on character references or remove the tag.",
+          { token: tag.token, label: tag.label, global_disabled: true },
+        ));
+      } else if (!reference) {
         entries.push(createValidationEntry(
           "PROMPT_REFERENCE_UNKNOWN",
           "Warning",

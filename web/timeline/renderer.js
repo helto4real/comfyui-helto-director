@@ -27,6 +27,7 @@ import { showPromptOptimizer } from "./prompt_optimizer.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
   addCharacterReference,
+  areCharacterReferencesEnabled,
   ensureCharacterReferences,
   formatCharacterReferenceTag,
   getCharacterReferences,
@@ -187,12 +188,18 @@ export class TimelineRenderer {
     const toolbar = el("div", "htd-toolbar");
     const hasOverflow = hasDirectorSectionOverflow(this.controller.timeline);
     const referenceCount = getCharacterReferences(this.controller.timeline).length;
+    const referencesEnabled = areCharacterReferencesEnabled(this.controller.timeline);
     const settingsButton = iconButton("settings", "Project Settings", () => {
       this.settingsOpen = true;
       this.render();
     });
     const referenceManagerButton = iconButton("references", "Manage Character References", () => this.openReferenceManager());
-    const referencePresentButton = iconButton("reference-active", referenceCount ? `${referenceCount} Character References` : "No Character References", () => this.openReferenceManager());
+    const referenceToggleTitle = referenceCount
+      ? referencesEnabled
+        ? `${referenceCount} Character References Enabled`
+        : `${referenceCount} Character References Disabled`
+      : "No Character References";
+    const referencePresentButton = iconButton("reference-active", referenceToggleTitle, () => this.toggleCharacterReferences(), { disabled: referenceCount === 0 });
     const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer", () => this.openPromptOptimizer());
     const repairButtons = hasOverflow
       ? [
@@ -207,7 +214,8 @@ export class TimelineRenderer {
     promptOptimizerButton.classList.add("htd-prompt-optimizer-button");
     referenceManagerButton.classList.add("htd-reference-manager-button");
     referencePresentButton.classList.add("htd-reference-present-button");
-    referencePresentButton.classList.toggle("is-active", referenceCount > 0);
+    referencePresentButton.classList.toggle("is-active", referenceCount > 0 && referencesEnabled);
+    referencePresentButton.setAttribute("aria-pressed", referenceCount > 0 && referencesEnabled ? "true" : "false");
     settingsButton.classList.add("htd-settings-button");
     toolbar.append(
       iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
@@ -862,6 +870,15 @@ export class TimelineRenderer {
     this.referencesOpen = false;
     if (this.privacyExternalModalOpen) this.privacyExternalModalOpen = false;
     this.render();
+  }
+
+  toggleCharacterReferences() {
+    if (getCharacterReferences(this.controller.timeline).length === 0) return;
+    this.commitMutation((timeline) => {
+      timeline.project ??= {};
+      timeline.project.metadata ??= {};
+      timeline.project.metadata.character_references_enabled = !areCharacterReferencesEnabled(timeline);
+    }, "toggle character references");
   }
 
   async openReferenceImagePicker() {

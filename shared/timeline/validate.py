@@ -20,6 +20,7 @@ from .gaps import detect_director_gaps
 from .normalize import normalize_video_timeline
 from .references import (
     REFERENCE_KIND_CHARACTER,
+    are_character_references_enabled,
     get_character_references,
     parse_reference_tags,
 )
@@ -37,7 +38,13 @@ def validate_video_timeline(timeline: Any) -> dict:
     entries.extend(_validate_character_references(references))
     sections = normalized["director_track"]["sections"]
     entries.extend(_validate_director_sections(sections, duration, assets_by_id))
-    entries.extend(_validate_prompt_reference_tags(sections, references))
+    entries.extend(
+        _validate_prompt_reference_tags(
+            sections,
+            references,
+            are_character_references_enabled(normalized),
+        )
+    )
     entries.extend(_gap_entries(normalized))
     entries.extend(_validate_audio_tracks(normalized.get("audio_tracks", []), duration, assets_by_id))
 
@@ -151,7 +158,11 @@ def _validate_character_references(references: list[dict]) -> list[dict]:
     return entries
 
 
-def _validate_prompt_reference_tags(sections: list[dict], references: list[dict]) -> list[dict]:
+def _validate_prompt_reference_tags(
+    sections: list[dict],
+    references: list[dict],
+    references_enabled: bool,
+) -> list[dict]:
     entries = []
     references_by_label = {
         reference.get("label"): reference
@@ -167,7 +178,24 @@ def _validate_prompt_reference_tags(sections: list[dict], references: list[dict]
             if key in seen_warnings:
                 continue
             seen_warnings.add(key)
-            if reference is None:
+            if not references_enabled:
+                entries.append(
+                    create_validation_entry(
+                        "PROMPT_REFERENCE_DISABLED",
+                        SEVERITY_WARNING,
+                        "Director",
+                        "Section",
+                        section.get("item_id"),
+                        "Prompt references are currently disabled.",
+                        "Turn on character references or remove the tag.",
+                        {
+                            "token": tag["token"],
+                            "label": tag["label"],
+                            "global_disabled": True,
+                        },
+                    )
+                )
+            elif reference is None:
                 entries.append(
                     create_validation_entry(
                         "PROMPT_REFERENCE_UNKNOWN",

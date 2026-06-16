@@ -70,6 +70,9 @@ def _normalize_project_metadata(timeline: dict) -> None:
     metadata = project.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
+    metadata["character_references_enabled"] = (
+        metadata.get("character_references_enabled") is not False
+    )
     metadata["character_references"] = normalize_character_references(
         metadata.get("character_references")
     )

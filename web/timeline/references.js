@@ -14,7 +14,12 @@ export function getCharacterReferences(timeline) {
   return Array.isArray(references) ? references : [];
 }
 
+export function areCharacterReferencesEnabled(timeline) {
+  return timeline?.project?.metadata?.character_references_enabled !== false;
+}
+
 export function activeCharacterReferences(timeline) {
+  if (!areCharacterReferencesEnabled(timeline)) return [];
   return getCharacterReferences(timeline).filter((reference) => reference.enabled !== false);
 }
 
@@ -83,6 +88,7 @@ export function ensureCharacterReferences(timeline) {
   timeline.project.metadata = timeline.project.metadata && typeof timeline.project.metadata === "object" && !Array.isArray(timeline.project.metadata)
     ? timeline.project.metadata
     : {};
+  timeline.project.metadata.character_references_enabled = timeline.project.metadata.character_references_enabled !== false;
   timeline.project.metadata.character_references = normalizeCharacterReferences(timeline.project.metadata.character_references);
   return timeline.project.metadata.character_references;
 }
