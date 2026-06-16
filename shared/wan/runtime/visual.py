@@ -22,6 +22,7 @@ def apply_comfy_core_visual_keyframes(
     batch_size: int,
     latent_spec: dict[str, Any],
     model_mode: str = "I2V-A14B",
+    config: dict[str, Any] | None = None,
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     applied = visual.get("applied_keyframes") or []
     start_keyframe = next((entry for entry in applied if entry.get("role") == "Start"), None)
@@ -47,6 +48,19 @@ def apply_comfy_core_visual_keyframes(
             latent_spec,
             model_mode,
         )
+        painter_debug = apply_painter_motion_boost(
+            positive,
+            negative,
+            latent,
+            vae,
+            width,
+            height,
+            frame_count,
+            transient_start,
+            None,
+            config,
+            helper_name,
+        )
         diagnostics.append("WAN continuation segment used the previous decoded tail as transient start image.")
         if start_keyframe or end_keyframe:
             diagnostics.append("WAN continuation tail overrode copied visual keyframes for this segment.")
@@ -64,6 +78,7 @@ def apply_comfy_core_visual_keyframes(
             "media_decisions": media_decisions,
             "diagnostics": diagnostics,
             "core_helper": helper_name,
+            "painter_motion_boost": painter_debug,
         }
     if not start_keyframe and not end_keyframe:
         diagnostics.append("No WAN visual keyframes were applied by the ComfyUI Core backend.")
@@ -82,6 +97,7 @@ def apply_comfy_core_visual_keyframes(
             "unsupported_keyframes": visual.get("unsupported_keyframes", []),
             "media_decisions": media_decisions,
             "diagnostics": diagnostics,
+            "painter_motion_boost": _painter_debug_off(config),
         }
 
     start_image = load_keyframe_image(start_keyframe, width, height, media_decisions, resize=False) if start_keyframe else None
@@ -99,6 +115,19 @@ def apply_comfy_core_visual_keyframes(
         latent_spec,
         model_mode,
     )
+    painter_debug = apply_painter_motion_boost(
+        positive,
+        negative,
+        latent,
+        vae,
+        width,
+        height,
+        frame_count,
+        start_image,
+        end_image,
+        config,
+        helper_name,
+    )
     diagnostics.append(f"ComfyUI Core visual helper used: {helper_name}.")
     return positive, negative, latent, {
         "applied_keyframes": applied,
@@ -106,6 +135,7 @@ def apply_comfy_core_visual_keyframes(
         "media_decisions": media_decisions,
         "diagnostics": diagnostics,
         "core_helper": helper_name,
+        "painter_motion_boost": painter_debug,
     }
 
 
@@ -237,6 +267,230 @@ def execute_comfy_core_text_to_video_latent(
         start_image=None,
     )
     return _node_output_args(output)
+
+
+def apply_painter_motion_boost(
+    positive,
+    negative,
+    latent: dict[str, Any],
+    vae,
+    width: int,
+    height: int,
+    frame_count: int,
+    start_image,
+    end_image,
+    config: dict[str, Any] | None,
+    helper_name: str,
+) -> dict[str, Any]:
+    mode = str((config or {}).get("painter_motion_boost") or "Off")
+    amplitude = _painter_amplitude(config)
+    debug = {
+        "mode": mode if mode in {"Off", "Auto"} else "Off",
+        "status": "off",
+        "algorithm": None,
+        "amplitude": amplitude,
+        "helper": helper_name,
+        "input_frame_count": int(start_image.shape[0]) if hasattr(start_image, "shape") else 0,
+        "protected_chunk_count": 0,
+    }
+    if debug["mode"] != "Auto":
+        return debug
+    debug["status"] = "skipped"
+    if amplitude <= 1.0:
+        debug["reason"] = "amplitude_at_or_below_one"
+        return debug
+    if start_image is None or not hasattr(start_image, "shape") or int(start_image.shape[0]) <= 0:
+        debug["reason"] = "missing_start_image"
+        return debug
+
+    if helper_name == "Wan22ImageToVideoLatent":
+        applied = _apply_painter_boost_to_wan22_latent(latent, vae, width, height, frame_count, start_image, end_image, amplitude, debug)
+    else:
+        applied = _apply_painter_boost_to_conditioning(positive, negative, start_image, end_image, amplitude, debug)
+    if not applied:
+        debug.setdefault("reason", "unsupported_helper_or_missing_latent")
+    return debug
+
+
+def _apply_painter_boost_to_conditioning(positive, negative, start_image, end_image, amplitude: float, debug: dict[str, Any]) -> bool:
+    concat_latent = _conditioning_value(positive, "concat_latent_image")
+    if concat_latent is None or not hasattr(concat_latent, "shape") or int(concat_latent.shape[2]) <= 1:
+        return False
+    boosted, details = _boost_concat_latent(concat_latent, start_image, end_image, amplitude)
+    if boosted is None:
+        debug.update(details)
+        return False
+    _replace_conditioning_value(positive, "concat_latent_image", boosted)
+    _replace_conditioning_value(negative, "concat_latent_image", boosted)
+    debug.update(details)
+    debug["status"] = "applied"
+    return True
+
+
+def _apply_painter_boost_to_wan22_latent(
+    latent: dict[str, Any],
+    vae,
+    width: int,
+    height: int,
+    frame_count: int,
+    start_image,
+    end_image,
+    amplitude: float,
+    debug: dict[str, Any],
+) -> bool:
+    samples = latent.get("samples") if isinstance(latent, dict) else None
+    if samples is None or not hasattr(samples, "shape") or int(samples.shape[2]) <= 1:
+        return False
+    if end_image is not None:
+        debug["reason"] = "wan22_first_last_boost_deferred"
+        return False
+    reference = _encode_painter_reference_latent(vae, width, height, frame_count, start_image, samples)
+    if reference is None or reference.shape != samples[:1].shape:
+        debug["reason"] = "reference_latent_shape_mismatch"
+        return False
+    boosted, details = _boost_concat_latent(reference, start_image, None, amplitude)
+    if boosted is None:
+        debug.update(details)
+        return False
+    mask = latent.get("noise_mask")
+    if mask is not None and hasattr(mask, "shape") and mask.shape[2] == samples.shape[2]:
+        generated_mask = mask.to(device=samples.device, dtype=samples.dtype)
+        while generated_mask.ndim < samples.ndim:
+            generated_mask = generated_mask.unsqueeze(1)
+        latent["samples"] = samples * (1.0 - generated_mask) + boosted.to(device=samples.device, dtype=samples.dtype).repeat((samples.shape[0],) + (1,) * (boosted.ndim - 1)) * generated_mask
+    else:
+        protected = int(details.get("protected_chunk_count") or 0)
+        next_samples = samples.clone()
+        next_samples[:, :, protected:] = boosted.to(device=samples.device, dtype=samples.dtype).repeat((samples.shape[0],) + (1,) * (boosted.ndim - 1))[:, :, protected:]
+        latent["samples"] = next_samples
+    debug.update(details)
+    debug["status"] = "applied"
+    return True
+
+
+def _boost_concat_latent(concat_latent: torch.Tensor, start_image, end_image, amplitude: float) -> tuple[torch.Tensor | None, dict[str, Any]]:
+    details = {
+        "algorithm": "painter_flf2v" if end_image is not None else "painter_i2v",
+        "protected_chunk_count": _latent_chunk_count_for_frames(int(start_image.shape[0])),
+    }
+    latent_frames = int(concat_latent.shape[2])
+    start_chunks = min(latent_frames, _latent_chunk_count_for_frames(int(start_image.shape[0])))
+    if end_image is not None and hasattr(end_image, "shape") and int(end_image.shape[0]) > 0:
+        end_chunks = min(latent_frames - start_chunks, _latent_chunk_count_for_frames(int(end_image.shape[0])))
+        details["protected_chunk_count"] = start_chunks + end_chunks
+        boosted = _boost_first_last_latent(concat_latent, start_chunks, end_chunks, amplitude)
+    else:
+        end_chunks = 0
+        boosted = _boost_i2v_latent(concat_latent, start_chunks, amplitude)
+    if boosted is None:
+        return None, details | {"reason": "no_generated_chunks_to_boost"}
+    details["start_protected_chunk_count"] = start_chunks
+    details["end_protected_chunk_count"] = end_chunks
+    return boosted, details
+
+
+def _boost_i2v_latent(concat_latent: torch.Tensor, protected_chunks: int, amplitude: float) -> torch.Tensor | None:
+    if protected_chunks >= int(concat_latent.shape[2]):
+        return None
+    base_latent = concat_latent[:, :, protected_chunks - 1:protected_chunks] if protected_chunks > 0 else concat_latent[:, :, 0:1]
+    motion_latent = concat_latent[:, :, protected_chunks:]
+    diff = motion_latent - base_latent
+    diff_mean = diff.mean(dim=(1, 3, 4), keepdim=True)
+    diff_centered = diff - diff_mean
+    scaled = torch.clamp(base_latent + diff_centered * amplitude + diff_mean, -6, 6)
+    boosted = concat_latent.clone()
+    boosted[:, :, protected_chunks:] = scaled
+    return boosted
+
+
+def _boost_first_last_latent(concat_latent: torch.Tensor, start_chunks: int, end_chunks: int, amplitude: float) -> torch.Tensor | None:
+    latent_frames = int(concat_latent.shape[2])
+    middle_start = max(0, start_chunks)
+    middle_end = max(middle_start, latent_frames - end_chunks)
+    if middle_start >= middle_end:
+        return None
+    start_l = concat_latent[:, :, max(0, start_chunks - 1):max(1, start_chunks)]
+    end_l = concat_latent[:, :, latent_frames - end_chunks:latent_frames - end_chunks + 1] if end_chunks > 0 else concat_latent[:, :, -1:]
+    t = torch.linspace(0.0, 1.0, latent_frames, device=concat_latent.device, dtype=concat_latent.dtype).view(1, 1, -1, 1, 1)
+    linear_latent = start_l * (1 - t) + end_l * t
+    diff = concat_latent - linear_latent
+    high_freq_diff = _high_frequency_latent(diff)
+    boosted = concat_latent.clone()
+    boost_scale = (amplitude - 1.0) * 4.0
+    boosted[:, :, middle_start:middle_end] = concat_latent[:, :, middle_start:middle_end] + high_freq_diff[:, :, middle_start:middle_end] * boost_scale
+    return boosted
+
+
+def _high_frequency_latent(diff: torch.Tensor) -> torch.Tensor:
+    h = int(diff.shape[-2])
+    w = int(diff.shape[-1])
+    low_h = max(1, h // 8)
+    low_w = max(1, w // 8)
+    low_freq = torch.nn.functional.interpolate(diff.reshape(-1, diff.shape[1], h, w), size=(low_h, low_w), mode="area")
+    low_freq = torch.nn.functional.interpolate(low_freq, size=(h, w), mode="bilinear", align_corners=False)
+    return diff - low_freq.reshape_as(diff)
+
+
+def _encode_painter_reference_latent(vae, width: int, height: int, frame_count: int, start_image, samples: torch.Tensor) -> torch.Tensor | None:
+    try:
+        if int(start_image.shape[1]) != height or int(start_image.shape[2]) != width:
+            start_image = resize_image_tensor(start_image, width, height)
+        image = torch.ones((max(1, frame_count), height, width, 3), device=start_image.device, dtype=start_image.dtype) * 0.5
+        image[: min(int(start_image.shape[0]), frame_count)] = start_image[:frame_count]
+        encoded = vae.encode(image[:, :, :, :3])
+    except Exception:
+        return None
+    if encoded.shape[-3:] != samples.shape[-3:] or int(encoded.shape[1]) != int(samples.shape[1]):
+        return None
+    return encoded.to(device=samples.device, dtype=samples.dtype)
+
+
+def _painter_amplitude(config: dict[str, Any] | None) -> float:
+    try:
+        return min(2.0, max(1.0, float((config or {}).get("painter_motion_amplitude", 1.15))))
+    except (TypeError, ValueError):
+        return 1.15
+
+
+def _painter_debug_off(config: dict[str, Any] | None) -> dict[str, Any]:
+    mode = str((config or {}).get("painter_motion_boost") or "Off")
+    return {
+        "mode": mode if mode in {"Off", "Auto"} else "Off",
+        "status": "off" if mode != "Auto" else "skipped",
+        "algorithm": None,
+        "amplitude": _painter_amplitude(config),
+        "helper": None,
+        "input_frame_count": 0,
+        "protected_chunk_count": 0,
+        "reason": "no_visual_conditioning",
+    }
+
+
+def _latent_chunk_count_for_frames(frame_count: int) -> int:
+    return max(1, ((max(1, int(frame_count)) - 1) // 4) + 1)
+
+
+def _conditioning_value(conditioning, key: str):
+    if not isinstance(conditioning, (list, tuple)):
+        return None
+    for item in conditioning:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        _tensor, metadata = item[0], item[1]
+        if isinstance(metadata, dict) and key in metadata:
+            return metadata[key]
+    return None
+
+
+def _replace_conditioning_value(conditioning, key: str, value) -> None:
+    if not isinstance(conditioning, (list, tuple)):
+        return
+    for item in conditioning:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        _tensor, metadata = item[0], item[1]
+        if isinstance(metadata, dict) and key in metadata:
+            metadata[key] = value
 
 
 def load_keyframe_image(

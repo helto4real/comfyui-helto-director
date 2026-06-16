@@ -6,8 +6,10 @@ from ...shared.wan.config import (
     BERNINI_TASK_PROMPT_MODES,
     DEBUG_MODES,
     DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
+    DEFAULT_PAINTER_MOTION_AMPLITUDE,
     GAP_POLICIES,
     MODEL_MODES,
+    PAINTER_MOTION_BOOST_MODES,
     PROMPT_ROUTING_MODES,
     RESOLUTION_PROFILE_AUTO,
     RESOLUTION_PROFILES,
@@ -140,6 +142,23 @@ class WANTimelineConfig(io.ComfyNode):
                     default=str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
                     socketless=True,
                 ),
+                io.Combo.Input(
+                    "painter_motion_boost",
+                    display_name="Painter Motion Boost",
+                    options=list(PAINTER_MOTION_BOOST_MODES),
+                    default="Off",
+                    socketless=True,
+                ),
+                io.Float.Input(
+                    "painter_motion_amplitude",
+                    display_name="Painter Motion Amplitude",
+                    default=DEFAULT_PAINTER_MOTION_AMPLITUDE,
+                    min=1.0,
+                    max=2.0,
+                    step=0.05,
+                    round=0.01,
+                    socketless=True,
+                ),
             ],
             outputs=[
                 WAN_TIMELINE_CONFIG.Output(
@@ -167,6 +186,8 @@ class WANTimelineConfig(io.ComfyNode):
         vram_unload_policy: str = "Off",
         debug_mode: str = "Off",
         segment_continuity_tail_frames: str = str(DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES),
+        painter_motion_boost: str = "Off",
+        painter_motion_amplitude: float = DEFAULT_PAINTER_MOTION_AMPLITUDE,
     ) -> io.NodeOutput:
         config = create_wan_timeline_config(
             resolution_profile=resolution_profile,
@@ -184,5 +205,7 @@ class WANTimelineConfig(io.ComfyNode):
             segment_continuity_tail_frames=segment_continuity_tail_frames,
             vram_unload_policy=vram_unload_policy,
             debug_mode=debug_mode,
+            painter_motion_boost=painter_motion_boost,
+            painter_motion_amplitude=painter_motion_amplitude,
         )
         return io.NodeOutput(config)

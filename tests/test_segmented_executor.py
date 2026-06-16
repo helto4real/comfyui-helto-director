@@ -259,12 +259,14 @@ def test_wan_visual_prefers_continuation_tail_over_stale_start_keyframe(monkeypa
         batch_size=1,
         latent_spec={},
         model_mode="I2V-A14B",
+        config={"painter_motion_boost": "Auto", "painter_motion_amplitude": 1.4},
     )
 
     assert calls[0][7] is tail
     assert calls[0][8] is None
     assert debug["applied_keyframes"] == [{"role": "Start", "section_id": "segment_previous_tail", "transient": True}]
     assert debug["media_decisions"][0]["section_id"] == "segment_previous_tail"
+    assert debug["painter_motion_boost"]["input_frame_count"] == 5
     assert any("overrode copied visual keyframes" in item for item in debug["diagnostics"])
 
 

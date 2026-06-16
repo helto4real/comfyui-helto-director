@@ -175,9 +175,15 @@ def build_wan_runtime_outputs(
             batch_size,
             latent_spec,
             str(config.get("model_mode") or "I2V-A14B"),
+            config,
         )
     diagnostics.extend(guide_debug.get("diagnostics", []))
     media_decisions.extend(guide_debug.get("media_decisions", []))
+    if guide_debug.get("painter_motion_boost") is not None:
+        visual = {
+            **visual,
+            "painter_motion_boost": guide_debug.get("painter_motion_boost"),
+        }
     if guide_debug.get("core_helper") and not any(
         decision.get("helper") == guide_debug["core_helper"]
         for decision in media_decisions

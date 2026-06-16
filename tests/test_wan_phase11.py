@@ -123,6 +123,11 @@ def test_wan_nodes_register_with_custom_sockets_and_mappings():
     tail_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_continuity_tail_frames")
     assert tail_input.options == ["1", "5", "9"]
     assert tail_input.default == "5"
+    painter_boost_input = next(input_item for input_item in config_schema.inputs if input_item.id == "painter_motion_boost")
+    painter_amplitude_input = next(input_item for input_item in config_schema.inputs if input_item.id == "painter_motion_amplitude")
+    assert painter_boost_input.options == ["Off", "Auto"]
+    assert painter_boost_input.default == "Off"
+    assert painter_amplitude_input.default == 1.15
     executor_input_ids = [input_item.id for input_item in executor_schema.inputs]
     assert "phase_split_step" in executor_input_ids
     assert "phase_split_percent" not in executor_input_ids
@@ -156,6 +161,8 @@ def test_wan_config_defaults_include_skeleton_rules():
     assert config["max_generation_duration"] == 0.0
     assert config["segment_continuity_tail_frames"] == 5
     assert config["vram_unload_policy"] == "Off"
+    assert config["painter_motion_boost"] == "Off"
+    assert config["painter_motion_amplitude"] == 1.15
     assert config["rules"] == {
         "divisible_by": 16,
         "frame_rule": "4n+1 latent chunks",
@@ -193,6 +200,34 @@ def test_wan_config_normalizes_segment_continuity_tail_frames():
     assert normalized["segment_continuity_tail_frames"] == 9
     assert fallback["segment_continuity_tail_frames"] == 5
     assert legacy["segment_continuity_tail_frames"] == 5
+
+
+def test_wan_config_normalizes_painter_motion_boost():
+    normalized = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "painter_motion_boost": "Auto",
+        "painter_motion_amplitude": 1.8,
+    })
+    low = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "painter_motion_boost": "Unexpected",
+        "painter_motion_amplitude": 0.25,
+    })
+    high = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "painter_motion_amplitude": 5.0,
+    })
+    invalid = normalize_wan_timeline_config({
+        "type": "WAN_TIMELINE_CONFIG",
+        "painter_motion_amplitude": "bad",
+    })
+
+    assert normalized["painter_motion_boost"] == "Auto"
+    assert normalized["painter_motion_amplitude"] == 1.8
+    assert low["painter_motion_boost"] == "Off"
+    assert low["painter_motion_amplitude"] == 1.0
+    assert high["painter_motion_amplitude"] == 2.0
+    assert invalid["painter_motion_amplitude"] == 1.15
 
 
 def test_wan_config_node_keeps_old_vram_and_debug_widget_positions():

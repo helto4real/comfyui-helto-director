@@ -92,6 +92,7 @@ def build_runtime_debug(
             "applied_keyframes": deepcopy(visual.get("applied_keyframes") or []),
             "unsupported_keyframes": deepcopy(visual.get("unsupported_keyframes") or []),
             "selected_primary_image": _selected_primary_image(visual),
+            "painter_motion_boost": deepcopy(visual.get("painter_motion_boost") or {}),
         },
         "prompt_relay": deepcopy(prompt_debug),
         "bernini": bernini,

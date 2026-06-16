@@ -94,6 +94,7 @@ def test_phase16_comfyui_core_applies_one_start_image_with_real_core_helper(tmp_
     assert runtime_debug["output_payload_type"] == "COMFYUI_CORE_CONDITIONING_LATENT"
     assert runtime_debug["visual_conditioning"]["selected_primary_image"]["section_id"] == "section_image_0"
     assert _helper_decision(runtime_debug) == "WanImageToVideo"
+    assert runtime_debug["visual_conditioning"]["painter_motion_boost"]["status"] == "off"
     assert positive[0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 1
     assert video_latent["samples"].shape[1] == 16
@@ -125,6 +126,66 @@ def test_phase16_comfyui_core_applies_start_end_and_preserves_timed_unsupported(
     assert video_latent["samples"].shape[1] == 16
 
 
+def test_phase16_painter_motion_boost_applies_i2v_variant(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            runtime_backend_profile="ComfyUI Core",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+            painter_motion_boost="Auto",
+            painter_motion_amplitude=1.35,
+        ),
+    )
+
+    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+    painter = runtime_debug["visual_conditioning"]["painter_motion_boost"]
+
+    assert _helper_decision(runtime_debug) == "WanImageToVideo"
+    assert painter["status"] == "applied"
+    assert painter["algorithm"] == "painter_i2v"
+    assert painter["amplitude"] == 1.35
+    assert painter["input_frame_count"] == 1
+    assert painter["protected_chunk_count"] == 1
+    assert positive[0][1]["concat_latent_image"].shape[1] == 16
+    assert negative[0][1]["concat_latent_image"].shape == positive[0][1]["concat_latent_image"].shape
+    assert video_latent["samples"].shape[1] == 16
+
+
+def test_phase16_painter_motion_boost_applies_first_last_variant(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=4),
+        create_wan_timeline_config(
+            runtime_backend_profile="ComfyUI Core",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+            painter_motion_boost="Auto",
+            painter_motion_amplitude=1.5,
+        ),
+    )
+
+    _high, _low, positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        low_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+    painter = runtime_debug["visual_conditioning"]["painter_motion_boost"]
+
+    assert _helper_decision(runtime_debug) == "WanFirstLastFrameToVideo"
+    assert painter["status"] == "applied"
+    assert painter["algorithm"] == "painter_flf2v"
+    assert painter["start_protected_chunk_count"] == 1
+    assert painter["end_protected_chunk_count"] == 1
+    assert positive[0][1]["concat_latent_image"].shape[1] == 16
+
+
 def test_phase16_wan22_latent_helper_is_used_for_48_channel_vae(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
@@ -142,6 +203,34 @@ def test_phase16_wan22_latent_helper_is_used_for_48_channel_vae(tmp_path):
     assert video_latent["samples"].shape[1] == 48
     assert "noise_mask" in video_latent
     assert positive[0][1]["prompt"]
+
+
+def test_phase16_painter_motion_boost_preserves_wan22_latent_shape(tmp_path):
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(
+            runtime_backend_profile="ComfyUI Core",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+            painter_motion_boost="Auto",
+            painter_motion_amplitude=1.4,
+        ),
+    )
+
+    _high, _low, _positive, _negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel48(),
+        clip=FakeClip(),
+        vae=FakeVAE48(),
+        wan_timeline_plan=plan,
+    )
+    painter = runtime_debug["visual_conditioning"]["painter_motion_boost"]
+
+    assert _helper_decision(runtime_debug) == "Wan22ImageToVideoLatent"
+    assert painter["status"] == "applied"
+    assert painter["algorithm"] == "painter_i2v"
+    assert painter["protected_chunk_count"] == 1
+    assert video_latent["samples"].shape[1] == 48
+    assert "noise_mask" in video_latent
 
 
 def test_phase16_text_capable_core_mode_can_run_without_image_keyframes():

@@ -79,8 +79,13 @@ VRAM_UNLOAD_POLICIES = (
     "Before Decode",
     "Between High Low And Decode",
 )
+PAINTER_MOTION_BOOST_MODES = (
+    "Off",
+    "Auto",
+)
 SEGMENT_CONTINUITY_TAIL_FRAME_OPTIONS = (1, 5, 9)
 DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES = 5
+DEFAULT_PAINTER_MOTION_AMPLITUDE = 1.15
 
 
 def create_wan_timeline_config(
@@ -99,6 +104,8 @@ def create_wan_timeline_config(
     segment_continuity_tail_frames: int = DEFAULT_SEGMENT_CONTINUITY_TAIL_FRAMES,
     vram_unload_policy: str = "Off",
     debug_mode: str | bool = "Off",
+    painter_motion_boost: str = "Off",
+    painter_motion_amplitude: float = DEFAULT_PAINTER_MOTION_AMPLITUDE,
     audio_mode: str | None = None,
 ) -> dict[str, Any]:
     if audio_mode is not None:
@@ -131,6 +138,13 @@ def create_wan_timeline_config(
         "segment_continuity_tail_frames": _segment_tail_frames(segment_continuity_tail_frames),
         "vram_unload_policy": _choice(vram_unload_policy, VRAM_UNLOAD_POLICIES, "Off"),
         "debug_mode": _debug_mode(debug_mode),
+        "painter_motion_boost": _choice(painter_motion_boost, PAINTER_MOTION_BOOST_MODES, "Off"),
+        "painter_motion_amplitude": _clamped_float(
+            painter_motion_amplitude,
+            DEFAULT_PAINTER_MOTION_AMPLITUDE,
+            1.0,
+            2.0,
+        ),
         "rules": {
             "divisible_by": 16,
             "frame_rule": "4n+1 latent chunks",
@@ -197,6 +211,17 @@ def normalize_wan_timeline_config(config: Any) -> dict[str, Any]:
         "Off",
     )
     normalized["debug_mode"] = _debug_mode(normalized.get("debug_mode"))
+    normalized["painter_motion_boost"] = _choice(
+        normalized.get("painter_motion_boost"),
+        PAINTER_MOTION_BOOST_MODES,
+        "Off",
+    )
+    normalized["painter_motion_amplitude"] = _clamped_float(
+        normalized.get("painter_motion_amplitude"),
+        DEFAULT_PAINTER_MOTION_AMPLITUDE,
+        1.0,
+        2.0,
+    )
     normalized["rules"] = deepcopy(defaults["rules"]) | dict(normalized.get("rules") or {})
     normalized.pop("audio_mode", None)
     return normalized
@@ -223,6 +248,14 @@ def _non_negative_float(value: Any) -> float:
         return max(0.0, float(value))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _clamped_float(value: Any, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return min(maximum, max(minimum, parsed))
 
 
 def _segment_tail_frames(value: Any) -> int:
