@@ -35,6 +35,9 @@ function testPromptOptimizerRowsUseTimelineSectionsAndAssets() {
   assert.equal(rows[0].thumbnailUrl.includes("/helto_director/media/thumbnail?"), true);
   assert.equal(rows[0].thumbnailUrl.includes("path=%2Ftmp%2Fguide.png"), true);
   assert.equal(rows[0].thumbnailUrl.includes("privacy=1"), false);
+  assert.equal(rows[0].mediaPreviewUrl.includes("/helto_director/media/view?"), true);
+  assert.equal(rows[0].mediaPreviewUrl.includes("path=%2Ftmp%2Fguide.png"), true);
+  assert.equal(rows[0].mediaPreviewCaption, "guide.png");
   assert.equal(promptOptimizerRows(timeline, true)[0].thumbnailUrl.includes("privacy=1"), true);
   assert.equal(rows[1].id, "section_text");
   assert.equal(rows[1].prompt, "walk forward");
@@ -50,6 +53,9 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
   assert.equal(optimizerSource.includes("references: []"), true);
   assert.equal(optimizerSource.includes("mediaPath: item.mediaPath ||"), true);
   assert.equal(optimizerSource.includes("img.src = item.thumbnailUrl"), true);
+  assert.equal(optimizerSource.includes("showMediaPreview(documentRef"), true);
+  assert.equal(optimizerSource.includes("mediaPreviewUrl: mediaViewUrlForAsset(asset)"), true);
+  assert.equal(optimizerSource.includes("if (options.privacyMode && !panel.matches(\":hover\")) return;"), true);
   assert.equal(optimizerSource.includes("width: 96px; height: 96px; min-width: 96px"), true);
   assert.equal(optimizerSource.includes("object-fit: contain"), true);
   assert.equal(optimizerSource.includes("object-fit: cover"), false);

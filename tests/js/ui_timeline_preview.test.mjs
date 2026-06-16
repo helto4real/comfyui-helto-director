@@ -147,6 +147,12 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("width: ${TIMELINE_RIGHT_PADDING}px"), true);
   assert.equal(rendererSource.includes("htd-section-preview"), true);
   assert.equal(rendererSource.includes("renderSectionPreview"), true);
+  assert.equal(rendererSource.includes("openSectionMediaPreview(section)"), true);
+  assert.equal(rendererSource.includes('if (event.ctrlKey && mode === "move" && this.openSectionMediaPreview(section))'), true);
+  assert.equal(rendererSource.includes("showMediaPreview(this.container.ownerDocument ?? globalThis.document"), true);
+  assert.equal(rendererSource.includes("const url = mediaViewUrl(asset);"), true);
+  assert.equal(rendererSource.includes("timeline.project.privacy.mode && (!this.privacyRevealActive || this.privacyExternalModalOpen)"), true);
+  assert.equal(rendererSource.includes("thumb.addEventListener(\"click\""), true);
   assert.equal(rendererSource.includes("object-fit: contain"), true);
   assert.equal(rendererSource.includes("touch-action: none"), true);
   assert.equal(rendererSource.includes("user-select: none"), true);
@@ -202,6 +208,18 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   const migrationSource = readFileSync(new URL("../../web/timeline/migration.js", import.meta.url), "utf8");
   assert.equal(migrationSource.includes('normalized.video_guidance_range ??= "Last Frames"'), true);
   assert.equal(migrationSource.includes("normalized.video_guidance_frame_count ??= 17"), true);
+}
+
+function testSharedMediaPreviewSupportsVideoControls() {
+  const previewSource = readFileSync(new URL("../../web/timeline/media_preview.js", import.meta.url), "utf8");
+
+  assert.equal(previewSource.includes("export function showMediaPreview"), true);
+  assert.equal(previewSource.includes("export function closeMediaPreview"), true);
+  assert.equal(previewSource.includes('video.preload = "metadata"'), true);
+  assert.equal(previewSource.includes("video.playsInline = true"), true);
+  assert.equal(previewSource.includes("video.muted = true"), true);
+  assert.equal(previewSource.includes("video.currentTime = 0"), true);
+  assert.equal(previewSource.includes("Muted"), true);
 }
 
 function testDeleteContextMenuIsAvailableOnTimelineItems() {
@@ -376,6 +394,7 @@ testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testSectionPreviewUsesContainedRepeatedFrames();
+testSharedMediaPreviewSupportsVideoControls();
 testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
 testRendererUsesRealWaveformsOnly();

@@ -109,6 +109,11 @@ export function waveformUrl(asset, peaks = 96, privacyMode = false) {
   return `${ROUTE_PREFIX}/waveform?${paramsFor(asset, { peaks: clampWaveformPeaks(peaks), ...(privacyMode ? { privacy: 1 } : {}) })}`;
 }
 
+export function mediaViewUrl(asset) {
+  if (!asset?.path) return "";
+  return `${ROUTE_PREFIX}/view?${paramsFor(asset)}`;
+}
+
 export function clampWaveformPeaks(peaks) {
   const value = Number(peaks);
   if (!Number.isFinite(value)) return DEFAULT_WAVEFORM_PEAKS;

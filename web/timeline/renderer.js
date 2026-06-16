@@ -16,12 +16,13 @@ import {
   mediaLabel,
   resolveMediaReference,
 } from "./media.js";
-import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, thumbnailUrl } from "./media_cache.js";
+import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, mediaViewUrl, thumbnailUrl } from "./media_cache.js";
 import {
   addPickedMediaItem,
   replacePickedSectionMedia,
 } from "./media_actions.js";
 import { showMediaPicker } from "./media_picker.js";
+import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
@@ -757,6 +758,17 @@ export class TimelineRenderer {
       img.src = thumbnailUrl(image, 180, privacyMode);
       img.alt = reference.label || "Character reference";
       thumb.append(img);
+      thumb.addEventListener("click", (event) => {
+        if (!event.ctrlKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (privacyMode && !card.matches(":hover")) return;
+        showMediaPreview(this.container.ownerDocument ?? globalThis.document, {
+          type: ASSET_TYPE_IMAGE,
+          url: mediaViewUrl(image),
+          caption: reference.label || image.name || image.path,
+        });
+      });
     } else {
       thumb.append(createIconElement("references"));
     }
@@ -936,12 +948,33 @@ export class TimelineRenderer {
   }
 
   startSectionDrag(event, section, mode) {
+    if (event.ctrlKey && mode === "move" && this.openSectionMediaPreview(section)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     this.startItemDrag(event, {
       itemId: section.item_id,
       mode,
       startStart: section.start_time,
       startEnd: section.end_time,
     });
+  }
+
+  openSectionMediaPreview(section) {
+    if (section.type !== ASSET_TYPE_IMAGE && section.type !== ASSET_TYPE_VIDEO) return false;
+    const timeline = this.controller.timeline;
+    if (timeline.project.privacy.mode && (!this.privacyRevealActive || this.privacyExternalModalOpen)) return false;
+    const reference = section.type === ASSET_TYPE_IMAGE ? section.image : section.video;
+    const asset = resolveMediaReference(timeline, reference);
+    const url = mediaViewUrl(asset);
+    if (!url) return false;
+    showMediaPreview(this.container.ownerDocument ?? globalThis.document, {
+      type: section.type,
+      url,
+      caption: mediaLabel(timeline, reference, sectionLabel(timeline, section)),
+    });
+    return true;
   }
 
   startAudioDrag(event, clip, mode) {

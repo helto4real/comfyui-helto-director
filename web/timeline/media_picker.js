@@ -3,6 +3,10 @@ import {
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
 } from "./schema.js";
+import {
+  closeMediaPreview,
+  showMediaPreview,
+} from "./media_preview.js";
 
 
 const ROUTE_PREFIX = "/helto_director/media_browser";
@@ -27,7 +31,7 @@ export async function showMediaPicker(options) {
 
 export function closeMediaPicker(documentRef = globalThis.document) {
   documentRef.querySelector(".pr-image-browser-dialog")?.remove();
-  documentRef.querySelector(".pr-image-large-preview")?.remove();
+  closeMediaPreview(documentRef);
 }
 
 async function showVisualPicker({ assetType, node, documentRef, mode = "add", privacyMode = false }) {
@@ -98,7 +102,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
 
     const finish = (value) => {
       overlay.remove();
-      documentRef.querySelector(".pr-image-large-preview")?.remove();
+      closeMediaPreview(documentRef);
       resolve(value);
     };
 
@@ -154,7 +158,15 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
         tile.innerHTML = `<img src="${escapeHtml(item.thumb_url)}" alt="">`;
         tile.addEventListener("click", (event) => {
           if (event.ctrlKey) {
-            showLargePreview(documentRef, item.view_url, itemCaption(item));
+            event.preventDefault();
+            event.stopPropagation();
+            if (!privacyMode || overlay.querySelector(".pr-image-browser-panel")?.matches(":hover")) {
+              showMediaPreview(documentRef, {
+                type: assetType,
+                url: item.view_url,
+                caption: itemCaption(item),
+              });
+            }
             return;
           }
           selectedItem = { ...item, folder_alias: folderSelect.value };
@@ -541,22 +553,6 @@ async function fetchJson(url, options) {
   }
   if (!response.ok || data.error) throw new Error(data.error || response.statusText);
   return data;
-}
-
-function showLargePreview(documentRef, imageUrl, caption = "") {
-  documentRef.querySelector(".pr-image-large-preview")?.remove();
-  const overlay = documentRef.createElement("div");
-  overlay.className = "pr-image-large-preview";
-  overlay.innerHTML = `
-    <div class="pr-image-large-preview-panel">
-      <button class="pr-image-large-preview-close" type="button" title="Close preview" aria-label="Close preview">x</button>
-      <img src="${escapeHtml(imageUrl)}" alt="">
-      ${caption ? `<div class="pr-image-large-preview-caption">${escapeHtml(caption)}</div>` : ""}
-    </div>`;
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay || event.target.closest(".pr-image-large-preview-close")) overlay.remove();
-  });
-  documentRef.body.append(overlay);
 }
 
 function compareBySortMode(a, b, sortMode) {

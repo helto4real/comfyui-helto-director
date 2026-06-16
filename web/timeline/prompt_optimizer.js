@@ -4,7 +4,11 @@ import {
   SECTION_TYPE_TEXT,
 } from "./schema.js";
 import { resolveMediaReference } from "./media.js";
-import { thumbnailUrl } from "./media_cache.js";
+import { mediaViewUrl, thumbnailUrl } from "./media_cache.js";
+import {
+  closeMediaPreview,
+  showMediaPreview,
+} from "./media_preview.js";
 
 const ROUTE_PREFIX = "/helto_director/prompt_optimizer";
 
@@ -159,6 +163,7 @@ export function showPromptOptimizer(options) {
 
       const thumb = documentRef.createElement("div");
       thumb.className = "thumb";
+      thumb.title = item.mediaPreviewUrl ? "Ctrl-click for large preview" : "";
       if (item.thumbnailUrl) {
         const img = documentRef.createElement("img");
         img.src = item.thumbnailUrl;
@@ -166,6 +171,19 @@ export function showPromptOptimizer(options) {
         thumb.append(img);
       } else {
         thumb.textContent = item.type === SECTION_TYPE_TEXT ? "Text" : item.type;
+      }
+      if (item.mediaPreviewUrl) {
+        thumb.addEventListener("click", (event) => {
+          if (!event.ctrlKey) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (options.privacyMode && !panel.matches(":hover")) return;
+          showMediaPreview(documentRef, {
+            type: item.type,
+            url: item.mediaPreviewUrl,
+            caption: item.mediaPreviewCaption,
+          });
+        });
       }
 
       const direction = textarea(documentRef, item.prompt, "Direction or existing segment prompt...");
@@ -322,6 +340,7 @@ export function closePromptOptimizer(documentRef = globalThis.document) {
   const dialog = documentRef.querySelector(".htd-prompt-optimizer-dialog");
   dialog?._htdPromptOptimizerCleanup?.();
   dialog?.remove();
+  closeMediaPreview(documentRef);
 }
 
 export function promptOptimizerRows(timeline, privacyMode = false) {
@@ -344,6 +363,8 @@ export function promptOptimizerRows(timeline, privacyMode = false) {
         mediaFile: asset?.metadata?.browser_filename || asset?.name || "",
         mediaFolderAlias: asset?.metadata?.browser_alias || "",
         thumbnailUrl: thumbnailUrlForAsset(asset, privacyMode),
+        mediaPreviewUrl: mediaViewUrlForAsset(asset),
+        mediaPreviewCaption: mediaCaptionForAsset(asset, section),
         label: asset?.name || asset?.path || (section.type === SECTION_TYPE_TEXT ? "Text segment" : `${section.type} segment`),
       };
     });
@@ -352,6 +373,15 @@ export function promptOptimizerRows(timeline, privacyMode = false) {
 function thumbnailUrlForAsset(asset, privacyMode = false) {
   if (!asset?.path || (asset.type !== ASSET_TYPE_IMAGE && asset.type !== ASSET_TYPE_VIDEO)) return "";
   return thumbnailUrl(asset, 320, privacyMode);
+}
+
+function mediaViewUrlForAsset(asset) {
+  if (!asset?.path || (asset.type !== ASSET_TYPE_IMAGE && asset.type !== ASSET_TYPE_VIDEO)) return "";
+  return mediaViewUrl(asset);
+}
+
+function mediaCaptionForAsset(asset, section) {
+  return asset?.name || asset?.metadata?.browser_filename || asset?.path || `${section.type} segment`;
 }
 
 async function loadPromptOptimizerModels(node, selectEl, statusEl, fetchOptions = undefined) {

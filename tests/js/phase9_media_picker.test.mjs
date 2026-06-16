@@ -112,6 +112,11 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
   assert.equal(pickerSource.includes("privacyMode = false"), true);
   assert.equal(pickerSource.includes("pr-image-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("pr-audio-browser-dialog.privacy-mode"), true);
+  assert.equal(pickerSource.includes("showMediaPreview(documentRef"), true);
+  assert.equal(pickerSource.includes("closeMediaPreview(documentRef)"), true);
+  assert.equal(pickerSource.includes("showLargePreview"), false);
+  assert.equal(pickerSource.includes("if (!privacyMode || overlay.querySelector(\".pr-image-browser-panel\")?.matches(\":hover\"))"), true);
+  assert.equal(pickerSource.includes("selectedItem = { ...item, folder_alias: folderSelect.value };"), true);
 }
 
 testImagePickerSelectionCreatesSectionAndAsset();

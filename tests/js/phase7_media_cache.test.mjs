@@ -4,6 +4,7 @@ import {
   MIN_WAVEFORM_PEAKS,
   TimelineMediaCache,
   clampWaveformPeaks,
+  mediaViewUrl,
   thumbnailUrl,
   waveformUrl,
 } from "../../web/timeline/media_cache.js";
@@ -47,6 +48,27 @@ function testUploadedFileWaveformUsesInputType() {
   }, 64, true);
 
   assert.ok(privateUrl.includes("privacy=1"));
+}
+
+function testMediaViewUrlUsesBackendViewRoute() {
+  const url = mediaViewUrl({
+    type: "Video",
+    source_kind: "FilePath",
+    path: "/mnt/media/source clip.mp4",
+  });
+
+  assert.ok(url.startsWith("/helto_director/media/view?"));
+  assert.ok(url.includes("path=%2Fmnt%2Fmedia%2Fsource+clip.mp4"));
+  assert.ok(url.includes("type="));
+
+  const uploadedUrl = mediaViewUrl({
+    type: "Image",
+    source_kind: "UploadedFile",
+    path: "reference.png",
+  });
+
+  assert.ok(uploadedUrl.includes("type=input"));
+  assert.equal(mediaViewUrl({ type: "Image" }), "");
 }
 
 function testWaveformUrlClampsPeakCount() {
@@ -99,6 +121,7 @@ function testRefreshDoesNotPreloadAudioWaveforms() {
 
 testThumbnailUrlUsesBackendRoute();
 testUploadedFileWaveformUsesInputType();
+testMediaViewUrlUsesBackendViewRoute();
 testWaveformUrlClampsPeakCount();
 testWaveformCacheUsesAssetAndPeakCountKeys();
 testRefreshDoesNotPreloadAudioWaveforms();

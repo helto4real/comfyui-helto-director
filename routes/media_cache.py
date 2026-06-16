@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 
 from aiohttp import web
 
@@ -102,6 +103,23 @@ def register_media_cache_routes() -> bool:
             )
             cache_control = "private, no-store" if privacy_mode else "private, max-age=86400"
             return web.json_response(waveform, headers={"Cache-Control": cache_control})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    @routes.get(f"{ROUTE_PREFIX}/view")
+    async def get_view(request):
+        try:
+            path = resolve_media_path(
+                request.rel_url.query.get("path", ""),
+                request.rel_url.query.get("type"),
+            )
+            return web.FileResponse(
+                path,
+                headers={
+                    "Cache-Control": "private, max-age=300",
+                    "Content-Type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                },
+            )
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
 

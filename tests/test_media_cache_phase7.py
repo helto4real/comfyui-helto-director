@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import wave
+from pathlib import Path
 
 import folder_paths
 import pytest
@@ -166,6 +167,16 @@ def test_resolve_media_path_supports_comfy_input_relative_paths(tmp_path):
         assert resolved == media_path.resolve()
     finally:
         folder_paths.set_input_directory(original_input)
+
+
+def test_media_view_route_serves_resolved_files_with_private_cache_header():
+    source = (Path(__file__).resolve().parents[1] / "routes" / "media_cache.py").read_text(encoding="utf-8")
+
+    assert '@routes.get(f"{ROUTE_PREFIX}/view")' in source
+    assert 'path = resolve_media_path(' in source
+    assert "web.FileResponse(" in source
+    assert '"Cache-Control": "private, max-age=300"' in source
+    assert "mimetypes.guess_type(path.name)[0]" in source
 
 
 def write_test_wav(path):
