@@ -10,6 +10,7 @@ from ...shared.contracts.socket_types import (
 from ...shared.ltx.runtime import build_ltx_runtime_outputs
 from ...shared.ltx.runtime.segmented import build_ltx_segmented_executor_outputs
 from ...shared.segmented_executor import SEED_MODES
+from ...shared.timeline_status import TimelineStatusReporter
 
 
 def _samplers() -> list[str]:
@@ -28,6 +29,10 @@ def _schedulers() -> list[str]:
         return list(comfy.samplers.KSampler.SCHEDULERS)
     except Exception:
         return ["normal"]
+
+
+def _hidden_unique_id(cls) -> str | None:
+    return getattr(getattr(cls, "hidden", None), "unique_id", None)
 
 
 class LTXTimelineRuntime(io.ComfyNode):
@@ -67,6 +72,7 @@ class LTXTimelineRuntime(io.ComfyNode):
                 io.Int.Output("source_video_frame_count", display_name="source_video_frame_count"),
                 DEBUG_INFO.Output("runtime_debug", display_name="runtime_debug"),
             ],
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -95,6 +101,11 @@ class LTXTimelineRuntime(io.ComfyNode):
                 identity_anchor=identity_anchor,
                 sigmas=sigmas,
                 iclora_parameters=iclora_parameters,
+                status_reporter=TimelineStatusReporter(
+                    model="ltx",
+                    node_id=_hidden_unique_id(cls),
+                    total=6,
+                ),
             )
         )
 
@@ -135,6 +146,7 @@ class LTXTimelineSegmentedExecutor(io.ComfyNode):
                 io.Float.Output("frame_rate", display_name="frame_rate"),
                 DEBUG_INFO.Output("executor_debug", display_name="executor_debug"),
             ],
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -177,5 +189,10 @@ class LTXTimelineSegmentedExecutor(io.ComfyNode):
                 identity_anchor=identity_anchor,
                 sigmas=sigmas,
                 iclora_parameters=iclora_parameters,
+                status_reporter=TimelineStatusReporter(
+                    model="ltx",
+                    node_id=_hidden_unique_id(cls),
+                    total=1,
+                ),
             )
         )

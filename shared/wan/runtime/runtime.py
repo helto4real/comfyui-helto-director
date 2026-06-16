@@ -20,6 +20,7 @@ from .capabilities import (
 from .debug import build_runtime_debug, error, info, warning
 from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
 from .visual import apply_comfy_core_visual_keyframes
+from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
 
 
 def build_wan_runtime_outputs(
@@ -31,7 +32,11 @@ def build_wan_runtime_outputs(
     wan_timeline_plan: dict[str, Any],
     negative=None,
     batch_size: int = 1,
+    status_reporter: TimelineStatusReporter | None = None,
+    complete_status: bool = True,
 ) -> tuple[Any, Any, Any, Any, dict[str, Any], dict[str, Any]]:
+    status_reporter = ensure_timeline_status_reporter(status_reporter, model="wan", total=4)
+    status_reporter.report("timeline.prepare", "WAN Runtime: resolving backend")
     plan = deepcopy(wan_timeline_plan)
     _validate_plan(plan)
     config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
@@ -88,6 +93,7 @@ def build_wan_runtime_outputs(
         raise
 
     if resolved_backend == BACKEND_PLAN_ONLY:
+        status_reporter.report("timeline.conditioning", "WAN Runtime: preparing plan-only latent")
         validation_entries.append(info(
             "WAN_RUNTIME_BACKEND_PLAN_ONLY",
             "WAN Runtime is in Plan Only mode; no conditioning execution was performed.",
@@ -106,7 +112,11 @@ def build_wan_runtime_outputs(
             diagnostics=diagnostics,
             media_decisions=media_decisions,
             model_patch_status=model_patch_status,
+            status_events=status_reporter.snapshot(),
         )
+        if complete_status:
+            status_reporter.done("WAN Runtime: ready")
+            runtime_debug["status_events"] = status_reporter.snapshot()
         return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_debug
 
     if resolved_backend == BACKEND_WAN_VIDEO_WRAPPER:
@@ -124,6 +134,7 @@ def build_wan_runtime_outputs(
 
     runtime_high_model = high_noise_model
     runtime_low_model = low_noise_model
+    status_reporter.report("timeline.prompt", "WAN Runtime: building prompt relay")
     prompt_debug, positive, runtime_high_model, runtime_low_model = _build_prompt_payload_and_patch_models(
         clip,
         prompt_relay,
@@ -140,6 +151,7 @@ def build_wan_runtime_outputs(
         ))
     runtime_negative = _resolve_negative_conditioning(negative, positive)
     if is_bernini:
+        status_reporter.report("bernini.conditioning", "WAN Runtime: building Bernini conditioning")
         positive, runtime_negative, video_latent, guide_debug = build_bernini_runtime_payload(
             positive,
             runtime_negative,
@@ -151,6 +163,7 @@ def build_wan_runtime_outputs(
         )
         _append_bernini_source_aspect_warnings(guide_debug, validation_entries)
     else:
+        status_reporter.report("timeline.conditioning", "WAN Runtime: applying visual conditioning")
         positive, runtime_negative, video_latent, guide_debug = apply_comfy_core_visual_keyframes(
             positive,
             runtime_negative,
@@ -190,7 +203,11 @@ def build_wan_runtime_outputs(
         diagnostics=diagnostics,
         media_decisions=media_decisions,
         model_patch_status=model_patch_status,
+        status_events=status_reporter.snapshot(),
     )
+    if complete_status:
+        status_reporter.done("WAN Runtime: ready")
+        runtime_debug["status_events"] = status_reporter.snapshot()
     return runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, runtime_debug
 
 

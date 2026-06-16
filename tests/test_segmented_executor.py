@@ -11,6 +11,7 @@ from shared.segmented_executor import (
     stitch_spilled_segment_images,
     trim_visible_segment_images,
 )
+from shared.timeline_status import TimelineStatusReporter
 import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
@@ -21,6 +22,58 @@ def test_segment_seed_modes_increment_or_reuse():
     assert segment_seed(10, 0, "Increment Per Segment") == 10
     assert segment_seed(10, 3, "Increment Per Segment") == 13
     assert segment_seed(10, 3, "Reuse Seed") == 10
+
+
+def test_timeline_status_reporter_records_progress_text_and_safe_events():
+    progress_calls = []
+    text_calls = []
+    event_calls = []
+
+    class FakeProgressBar:
+        def __init__(self, total, node_id=None):
+            progress_calls.append(("init", total, node_id))
+
+        def update_absolute(self, value, total=None):
+            progress_calls.append(("update", value, total))
+
+    reporter = TimelineStatusReporter(
+        model="wan",
+        node_id="123",
+        total=2,
+        progress_bar_factory=FakeProgressBar,
+        text_sender=lambda label, node_id: text_calls.append((label, node_id)),
+        event_sender=lambda payload: event_calls.append(payload),
+    )
+
+    reporter.report(
+        "timeline.spill",
+        "WAN Executor: segment 1/2 - saving encrypted segment frames",
+        segment_index=1,
+        segment_count=2,
+        frame_count=79,
+        encrypted_spill=True,
+        path="/tmp/private-frame-cache.pt",
+        prompt="secret prompt",
+    )
+    reporter.done()
+
+    events = reporter.snapshot()
+    assert progress_calls == [
+        ("init", 2, "123"),
+        ("update", 1, 2),
+        ("update", 2, 2),
+    ]
+    assert text_calls[0] == ("WAN Executor: segment 1/2 - saving encrypted segment frames", "123")
+    assert event_calls[0]["node_id"] == "123"
+    assert event_calls[0]["stage"] == "timeline.spill"
+    assert event_calls[0]["label"] == "WAN Executor: segment 1/2 - saving encrypted segment frames"
+    assert event_calls[0]["encrypted_spill"] is True
+    assert "path" not in event_calls[0]
+    assert "prompt" not in event_calls[0]
+    assert events[0]["stage"] == "timeline.spill"
+    assert events[0]["encrypted_spill"] is True
+    assert "path" not in events[0]
+    assert "prompt" not in events[0]
 
 
 def _wan_frame_rule(requested):
@@ -359,7 +412,7 @@ def test_wan_two_phase_sampling_requires_high_and_low_models():
             sampler_name="euler",
             scheduler="normal",
             denoise=1.0,
-            phase_split_percent=0.5,
+            phase_split_step=10,
         )
     except ValueError as exc:
         assert "requires both high_noise_model and low_noise_model" in str(exc)
@@ -380,6 +433,7 @@ def test_wan_two_phase_sampling_runs_high_then_low(monkeypatch):
     latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
     high = object()
     low = object()
+    reporter = TimelineStatusReporter(model="wan", total=4, emit_ui=False)
 
     sampled, debug = wan_segmented.sample_wan_segment_latent(
         high_noise_model=high,
@@ -394,11 +448,16 @@ def test_wan_two_phase_sampling_runs_high_then_low(monkeypatch):
         sampler_name="euler",
         scheduler="normal",
         denoise=1.0,
-        phase_split_percent=0.5,
+        phase_split_step=10,
+        status_reporter=reporter,
+        segment_index=1,
+        segment_count=2,
     )
 
     assert sampled["samples"].mean().item() == 3.0
+    assert [event["stage"] for event in reporter.snapshot()] == ["wan.sample.high_noise", "wan.sample.low_noise"]
     assert debug["sampling_policy"] == "two_phase"
+    assert debug["phase_split_step"] == 10
     assert debug["split_step"] == 10
     assert calls[0]["model"] is high
     assert calls[0]["start_step"] == 0
@@ -412,6 +471,81 @@ def test_wan_two_phase_sampling_runs_high_then_low(monkeypatch):
     assert calls[1]["force_full_denoise"] is True
 
 
+def test_wan_two_phase_split_step_fallback_uses_half_rounded_down(monkeypatch):
+    calls = []
+
+    def fake_sample_latent(**kwargs):
+        calls.append(kwargs)
+        return kwargs["latent"]
+
+    monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
+
+    _sampled, debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        positive=[],
+        negative=[],
+        latent={"samples": torch.zeros((1, 16, 3, 2, 2))},
+        model_mode="I2V-A14B",
+        seed=1,
+        steps=21,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_step=0.5,
+    )
+
+    assert debug["phase_split_step"] == 10
+    assert debug["split_step"] == 10
+    assert calls[0]["last_step"] == 10
+    assert calls[1]["start_step"] == 10
+
+
+def test_wan_two_phase_split_step_clamps_to_valid_range(monkeypatch):
+    calls = []
+
+    def fake_sample_latent(**kwargs):
+        calls.append(kwargs)
+        return kwargs["latent"]
+
+    monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
+
+    _sampled, low_debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        positive=[],
+        negative=[],
+        latent={"samples": torch.zeros((1, 16, 3, 2, 2))},
+        model_mode="I2V-A14B",
+        seed=1,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_step=0,
+    )
+    _sampled, high_debug = wan_segmented.sample_wan_segment_latent(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        positive=[],
+        negative=[],
+        latent={"samples": torch.zeros((1, 16, 3, 2, 2))},
+        model_mode="I2V-A14B",
+        seed=1,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        phase_split_step=99,
+    )
+
+    assert low_debug["split_step"] == 1
+    assert high_debug["split_step"] == 11
+
+
 def test_wan_ti2v_5b_uses_single_phase_sampling(monkeypatch):
     calls = []
 
@@ -422,6 +556,7 @@ def test_wan_ti2v_5b_uses_single_phase_sampling(monkeypatch):
     monkeypatch.setattr(wan_segmented, "sample_latent", fake_sample_latent)
     latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
     high = object()
+    reporter = TimelineStatusReporter(model="wan", total=2, emit_ui=False)
 
     _sampled, debug = wan_segmented.sample_wan_segment_latent(
         high_noise_model=high,
@@ -436,13 +571,19 @@ def test_wan_ti2v_5b_uses_single_phase_sampling(monkeypatch):
         sampler_name="euler",
         scheduler="normal",
         denoise=1.0,
-        phase_split_percent=0.5,
+        phase_split_step=6,
+        status_reporter=reporter,
+        segment_index=1,
+        segment_count=1,
     )
 
     assert debug["sampling_policy"] == "single_phase"
+    assert reporter.snapshot()[0]["stage"] == "timeline.sample"
     assert len(calls) == 1
     assert calls[0]["model"] is high
     assert calls[0]["force_full_denoise"] is True
+    assert debug["phase_split_step"] is None
+    assert debug["split_step"] is None
 
 
 def test_wan_two_phase_vram_unload_policy_records_events(monkeypatch):
@@ -460,6 +601,7 @@ def test_wan_two_phase_vram_unload_policy_records_events(monkeypatch):
     latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
     high = object()
     low = object()
+    reporter = TimelineStatusReporter(model="wan", total=6, emit_ui=False)
 
     _sampled, debug = wan_segmented.sample_wan_segment_latent(
         high_noise_model=high,
@@ -474,8 +616,11 @@ def test_wan_two_phase_vram_unload_policy_records_events(monkeypatch):
         sampler_name="euler",
         scheduler="normal",
         denoise=1.0,
-        phase_split_percent=0.5,
+        phase_split_step=6,
         vram_unload_policy="Between High Low And Decode",
+        status_reporter=reporter,
+        segment_index=1,
+        segment_count=1,
     )
 
     assert unload_calls == [
@@ -483,3 +628,111 @@ def test_wan_two_phase_vram_unload_policy_records_events(monkeypatch):
         ("before_decode", "low_noise_model", low),
     ]
     assert [event["stage"] for event in debug["unload_events"]] == ["between_high_low", "before_decode"]
+    assert [event["stage"] for event in reporter.snapshot()] == [
+        "wan.sample.high_noise",
+        "wan.vram.unload",
+        "wan.sample.low_noise",
+        "wan.vram.unload",
+    ]
+
+
+def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_path):
+    def fake_build_runtime_outputs(**_kwargs):
+        runtime_debug = {
+            "wan": {
+                "visual_conditioning": {
+                    "requested_keyframes": [],
+                    "applied_keyframes": [],
+                    "media_decisions": [],
+                },
+                "bernini": None,
+            },
+            "summary": {},
+        }
+        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 2, 2))}, runtime_debug
+
+    def fake_sample_wan_segment_latent(**kwargs):
+        if kwargs.get("status_reporter") is not None:
+            kwargs["status_reporter"].report(
+                "wan.sample.high_noise",
+                "WAN Executor: segment 1/1 - high-noise sampling",
+                segment_index=kwargs.get("segment_index"),
+                segment_count=kwargs.get("segment_count"),
+            )
+            kwargs["status_reporter"].report(
+                "wan.sample.low_noise",
+                "WAN Executor: segment 1/1 - low-noise sampling",
+                segment_index=kwargs.get("segment_index"),
+                segment_count=kwargs.get("segment_count"),
+            )
+        return kwargs["latent"], {"sampling_policy": "two_phase", "unload_events": []}
+
+    monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
+    monkeypatch.setattr(wan_segmented, "decode_latent_images", lambda _vae, _latent: torch.ones((5, 2, 2, 3)))
+    monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
+    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(
+        wan_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    plan = {
+        "resolved_output": {"frame_count": 5, "frame_rate": 8.0},
+        "project": {"privacy": {"mode": False}},
+        "section_plan": [{"item_id": "section_001", "type": "Text", "start_frame": 0, "end_frame_exclusive": 5, "frame_count": 5}],
+        "prompt_plan": [{"item_id": "section_001", "type": "Text", "raw_prompt": "prompt"}],
+        "media_plan": [],
+        "audio_plan": [],
+        "model_specific": {
+            "wan": {
+                "config": {
+                    "model_mode": "I2V-A14B",
+                    "prompt_routing": "Prompt Relay",
+                    "prompt_relay_epsilon": 0.15,
+                    "vram_unload_policy": "Off",
+                },
+                "segmented_generation": {
+                    "enabled": True,
+                    "segments": [
+                        {
+                            "id": "gen_001",
+                            "index": 0,
+                            "start_frame": 0,
+                            "end_frame_exclusive": 5,
+                            "visible_frame_count": 5,
+                            "generation_frame_count": 5,
+                            "trim_leading_frames": 0,
+                            "trim_trailing_frames": 0,
+                            "continuity": {"mode": "initial"},
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    _images, _audio, _fps, debug = wan_segmented.build_wan_segmented_executor_outputs(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        clip=object(),
+        vae=object(),
+        wan_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Increment Per Segment",
+    )
+
+    stages = [event["stage"] for event in debug["status_events"]]
+    assert "timeline.conditioning" in stages
+    assert "wan.sample.high_noise" in stages
+    assert "wan.sample.low_noise" in stages
+    assert "timeline.decode" in stages
+    assert "timeline.spill" in stages
+    assert "timeline.cleanup" in stages
+    assert stages[-3:] == ["timeline.stitch", "timeline.audio", "timeline.done"]

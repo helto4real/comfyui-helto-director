@@ -14,6 +14,7 @@ from .guides import apply_guide_data
 from .media import build_guide_data, source_video_outputs
 from .prompt_relay import encode_prompt_relay
 from .patches import supports_ltx_native_audio
+from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
 
 
 def build_ltx_runtime_outputs(
@@ -28,7 +29,11 @@ def build_ltx_runtime_outputs(
     identity_anchor=None,
     sigmas=None,
     iclora_parameters=None,
+    status_reporter: TimelineStatusReporter | None = None,
+    complete_status: bool = True,
 ) -> tuple[Any, Any, Any, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], Any, dict[str, Any], float, int, dict[str, Any]]:
+    status_reporter = ensure_timeline_status_reporter(status_reporter, model="ltx", total=6)
+    status_reporter.report("timeline.prepare", "LTX Runtime: preparing latent")
     plan = deepcopy(ltx_timeline_plan)
     _validate_plan(plan)
     width = int(plan["resolved_output"].get("width") or 768)
@@ -46,6 +51,7 @@ def build_ltx_runtime_outputs(
     )
     prompt_inputs = _prompt_relay_inputs(plan)
     prompt_relay = plan.get("model_specific", {}).get("ltx", {}).get("prompt_relay", {})
+    status_reporter.report("timeline.prompt", "LTX Runtime: building prompts")
     if prompt_relay.get("enabled", True) and prompt_inputs["local_prompts"]:
         runtime_model, positive, prompt_debug = encode_prompt_relay(
             model,
@@ -65,7 +71,9 @@ def build_ltx_runtime_outputs(
         prompt_debug = {"full_prompt": prompt, "local_prompts": prompt_inputs["local_prompts"], "latent_lengths": []}
 
     negative = _resolve_negative_conditioning(negative, positive)
+    status_reporter.report("ltx.guide_data", "LTX Runtime: preparing guide data")
     guide_data, guide_diagnostics = build_guide_data(plan, width, height)
+    status_reporter.report("timeline.conditioning", "LTX Runtime: applying guide conditioning")
     runtime_model = apply_identity_anchor(
         runtime_model,
         identity_anchor=identity_anchor,
@@ -81,6 +89,7 @@ def build_ltx_runtime_outputs(
         guide_data,
         iclora_parameters=iclora_parameters,
     )
+    status_reporter.report("timeline.audio", "LTX Runtime: mixing audio")
     combined_audio, audio_diagnostics = mix_timeline_audio(plan)
     use_native_audio = bool(plan.get("project", {}).get("audio", {}).get("use_native_audio"))
     if use_native_audio:
@@ -103,7 +112,11 @@ def build_ltx_runtime_outputs(
         ],
         video_latent,
         combined_audio,
+        status_reporter.snapshot(),
     )
+    if complete_status:
+        status_reporter.done("LTX Runtime: ready")
+        runtime_debug["status_events"] = status_reporter.snapshot()
     return (
         runtime_model,
         positive,
@@ -273,7 +286,7 @@ def _resolve_negative_conditioning(negative, positive):
     return negative if negative is not None else zero_out_conditioning(positive)
 
 
-def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio):
+def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio, status_events=None):
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     return {
         "type": "DEBUG_INFO",
@@ -303,6 +316,7 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
             "substitutions": character_references.get("substitutions", []) if isinstance(character_references, dict) else [],
             "diagnostics": character_references.get("diagnostics", []) if isinstance(character_references, dict) else [],
         },
+        "status_events": list(status_events or []),
         "diagnostics": diagnostics,
     }
 

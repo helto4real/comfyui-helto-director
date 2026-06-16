@@ -7,6 +7,7 @@ from ...shared.contracts.socket_types import (
 from ...shared.wan.runtime import build_wan_runtime_outputs
 from ...shared.wan.runtime.segmented import build_wan_segmented_executor_outputs
 from ...shared.segmented_executor import SEED_MODES
+from ...shared.timeline_status import TimelineStatusReporter
 
 
 def _samplers() -> list[str]:
@@ -25,6 +26,10 @@ def _schedulers() -> list[str]:
         return list(comfy.samplers.KSampler.SCHEDULERS)
     except Exception:
         return ["normal"]
+
+
+def _hidden_unique_id(cls) -> str | None:
+    return getattr(getattr(cls, "hidden", None), "unique_id", None)
 
 
 class WANTimelineRuntime(io.ComfyNode):
@@ -55,6 +60,7 @@ class WANTimelineRuntime(io.ComfyNode):
                 io.Latent.Output("video_latent", display_name="video_latent"),
                 DEBUG_INFO.Output("runtime_debug", display_name="runtime_debug"),
             ],
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -77,6 +83,11 @@ class WANTimelineRuntime(io.ComfyNode):
                 wan_timeline_plan=wan_timeline_plan,
                 negative=negative,
                 batch_size=batch_size,
+                status_reporter=TimelineStatusReporter(
+                    model="wan",
+                    node_id=_hidden_unique_id(cls),
+                    total=4,
+                ),
             )
         )
 
@@ -104,7 +115,7 @@ class WANTimelineSegmentedExecutor(io.ComfyNode):
                 io.Combo.Input("sampler_name", display_name="Sampler", options=_samplers(), default=_samplers()[0], socketless=True),
                 io.Combo.Input("scheduler", display_name="Scheduler", options=_schedulers(), default=_schedulers()[0], socketless=True),
                 io.Float.Input("denoise", display_name="Denoise", default=1.0, min=0.0, max=1.0, step=0.01, round=0.01, socketless=True),
-                io.Float.Input("phase_split_percent", display_name="Phase Split Percent", default=0.5, min=0.01, max=0.99, step=0.01, round=0.01, socketless=True),
+                io.Int.Input("phase_split_step", display_name="Phase Split Step", default=10, min=1, max=10000, step=1, socketless=True),
                 io.Combo.Input("seed_mode", display_name="Seed Mode", options=list(SEED_MODES), default="Increment Per Segment", socketless=True),
                 io.Conditioning.Input("negative", optional=True),
                 io.Int.Input("batch_size", display_name="Batch Size", default=1, min=1, max=4096, step=1, socketless=True),
@@ -115,6 +126,7 @@ class WANTimelineSegmentedExecutor(io.ComfyNode):
                 io.Float.Output("frame_rate", display_name="frame_rate"),
                 DEBUG_INFO.Output("executor_debug", display_name="executor_debug"),
             ],
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -131,7 +143,7 @@ class WANTimelineSegmentedExecutor(io.ComfyNode):
         sampler_name: str = "euler",
         scheduler: str = "normal",
         denoise: float = 1.0,
-        phase_split_percent: float = 0.5,
+        phase_split_step: int = 10,
         seed_mode: str = "Increment Per Segment",
         negative=None,
         batch_size: int = 1,
@@ -149,9 +161,14 @@ class WANTimelineSegmentedExecutor(io.ComfyNode):
                 sampler_name=sampler_name,
                 scheduler=scheduler,
                 denoise=denoise,
-                phase_split_percent=phase_split_percent,
+                phase_split_step=phase_split_step,
                 seed_mode=seed_mode,
                 negative=negative,
                 batch_size=batch_size,
+                status_reporter=TimelineStatusReporter(
+                    model="wan",
+                    node_id=_hidden_unique_id(cls),
+                    total=1,
+                ),
             )
         )

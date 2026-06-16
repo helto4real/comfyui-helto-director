@@ -15,6 +15,7 @@ from ...segmented_executor import (
     stitch_spilled_segment_images,
     trim_visible_segment_images,
 )
+from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
 from .audio import mix_timeline_audio
 from .runtime import build_ltx_runtime_outputs
 
@@ -38,6 +39,7 @@ def build_ltx_segmented_executor_outputs(
     identity_anchor=None,
     sigmas=None,
     iclora_parameters=None,
+    status_reporter: TimelineStatusReporter | None = None,
 ):
     plan = deepcopy(ltx_timeline_plan)
     segmented = plan.get("model_specific", {}).get("ltx", {}).get("segmented_generation", {})
@@ -57,6 +59,12 @@ def build_ltx_segmented_executor_outputs(
             "continuity": {"mode": "initial"},
         }]
 
+    status_reporter = ensure_timeline_status_reporter(
+        status_reporter,
+        model="ltx",
+        total=(len(segments) * 12) + 4,
+    )
+    status_reporter.report("timeline.prepare", f"LTX Executor: preparing {len(segments)} segment(s)")
     privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     spill_records = []
@@ -65,9 +73,18 @@ def build_ltx_segmented_executor_outputs(
     cleanup_events = []
     try:
         for index, segment in enumerate(segments):
+            segment_index = index + 1
+            segment_count = len(segments)
             tail = None
             if previous_images is not None:
                 tail = previous_tail(previous_images, segment.get("continuity", {}).get("continuity_frame_count") or 1)
+            status_reporter.report(
+                "timeline.conditioning",
+                f"LTX Executor: segment {segment_index}/{segment_count} - conditioning",
+                segment_index=segment_index,
+                segment_count=segment_count,
+                frame_count=segment.get("generation_frame_count"),
+            )
             segment_plan = build_segment_plan(
                 plan,
                 segment,
@@ -95,6 +112,14 @@ def build_ltx_segmented_executor_outputs(
                 identity_anchor=identity_anchor,
                 sigmas=sigmas,
                 iclora_parameters=iclora_parameters,
+                status_reporter=status_reporter,
+                complete_status=False,
+            )
+            status_reporter.report(
+                "timeline.sample",
+                f"LTX Executor: segment {segment_index}/{segment_count} - sampling",
+                segment_index=segment_index,
+                segment_count=segment_count,
             )
             sampled = sample_latent(
                 model=runtime_model,
@@ -108,10 +133,23 @@ def build_ltx_segmented_executor_outputs(
                 scheduler=scheduler,
                 denoise=denoise,
             )
+            status_reporter.report(
+                "ltx.reference_tail_crop",
+                f"LTX Executor: segment {segment_index}/{segment_count} - cropping reference tail",
+                segment_index=segment_index,
+                segment_count=segment_count,
+            )
             cropped = crop_latent_to_frame_count(
                 sampled,
                 int(guide_data.get("clean_latent_frames") or sampled["samples"].shape[2]),
                 int(guide_data.get("hidden_reference_count") or 0),
+            )
+            status_reporter.report(
+                "timeline.decode",
+                f"LTX Executor: segment {segment_index}/{segment_count} - decoding",
+                segment_index=segment_index,
+                segment_count=segment_count,
+                frame_count=segment.get("generation_frame_count"),
             )
             images = decode_latent_images(vae, cropped)
             visible_images = trim_visible_segment_images(images, segment)
@@ -121,8 +159,22 @@ def build_ltx_segmented_executor_outputs(
                 else 1
             )
             previous_images = previous_tail(visible_images.detach().cpu(), next_tail_count)
+            status_reporter.report(
+                "timeline.spill",
+                f"LTX Executor: segment {segment_index}/{segment_count} - saving {'encrypted ' if privacy_mode else ''}segment frames",
+                segment_index=segment_index,
+                segment_count=segment_count,
+                frame_count=int(visible_images.shape[0]),
+                encrypted_spill=privacy_mode,
+            )
             record = store.write_segment(segment, visible_images)
             spill_records.append(record)
+            status_reporter.report(
+                "timeline.cleanup",
+                f"LTX Executor: segment {segment_index}/{segment_count} - releasing memory",
+                segment_index=segment_index,
+                segment_count=segment_count,
+            )
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
             segment_debug.append({
                 "id": segment.get("id"),
@@ -139,19 +191,23 @@ def build_ltx_segmented_executor_outputs(
             })
             del segment_plan, runtime_model, positive, runtime_negative, video_latent, sampled, cropped, images, visible_images
 
+        status_reporter.report("timeline.stitch", "Timeline Executor: stitching segments")
         final_images = stitch_spilled_segment_images(
             spill_records,
             store,
             final_frame_count=int(plan.get("resolved_output", {}).get("frame_count") or 1),
         )
         cleanup_summary = store.cleanup()
+        status_reporter.report("timeline.audio", "Timeline Executor: mixing audio")
         combined_audio, audio_diagnostics = mix_timeline_audio(plan)
+        status_reporter.done("Timeline Executor: done")
         debug = {
             "enabled": bool(segmented.get("enabled")),
             "model": "ltx",
             "segment_count": len(segments),
             "segment_storage": cleanup_summary,
             "post_decode_cleanup": cleanup_events,
+            "status_events": status_reporter.snapshot(),
             "segments": segment_debug,
             "stitching": {
                 "output_frame_count": int(final_images.shape[0]),

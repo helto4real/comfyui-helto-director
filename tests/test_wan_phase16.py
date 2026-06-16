@@ -58,6 +58,7 @@ def test_phase16_runtime_schema_preserves_existing_contract():
         "video_latent",
         "runtime_debug",
     ]
+    assert [hidden.value for hidden in schema.hidden] == ["UNIQUE_ID"]
     assert "model" not in input_names
     assert "WAN_RUNTIME_PAYLOAD" not in output_names
 
@@ -159,6 +160,12 @@ def test_phase16_text_capable_core_mode_can_run_without_image_keyframes():
     assert positive[0][1]["prompt"]
     assert negative[0][1]["pooled_output"].sum().item() == 0
     assert video_latent["samples"].shape[1] == 16
+    assert [event["stage"] for event in runtime_debug["status_events"]] == [
+        "timeline.prepare",
+        "timeline.prompt",
+        "timeline.conditioning",
+        "timeline.done",
+    ]
     assert runtime_debug["status"]["runtime_executed"] is True
     assert runtime_debug["visual_conditioning"]["selected_primary_image"] is None
 

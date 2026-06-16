@@ -17,6 +17,7 @@ from ...segmented_executor import (
     stitch_spilled_segment_images,
     trim_visible_segment_images,
 )
+from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
 from .runtime import build_wan_runtime_outputs
 
 
@@ -41,9 +42,10 @@ def build_wan_segmented_executor_outputs(
     scheduler: str,
     denoise: float,
     seed_mode: str,
-    phase_split_percent: float = 0.5,
+    phase_split_step: int | float | str | None = None,
     negative=None,
     batch_size: int = 1,
+    status_reporter: TimelineStatusReporter | None = None,
 ):
     plan = deepcopy(wan_timeline_plan)
     segmented = plan.get("model_specific", {}).get("wan", {}).get("segmented_generation", {})
@@ -63,6 +65,12 @@ def build_wan_segmented_executor_outputs(
             "continuity": {"mode": "initial"},
         }]
 
+    status_reporter = ensure_timeline_status_reporter(
+        status_reporter,
+        model="wan",
+        total=(len(segments) * 12) + 4,
+    )
+    status_reporter.report("timeline.prepare", f"WAN Executor: preparing {len(segments)} segment(s)")
     privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     spill_records = []
@@ -71,9 +79,18 @@ def build_wan_segmented_executor_outputs(
     cleanup_events = []
     try:
         for index, segment in enumerate(segments):
+            segment_index = index + 1
+            segment_count = len(segments)
             tail = None
             if previous_images is not None:
                 tail = previous_tail(previous_images, segment.get("continuity", {}).get("continuity_frame_count") or 1)
+            status_reporter.report(
+                "timeline.conditioning",
+                f"WAN Executor: segment {segment_index}/{segment_count} - conditioning",
+                segment_index=segment_index,
+                segment_count=segment_count,
+                frame_count=segment.get("generation_frame_count"),
+            )
             segment_plan = build_segment_plan(
                 plan,
                 segment,
@@ -97,6 +114,8 @@ def build_wan_segmented_executor_outputs(
                 wan_timeline_plan=segment_plan,
                 negative=negative,
                 batch_size=batch_size,
+                status_reporter=status_reporter,
+                complete_status=False,
             )
             segment_seed_value = segment_seed(seed, index, seed_mode)
             sampled, sampling_debug = sample_wan_segment_latent(
@@ -112,8 +131,18 @@ def build_wan_segmented_executor_outputs(
                 sampler_name=sampler_name,
                 scheduler=scheduler,
                 denoise=denoise,
-                phase_split_percent=phase_split_percent,
+                phase_split_step=phase_split_step,
                 vram_unload_policy=str(segment_plan.get("model_specific", {}).get("wan", {}).get("config", {}).get("vram_unload_policy") or VRAM_UNLOAD_OFF),
+                status_reporter=status_reporter,
+                segment_index=segment_index,
+                segment_count=segment_count,
+            )
+            status_reporter.report(
+                "timeline.decode",
+                f"WAN Executor: segment {segment_index}/{segment_count} - decoding",
+                segment_index=segment_index,
+                segment_count=segment_count,
+                frame_count=segment.get("generation_frame_count"),
             )
             images = decode_latent_images(vae, sampled)
             visible_images = trim_visible_segment_images(images, segment)
@@ -123,8 +152,22 @@ def build_wan_segmented_executor_outputs(
                 else 1
             )
             previous_images = previous_tail(visible_images.detach().cpu(), next_tail_count)
+            status_reporter.report(
+                "timeline.spill",
+                f"WAN Executor: segment {segment_index}/{segment_count} - saving {'encrypted ' if privacy_mode else ''}segment frames",
+                segment_index=segment_index,
+                segment_count=segment_count,
+                frame_count=int(visible_images.shape[0]),
+                encrypted_spill=privacy_mode,
+            )
             record = store.write_segment(segment, visible_images)
             spill_records.append(record)
+            status_reporter.report(
+                "timeline.cleanup",
+                f"WAN Executor: segment {segment_index}/{segment_count} - releasing memory",
+                segment_index=segment_index,
+                segment_count=segment_count,
+            )
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
             wan_debug = runtime_debug.get("wan", {}) if isinstance(runtime_debug, dict) else {}
             visual_debug = wan_debug.get("visual_conditioning", {}) if isinstance(wan_debug, dict) else {}
@@ -149,19 +192,23 @@ def build_wan_segmented_executor_outputs(
             })
             del segment_plan, runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, sampled, images, visible_images
 
+        status_reporter.report("timeline.stitch", "Timeline Executor: stitching segments")
         final_images = stitch_spilled_segment_images(
             spill_records,
             store,
             final_frame_count=int(plan.get("resolved_output", {}).get("frame_count") or 1),
         )
         cleanup_summary = store.cleanup()
+        status_reporter.report("timeline.audio", "Timeline Executor: mixing audio")
         combined_audio, audio_diagnostics = mix_timeline_audio(_wan_plan_as_audio_mix_plan(plan))
+        status_reporter.done("Timeline Executor: done")
         debug = {
             "enabled": bool(segmented.get("enabled")),
             "model": "wan",
             "segment_count": len(segments),
             "segment_storage": cleanup_summary,
             "post_decode_cleanup": cleanup_events,
+            "status_events": status_reporter.snapshot(),
             "segments": segment_debug,
             "stitching": {
                 "output_frame_count": int(final_images.shape[0]),
@@ -193,13 +240,23 @@ def sample_wan_segment_latent(
     sampler_name: str,
     scheduler: str,
     denoise: float,
-    phase_split_percent: float,
+    phase_split_step: int | float | str | None = None,
     vram_unload_policy: str = VRAM_UNLOAD_OFF,
+    status_reporter: TimelineStatusReporter | None = None,
+    segment_index: int | None = None,
+    segment_count: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if _uses_single_phase_sampling(model_mode):
         model = high_noise_model or low_noise_model
         if model is None:
             raise ValueError("WAN segmented executor needs one connected model for TI2V-5B single-phase sampling.")
+        if status_reporter is not None:
+            status_reporter.report(
+                "timeline.sample",
+                f"WAN Executor: segment {segment_index}/{segment_count} - sampling",
+                segment_index=segment_index,
+                segment_count=segment_count,
+            )
         sampled = sample_latent(
             model=model,
             positive=positive,
@@ -215,12 +272,13 @@ def sample_wan_segment_latent(
         )
         model_role = "high_noise_model" if high_noise_model is not None else "low_noise_model"
         unload_events = _maybe_unload_before_decode(model, None, vram_unload_policy, role=model_role)
+        _report_unload_events(status_reporter, unload_events, segment_index, segment_count)
         return sampled, {
             "sampling_policy": "single_phase",
             "model_mode": model_mode,
             "seed": int(seed),
             "steps": int(steps),
-            "phase_split_percent": None,
+            "phase_split_step": None,
             "split_step": None,
             "phases": [{"role": "single", "model": model_role}],
             "vram_unload_policy": vram_unload_policy,
@@ -235,7 +293,14 @@ def sample_wan_segment_latent(
     steps = max(1, int(steps))
     if steps < 2:
         raise ValueError("WAN segmented executor two-phase sampling requires at least 2 total steps.")
-    split_step = _split_step(steps, phase_split_percent)
+    split_step = _normalize_split_step(steps, phase_split_step)
+    if status_reporter is not None:
+        status_reporter.report(
+            "wan.sample.high_noise",
+            f"WAN Executor: segment {segment_index}/{segment_count} - high-noise sampling",
+            segment_index=segment_index,
+            segment_count=segment_count,
+        )
     sampled_high = sample_latent(
         model=high_noise_model,
         positive=positive,
@@ -252,6 +317,14 @@ def sample_wan_segment_latent(
         force_full_denoise=False,
     )
     unload_events = _maybe_unload_between_phases(high_noise_model, low_noise_model, vram_unload_policy)
+    _report_unload_events(status_reporter, unload_events, segment_index, segment_count)
+    if status_reporter is not None:
+        status_reporter.report(
+            "wan.sample.low_noise",
+            f"WAN Executor: segment {segment_index}/{segment_count} - low-noise sampling",
+            segment_index=segment_index,
+            segment_count=segment_count,
+        )
     sampled_low = sample_latent(
         model=low_noise_model,
         positive=positive,
@@ -268,13 +341,15 @@ def sample_wan_segment_latent(
         last_step=steps,
         force_full_denoise=True,
     )
-    unload_events.extend(_maybe_unload_before_decode(low_noise_model, high_noise_model, vram_unload_policy, role="low_noise_model"))
+    before_decode_events = _maybe_unload_before_decode(low_noise_model, high_noise_model, vram_unload_policy, role="low_noise_model")
+    unload_events.extend(before_decode_events)
+    _report_unload_events(status_reporter, before_decode_events, segment_index, segment_count)
     return sampled_low, {
         "sampling_policy": "two_phase",
         "model_mode": model_mode,
         "seed": int(seed),
         "steps": int(steps),
-        "phase_split_percent": float(phase_split_percent),
+        "phase_split_step": int(split_step),
         "split_step": int(split_step),
         "phases": [
             {
@@ -299,17 +374,48 @@ def sample_wan_segment_latent(
     }
 
 
+def _report_unload_events(
+    status_reporter: TimelineStatusReporter | None,
+    unload_events: list[dict[str, Any]],
+    segment_index: int | None,
+    segment_count: int | None,
+) -> None:
+    if status_reporter is None:
+        return
+    for event in unload_events:
+        if not event.get("attempted"):
+            continue
+        stage = str(event.get("stage") or "")
+        if stage == "between_high_low":
+            label = f"WAN Executor: segment {segment_index}/{segment_count} - unloading high-noise model"
+        elif stage == "before_decode":
+            label = f"WAN Executor: segment {segment_index}/{segment_count} - unloading model before decode"
+        else:
+            label = f"WAN Executor: segment {segment_index}/{segment_count} - unloading VRAM"
+        status_reporter.report(
+            "wan.vram.unload",
+            label,
+            segment_index=segment_index,
+            segment_count=segment_count,
+        )
+
+
 def _uses_single_phase_sampling(model_mode: str) -> bool:
     return str(model_mode or "") in WAN_SINGLE_PHASE_MODEL_MODES
 
 
-def _split_step(steps: int, phase_split_percent: float) -> int:
+def _normalize_split_step(steps: int, phase_split_step: int | float | str | None = None) -> int:
     steps = max(2, int(steps))
+    fallback = max(1, steps // 2)
     try:
-        percent = float(phase_split_percent)
+        if phase_split_step is None:
+            raise ValueError
+        if isinstance(phase_split_step, float) and not phase_split_step.is_integer():
+            raise ValueError
+        value = int(str(phase_split_step).strip())
     except (TypeError, ValueError):
-        percent = 0.5
-    split = int(round(steps * min(max(percent, 0.01), 0.99)))
+        value = fallback
+    split = int(value)
     return min(max(1, split), steps - 1)
 
 

@@ -118,10 +118,17 @@ def test_wan_nodes_register_with_custom_sockets_and_mappings():
 
     config_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelineConfig"].define_schema()
     planner_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelinePlanner"].define_schema()
+    executor_schema = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelineSegmentedExecutor"].define_schema()
     assert [output.io_type for output in config_schema.outputs] == ["WAN_TIMELINE_CONFIG"]
     tail_input = next(input_item for input_item in config_schema.inputs if input_item.id == "segment_continuity_tail_frames")
     assert tail_input.options == ["1", "5", "9"]
     assert tail_input.default == "5"
+    executor_input_ids = [input_item.id for input_item in executor_schema.inputs]
+    assert "phase_split_step" in executor_input_ids
+    assert "phase_split_percent" not in executor_input_ids
+    split_input = next(input_item for input_item in executor_schema.inputs if input_item.id == "phase_split_step")
+    assert split_input.io_type == "INT"
+    assert split_input.default == 10
     assert [input_item.io_type for input_item in planner_schema.inputs] == [
         "VIDEO_TIMELINE",
         "WAN_TIMELINE_CONFIG",

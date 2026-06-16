@@ -47,6 +47,7 @@ def build_runtime_debug(
     diagnostics: list[str],
     media_decisions: list[dict[str, Any]] | None = None,
     model_patch_status: dict[str, Any] | None = None,
+    status_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     wan = plan.get("model_specific", {}).get("wan", {})
     config = wan.get("config", {})
@@ -95,6 +96,7 @@ def build_runtime_debug(
         "prompt_relay": deepcopy(prompt_debug),
         "bernini": bernini,
         "model_patch_status": deepcopy(model_patch_status or {}),
+        "status_events": deepcopy(status_events or []),
         "media_decisions": deepcopy(media_decisions or []),
         "output_payload_type": _output_payload_type(resolved_backend, media_decisions or []),
         "known_limitations": _known_limitations(plan, visual, capabilities),

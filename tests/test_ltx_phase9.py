@@ -555,6 +555,7 @@ def test_ltx_runtime_node_schema_io_order():
     ]
     assert schema.inputs[4].id == "negative"
     assert schema.inputs[4].optional is True
+    assert [hidden.value for hidden in schema.hidden] == ["UNIQUE_ID"]
     assert [output.io_type for output in schema.outputs] == [
         "MODEL",
         "CONDITIONING",
@@ -672,6 +673,14 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
     assert source_video_frame_rate == plan["resolved_output"]["frame_rate"]
     assert source_video_frame_count == 0
     assert runtime_debug["type"] == "DEBUG_INFO"
+    assert [event["stage"] for event in runtime_debug["status_events"]] == [
+        "timeline.prepare",
+        "timeline.prompt",
+        "ltx.guide_data",
+        "timeline.conditioning",
+        "timeline.audio",
+        "timeline.done",
+    ]
     assert runtime_debug["summary"]["applied_guides"] == 0
     assert runtime_debug["summary"]["audio_clip_count"] == 0
     assert any("No audio_vae connected" in entry for entry in runtime_debug["diagnostics"])
