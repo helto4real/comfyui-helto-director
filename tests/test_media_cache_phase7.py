@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 import wave
@@ -6,6 +7,7 @@ import folder_paths
 import pytest
 from PIL import Image
 
+from routes import media_cache as media_cache_routes
 from shared.media_cache import (
     MAX_WAVEFORM_PEAKS,
     MIN_WAVEFORM_PEAKS,
@@ -17,6 +19,36 @@ from shared.media_cache import (
     resolve_media_path,
 )
 from shared.privacy import CRYPTO_AVAILABLE, decrypt_bytes
+
+
+def test_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):
+    async def run_jobs():
+        monkeypatch.setattr(media_cache_routes, "_PREVIEW_JOB_SEMAPHORE", asyncio.Semaphore(2))
+        active = 0
+        max_active = 0
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return fn(*args, **kwargs)
+
+        monkeypatch.setattr(media_cache_routes.asyncio, "to_thread", fake_to_thread)
+
+        def preview_job(value):
+            return value * 2
+
+        results = await asyncio.gather(
+            *(media_cache_routes._run_preview_job(preview_job, index) for index in range(6))
+        )
+        return results, max_active
+
+    results, max_active = asyncio.run(run_jobs())
+
+    assert results == [0, 2, 4, 6, 8, 10]
+    assert max_active <= media_cache_routes.PREVIEW_JOB_CONCURRENCY
 
 
 def test_thumbnail_cache_writes_webp_under_comfy_temp(tmp_path):

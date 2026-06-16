@@ -1,3 +1,4 @@
+import asyncio
 import math
 import wave
 
@@ -6,8 +7,39 @@ import folder_paths
 import pytest
 from PIL import Image
 
+from routes import media_browser as media_browser_routes
 from shared import media_browser
 from shared.privacy import CRYPTO_AVAILABLE
+
+
+def test_media_browser_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):
+    async def run_jobs():
+        monkeypatch.setattr(media_browser_routes, "_PREVIEW_JOB_SEMAPHORE", asyncio.Semaphore(2))
+        active = 0
+        max_active = 0
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return fn(*args, **kwargs)
+
+        monkeypatch.setattr(media_browser_routes.asyncio, "to_thread", fake_to_thread)
+
+        def preview_job(value):
+            return f"thumb-{value}"
+
+        results = await asyncio.gather(
+            *(media_browser_routes._run_preview_job(preview_job, index) for index in range(6))
+        )
+        return results, max_active
+
+    results, max_active = asyncio.run(run_jobs())
+
+    assert results == ["thumb-0", "thumb-1", "thumb-2", "thumb-3", "thumb-4", "thumb-5"]
+    assert max_active <= media_browser_routes.PREVIEW_JOB_CONCURRENCY
 
 
 def test_media_browser_folder_config_defaults_adds_removes_and_rejects_invalid(tmp_path, monkeypatch):

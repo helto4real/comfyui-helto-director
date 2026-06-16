@@ -1,30 +1,51 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import urllib.parse
 
 from aiohttp import web
 
-from ..shared.media_browser import (
-    add_folder,
-    folder_by_alias,
-    folder_payload,
-    list_media,
-    make_browser_thumbnail,
-    media_definition,
-    normalize_media_type,
-    remove_folder,
-    resolve_browser_media_path,
-)
+try:
+    from ..shared.media_browser import (
+        add_folder,
+        folder_by_alias,
+        folder_payload,
+        list_media,
+        media_definition,
+        normalize_media_type,
+        remove_folder,
+        resolve_browser_media_path,
+    )
+    from ..shared.media_cache import make_thumbnail
+except Exception:
+    from shared.media_browser import (
+        add_folder,
+        folder_by_alias,
+        folder_payload,
+        list_media,
+        media_definition,
+        normalize_media_type,
+        remove_folder,
+        resolve_browser_media_path,
+    )
+    from shared.media_cache import make_thumbnail
 
 
 ROUTE_PREFIX = "/helto_director/media_browser"
+PREVIEW_JOB_CONCURRENCY = 2
+_PREVIEW_JOB_SEMAPHORE = asyncio.Semaphore(PREVIEW_JOB_CONCURRENCY)
 _ROUTES_REGISTERED = False
 
 
 def query_bool(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _run_preview_job(fn, *args, **kwargs):
+    async with _PREVIEW_JOB_SEMAPHORE:
+        return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 def register_media_browser_routes() -> bool:
@@ -106,10 +127,14 @@ def register_media_browser_routes() -> bool:
             media_type = normalize_media_type(request.match_info["media_type"])
             filename = urllib.parse.unquote(request.rel_url.query.get("filename", ""))
             privacy_mode = query_bool(request.rel_url.query.get("privacy"))
-            thumb = make_browser_thumbnail(
+            path = resolve_browser_media_path(
                 media_type,
                 request.rel_url.query.get("alias", ""),
                 filename,
+            )
+            thumb = await _run_preview_job(
+                make_thumbnail,
+                path,
                 int(request.rel_url.query.get("max_size", "320")),
                 privacy_mode=privacy_mode,
             )
