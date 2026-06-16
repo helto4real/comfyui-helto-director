@@ -163,6 +163,9 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('scheduleDebouncedCommit("prompt typing", { rerender: false })'), true);
   assert.equal(rendererSource.includes("setLiveItemField(this.controller.timeline, item, field, input.value)"), true);
   assert.equal(rendererSource.includes('flushDebouncedCommit("prompt typing", { rerender: false })'), true);
+  assert.equal(rendererSource.includes('scheduleDebouncedCommit("reference description", { delayMs: 150, rerender: false })'), true);
+  assert.equal(rendererSource.includes('flushDebouncedCommit("reference description", { rerender: false })'), true);
+  assert.equal(rendererSource.includes('scheduleDebouncedCommit("reference strength", { delayMs: 80, rerender: false })'), true);
   assert.equal(rendererSource.includes('this.renderInspectorRow("Prompt", control, "is-prompt")'), false);
   assert.equal(rendererSource.includes('el("div", "htd-inspector-row is-prompt")'), true);
   assert.equal(rendererSource.includes("htd-inspector.has-selection"), true);

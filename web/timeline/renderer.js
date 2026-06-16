@@ -937,7 +937,7 @@ export class TimelineRenderer {
     description.rows = 3;
     description.addEventListener("input", () => {
       setLiveReferenceField(this.controller.timeline, reference, "description", description.value);
-      this.controller.scheduleDebouncedCommit("reference description", { delayMs: 150 });
+      this.controller.scheduleDebouncedCommit("reference description", { delayMs: 150, rerender: false });
     });
     description.addEventListener("blur", () => {
       this.controller.flushDebouncedCommit("reference description", { rerender: false });
@@ -968,7 +968,7 @@ export class TimelineRenderer {
     strengthSlider.addEventListener("input", () => {
       const strength = setStrengthControls(strengthSlider.value);
       setLiveReferenceField(this.controller.timeline, reference, "strength", strength);
-      this.controller.scheduleDebouncedCommit("reference strength", { delayMs: 80 });
+      this.controller.scheduleDebouncedCommit("reference strength", { delayMs: 80, rerender: false });
     });
     strengthNumber.addEventListener("change", () => {
       const strength = setStrengthControls(strengthNumber.value);
