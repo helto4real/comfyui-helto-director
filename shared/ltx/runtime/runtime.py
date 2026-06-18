@@ -8,7 +8,7 @@ import torch
 from ..config import LTX_MODEL_FAMILY, LTX_MODEL_VERSION
 from ..identity import apply_identity_anchor
 from ..planner import LTX_PLAN_TYPE
-from ..references import planned_hidden_reference_count
+from ..references import planned_hidden_reference_count, planned_hidden_reference_guard_latent_frames
 from .audio import build_audio_latent, build_native_audio_latent, mix_timeline_audio
 from .guides import apply_guide_data
 from .media import build_guide_data, source_video_outputs
@@ -42,10 +42,11 @@ def build_ltx_runtime_outputs(
     frame_rate = float(plan["resolved_output"].get("frame_rate") or 24.0)
     clean_latent_frames = ((frame_count - 1) // 8) + 1
     hidden_reference_count = planned_hidden_reference_count(plan)
-    total_latent_frames = clean_latent_frames + hidden_reference_count
+    hidden_reference_guard_latent_frames = planned_hidden_reference_guard_latent_frames(plan)
+    total_latent_frames = clean_latent_frames + hidden_reference_guard_latent_frames + hidden_reference_count
 
     latent = (
-        pad_latent_tail(clone_latent(optional_latent), hidden_reference_count)
+        pad_latent_tail(clone_latent(optional_latent), hidden_reference_guard_latent_frames + hidden_reference_count)
         if optional_latent is not None
         else empty_ltx_video_latent(width, height, total_latent_frames)
     )
@@ -307,12 +308,15 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
             "clean_pixel_frames": guide_data.get("clean_pixel_frames"),
             "clean_latent_frames": guide_data.get("clean_latent_frames"),
             "hidden_reference_count": guide_data.get("hidden_reference_count"),
+            "hidden_reference_guard_latent_frames": guide_data.get("hidden_reference_guard_latent_frames"),
+            "reserved_latent_frames": guide_data.get("reserved_latent_frames"),
         },
         "character_references": {
             "mode": character_references.get("mode") if isinstance(character_references, dict) else None,
             "active": bool(character_references.get("active")) if isinstance(character_references, dict) else False,
             "guide_count": len(character_references.get("guide_specs", [])) if isinstance(character_references, dict) else 0,
             "hidden_reference_count": guide_data.get("hidden_reference_count"),
+            "hidden_reference_guard_latent_frames": guide_data.get("hidden_reference_guard_latent_frames"),
             "substitutions": character_references.get("substitutions", []) if isinstance(character_references, dict) else [],
             "diagnostics": character_references.get("diagnostics", []) if isinstance(character_references, dict) else [],
         },

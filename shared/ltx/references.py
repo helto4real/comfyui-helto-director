@@ -16,6 +16,7 @@ from ..timeline.references import (
 
 
 LTX_REFERENCE_MODE_DISABLED = "Disabled"
+LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES = 8
 
 
 def build_ltx_character_reference_plan(
@@ -163,6 +164,10 @@ def planned_hidden_reference_count(plan: dict[str, Any]) -> int:
     references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     specs = references.get("guide_specs") if isinstance(references, dict) else []
     return len(specs) if isinstance(specs, list) else 0
+
+
+def planned_hidden_reference_guard_latent_frames(plan: dict[str, Any]) -> int:
+    return LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES if planned_hidden_reference_count(plan) > 0 else 0
 
 
 def _enabled_references(timeline: dict[str, Any]) -> list[dict[str, Any]]:

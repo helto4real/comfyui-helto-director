@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from ...ltx.identity import crop_latent_to_frame_count
+from ...ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from ...segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
@@ -145,11 +145,14 @@ def build_ltx_segmented_executor_outputs(
                 segment_index=segment_index,
                 segment_count=segment_count,
             )
+            sampled_latent_frames_before_crop = _latent_frame_count(sampled)
             cropped = crop_latent_to_frame_count(
                 sampled,
                 int(guide_data.get("clean_latent_frames") or sampled["samples"].shape[2]),
                 int(guide_data.get("hidden_reference_count") or 0),
+                int(guide_data.get("hidden_reference_guard_latent_frames") or 0),
             )
+            sampled_latent_frames_after_crop = _latent_frame_count(cropped)
             status_reporter.report(
                 "timeline.decode",
                 f"LTX Executor: segment {segment_index}/{segment_count} - decoding",
@@ -157,7 +160,9 @@ def build_ltx_segmented_executor_outputs(
                 segment_count=segment_count,
                 frame_count=segment.get("generation_frame_count"),
             )
-            images = decode_latent_images(vae, cropped)
+            decoded_images = decode_latent_images(vae, cropped)
+            clean_pixel_frames = int(guide_data.get("clean_pixel_frames") or segment.get("generation_frame_count") or decoded_images.shape[0])
+            images = crop_images_to_frame_count(decoded_images, clean_pixel_frames)
             visible_images = trim_visible_segment_images(images, segment)
             visible_images, seam_blend_debug = blend_segment_seam(
                 visible_images,
@@ -194,6 +199,15 @@ def build_ltx_segmented_executor_outputs(
                 "generation_frame_count": segment.get("generation_frame_count"),
                 "visible_frame_count": segment.get("visible_frame_count"),
                 "trim_leading_frames": segment.get("trim_leading_frames"),
+                "clean_latent_frames": guide_data.get("clean_latent_frames"),
+                "hidden_reference_count": guide_data.get("hidden_reference_count"),
+                "hidden_reference_guard_latent_frames": guide_data.get("hidden_reference_guard_latent_frames"),
+                "sampled_latent_frame_count_before_crop": sampled_latent_frames_before_crop,
+                "sampled_latent_frame_count_after_crop": sampled_latent_frames_after_crop,
+                "clean_pixel_frames": clean_pixel_frames,
+                "decoded_frame_count_before_frame_crop": int(decoded_images.shape[0]),
+                "decoded_frame_count_after_frame_crop": int(images.shape[0]),
+                "frame_crop_applied": int(decoded_images.shape[0]) != int(images.shape[0]),
                 "decoded_frame_count": int(images.shape[0]),
                 "spilled_frame_count": int(visible_images.shape[0]),
                 "continuity": segment.get("continuity"),
@@ -202,7 +216,7 @@ def build_ltx_segmented_executor_outputs(
                 "seam_blend": seam_blend_debug,
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
             })
-            del segment_plan, runtime_model, positive, runtime_negative, video_latent, sampled, cropped, images, visible_images
+            del segment_plan, runtime_model, positive, runtime_negative, video_latent, sampled, cropped, decoded_images, images, visible_images
 
         status_reporter.report("timeline.stitch", "Timeline Executor: stitching segments")
         final_images = stitch_spilled_segment_images(
@@ -236,3 +250,22 @@ def build_ltx_segmented_executor_outputs(
     except Exception:
         store.cleanup()
         raise
+
+
+def _latent_frame_count(latent: dict[str, Any]) -> int | None:
+    samples = latent.get("samples") if isinstance(latent, dict) else None
+    if samples is None:
+        return None
+    if getattr(samples, "is_nested", False):
+        try:
+            streams = list(samples.unbind())
+        except Exception:
+            streams = []
+        samples = streams[0] if streams else None
+    shape = getattr(samples, "shape", None)
+    if shape is None or len(shape) < 3:
+        return None
+    try:
+        return int(shape[2])
+    except Exception:
+        return None

@@ -279,12 +279,12 @@ class LTXTimelineCropReferenceTail(io.ComfyNode):
             display_name="LTX 2.3 Timeline Crop Reference Tail",
             category="timeline/ltx/identity",
             description=(
-                "Crops hidden character reference tail frames from a sampled LTX Timeline latent. "
-                "Connect the latent after sampling and guide_data from LTX 2.3 Timeline Runtime."
+                "Crops hidden character reference tail latent frames from a sampled LTX Timeline latent. "
+                "The clean_pixel_frames output is the visible frame limit for downstream video output."
             ),
             inputs=[
-                io.Latent.Input("latent", tooltip="Sampled latent to crop back to the visible Timeline duration."),
-                GUIDE_DATA.Input("guide_data", tooltip="Guide data produced by LTX 2.3 Timeline Runtime."),
+                io.Latent.Input("latent", tooltip="Sampled latent to crop back to the visible Timeline latent duration."),
+                GUIDE_DATA.Input("guide_data", tooltip="Guide data produced by LTX 2.3 Timeline Runtime, including clean latent and pixel frame counts."),
             ],
             outputs=[
                 io.Latent.Output("latent", display_name="latent", tooltip="Latent cropped to the visible Timeline duration."),
@@ -297,12 +297,17 @@ class LTXTimelineCropReferenceTail(io.ComfyNode):
         clean_latent_frames = None
         clean_pixel_frames = 0
         hidden_reference_count = 0
+        hidden_reference_guard_latent_frames = 0
         if isinstance(guide_data, dict):
             clean_latent_frames = guide_data.get("clean_latent_frames")
             try:
                 hidden_reference_count = int(guide_data.get("hidden_reference_count") or 0)
             except (TypeError, ValueError):
                 hidden_reference_count = 0
+            try:
+                hidden_reference_guard_latent_frames = int(guide_data.get("hidden_reference_guard_latent_frames") or 0)
+            except (TypeError, ValueError):
+                hidden_reference_guard_latent_frames = 0
             try:
                 clean_pixel_frames = int(guide_data.get("clean_pixel_frames") or 0)
             except (TypeError, ValueError):
@@ -312,6 +317,11 @@ class LTXTimelineCropReferenceTail(io.ComfyNode):
             return io.NodeOutput(latent, clean_pixel_frames)
 
         return io.NodeOutput(
-            crop_latent_to_frame_count(latent, clean_latent_frames, hidden_reference_count),
+            crop_latent_to_frame_count(
+                latent,
+                clean_latent_frames,
+                hidden_reference_count,
+                hidden_reference_guard_latent_frames,
+            ),
             clean_pixel_frames,
         )

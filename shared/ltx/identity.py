@@ -97,7 +97,12 @@ def apply_identity_anchor(model, identity_anchor=None, sigmas=None, vae=None, gu
     return patched
 
 
-def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int = 0):
+def crop_latent_to_frame_count(
+    latent,
+    frame_count,
+    hidden_reference_count: int = 0,
+    hidden_reference_guard_latent_frames: int = 0,
+):
     try:
         metadata_target = int(frame_count)
     except (TypeError, ValueError):
@@ -106,6 +111,10 @@ def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int 
         hidden_reference_count = max(0, int(hidden_reference_count or 0))
     except (TypeError, ValueError):
         hidden_reference_count = 0
+    try:
+        hidden_reference_guard_latent_frames = max(0, int(hidden_reference_guard_latent_frames or 0))
+    except (TypeError, ValueError):
+        hidden_reference_guard_latent_frames = 0
     if metadata_target <= 0 or not isinstance(latent, dict):
         return latent
 
@@ -164,7 +173,7 @@ def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int 
         return crop_tensor(value)
 
     before_frames = tensor_frame_count(first_video_stream(cropped.get("samples")))
-    extra_tail_latent_frames = 0
+    extra_tail_latent_frames = hidden_reference_guard_latent_frames
     target_frames = metadata_target
 
     if "samples" in cropped:
@@ -176,7 +185,7 @@ def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int 
         if before_frames <= target_frames:
             log.warning(
                 "LTX Timeline Crop Reference Tail received %d latent frames; "
-                "metadata_target=%d, hidden_reference_count=%d, extra_tail_latent_frames=%d, chosen_target=%d. "
+                "metadata_target=%d, hidden_reference_count=%d, hidden_reference_guard_latent_frames=%d, chosen_target=%d. "
                 "No reference tail was removed.",
                 before_frames,
                 metadata_target,
@@ -187,7 +196,7 @@ def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int 
         else:
             log.info(
                 "LTX Timeline Crop Reference Tail cropped video latent frames from %d to %d; "
-                "metadata_target=%d, hidden_reference_count=%d, extra_tail_latent_frames=%d, chosen_target=%d.",
+                "metadata_target=%d, hidden_reference_count=%d, hidden_reference_guard_latent_frames=%d, chosen_target=%d.",
                 before_frames,
                 after_frames,
                 metadata_target,
@@ -196,6 +205,25 @@ def crop_latent_to_frame_count(latent, frame_count, hidden_reference_count: int 
                 target_frames,
             )
     return cropped
+
+
+def crop_images_to_frame_count(images, frame_count: int | None):
+    try:
+        target_frames = int(frame_count)
+    except (TypeError, ValueError):
+        return images
+    if target_frames <= 0 or not torch.is_tensor(images):
+        return images
+    if images.ndim < 1:
+        return images
+    current_frames = int(images.shape[0])
+    keep_frames = min(target_frames, current_frames)
+    if keep_frames >= current_frames:
+        return images
+    try:
+        return torch.narrow(images, 0, 0, keep_frames)
+    except Exception:
+        return images[:keep_frames]
 
 
 def _first_guide_image(guide_data):

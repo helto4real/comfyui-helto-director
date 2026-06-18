@@ -18,6 +18,7 @@ import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
 import shared.ltx.runtime.segmented as ltx_segmented
+from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline.segmentation import build_generation_segments
 
 
@@ -491,8 +492,11 @@ def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
 
 def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_path):
     decode_calls = {"count": 0}
+    runtime_tail_counts = []
 
-    def fake_build_runtime_outputs(**_kwargs):
+    def fake_build_runtime_outputs(**kwargs):
+        tail = kwargs.get("ltx_timeline_plan", {}).get("model_specific", {}).get("ltx", {}).get("segment_continuity", {}).get("previous_tail_images")
+        runtime_tail_counts.append(float(tail[-1, 0, 0, 0].item()) if torch.is_tensor(tail) else None)
         runtime_debug = {"summary": {}}
         return (
             object(),
@@ -501,7 +505,12 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
             {"samples": torch.zeros((1, 16, 3, 1, 1))},
             None,
             None,
-            {"clean_latent_frames": 3, "hidden_reference_count": 0},
+            {
+                "clean_latent_frames": 3,
+                "hidden_reference_count": 1,
+                "hidden_reference_guard_latent_frames": LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES,
+                "clean_pixel_frames": 5,
+            },
             None,
             runtime_debug,
         )
@@ -509,12 +518,12 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     def fake_decode(_vae, _latent):
         decode_calls["count"] += 1
         if decode_calls["count"] == 1:
-            return torch.zeros((5, 1, 1, 1), dtype=torch.float32)
-        return torch.ones((5, 1, 1, 1), dtype=torch.float32)
+            return torch.tensor([0.0, 0.0, 0.0, 0.0, 0.5, 9.0], dtype=torch.float32).reshape(6, 1, 1, 1)
+        return torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 9.0], dtype=torch.float32).reshape(6, 1, 1, 1)
 
     monkeypatch.setattr(ltx_segmented, "build_ltx_runtime_outputs", fake_build_runtime_outputs)
     monkeypatch.setattr(ltx_segmented, "sample_latent", lambda **kwargs: kwargs["latent"])
-    monkeypatch.setattr(ltx_segmented, "crop_latent_to_frame_count", lambda latent, _clean, _hidden: latent)
+    monkeypatch.setattr(ltx_segmented, "crop_latent_to_frame_count", lambda latent, _clean, _hidden, _guard=0: latent)
     monkeypatch.setattr(ltx_segmented, "decode_latent_images", fake_decode)
     monkeypatch.setattr(ltx_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
     monkeypatch.setattr(ltx_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
@@ -541,7 +550,17 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     )
 
     assert images.shape[0] == 8
-    assert torch.allclose(images[5:, 0, 0, 0], torch.tensor([0.25, 0.5, 0.75]))
+    assert torch.allclose(images[5:, 0, 0, 0], torch.tensor([0.625, 0.75, 0.875]))
+    assert runtime_tail_counts == [None, 0.5]
+    assert images[:, 0, 0, 0].max().item() < 9.0
+    assert debug["segments"][0]["clean_latent_frames"] == 3
+    assert debug["segments"][0]["hidden_reference_count"] == 1
+    assert debug["segments"][0]["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
+    assert debug["segments"][0]["sampled_latent_frame_count_before_crop"] == 3
+    assert debug["segments"][0]["sampled_latent_frame_count_after_crop"] == 3
+    assert debug["segments"][0]["decoded_frame_count_before_frame_crop"] == 6
+    assert debug["segments"][0]["decoded_frame_count_after_frame_crop"] == 5
+    assert debug["segments"][0]["frame_crop_applied"] is True
     assert debug["segments"][1]["spilled_frame_count"] == 3
     assert debug["segments"][1]["seam_blend"]["actual_frame_count"] == 3
     assert debug["stitching"]["output_frame_count"] == 8

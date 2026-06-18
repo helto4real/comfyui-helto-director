@@ -23,6 +23,7 @@ from ...contracts.video_timeline import (
     VIDEO_TIMING_LOOP,
     VIDEO_TIMING_USE_SOURCE_TIMING,
 )
+from ..references import planned_hidden_reference_guard_latent_frames
 from ...media_cache import resolve_media_path
 
 
@@ -80,6 +81,8 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
         "clean_pixel_frames": frame_count,
         "clean_latent_frames": clean_latent_frames,
         "hidden_reference_count": 0,
+        "hidden_reference_guard_latent_frames": 0,
+        "reserved_latent_frames": clean_latent_frames,
     }
     diagnostics: list[str] = []
     sections_by_id = {entry.get("item_id"): entry for entry in plan.get("section_plan", [])}
@@ -186,9 +189,12 @@ def _append_character_reference_guides(plan: dict[str, Any], guide_data: dict[st
     if not isinstance(specs, list) or not specs:
         return
     clean_latent_frames = int(guide_data.get("clean_latent_frames") or 1)
+    hidden_reference_guard_latent_frames = planned_hidden_reference_guard_latent_frames(plan)
     divisible_by = int(plan["resolved_output"].get("divisible_by") or 32)
     guide_data["reference_mode"] = "timeline_guides+character_references"
     guide_data["hidden_reference_count"] = len(specs)
+    guide_data["hidden_reference_guard_latent_frames"] = hidden_reference_guard_latent_frames
+    guide_data["reserved_latent_frames"] = clean_latent_frames + hidden_reference_guard_latent_frames + len(specs)
 
     for index, spec in enumerate(specs):
         image = spec.get("image")
@@ -210,7 +216,7 @@ def _append_character_reference_guides(plan: dict[str, Any], guide_data: dict[st
             CROP_MODE_PAD,
             divisible_by,
         )
-        insert_frame = (clean_latent_frames + index) * 8
+        insert_frame = (clean_latent_frames + hidden_reference_guard_latent_frames + index) * 8
         strength = _safe_float(spec.get("strength"), 1.0)
         guide_data["images"].append(tensor)
         guide_data["insert_frames"].append(insert_frame)
@@ -226,6 +232,7 @@ def _append_character_reference_guides(plan: dict[str, Any], guide_data: dict[st
             "image": tensor,
             "hidden_tail": True,
             "clean_latent_frames": clean_latent_frames,
+            "hidden_reference_guard_latent_frames": hidden_reference_guard_latent_frames,
             "clean_pixel_frames": guide_data.get("clean_pixel_frames"),
         })
 

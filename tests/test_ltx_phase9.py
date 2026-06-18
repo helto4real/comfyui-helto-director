@@ -33,7 +33,8 @@ from shared.contracts.video_timeline import (
     VIDEO_TIMING_USE_SOURCE_TIMING,
 )
 from shared.ltx import build_ltx_runtime_outputs, build_ltx_timeline_plan, create_ltx_timeline_config
-from shared.ltx.identity import crop_latent_to_frame_count
+from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
+from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline import create_default_video_timeline
 
 
@@ -880,6 +881,7 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     assert guide_data["strengths"] == [0.5]
     assert guide_data["insert_frames"] == [0]
     assert len(guide_data["images"]) == 1
+    assert guide_data["hidden_reference_guard_latent_frames"] == 0
     assert video_latent["samples"].shape[2] > guide_data["clean_latent_frames"]
     assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.5
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.5
@@ -898,23 +900,65 @@ def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(t
     assert runtime_debug["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
     assert "@" not in runtime_debug["prompt_relay"]["full_prompt"]
     assert guide_data["hidden_reference_count"] == 1
+    assert guide_data["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
+    assert guide_data["reserved_latent_frames"] == (
+        guide_data["clean_latent_frames"]
+        + guide_data["hidden_reference_guard_latent_frames"]
+        + guide_data["hidden_reference_count"]
+    )
     assert guide_data["strengths"] == [0.6]
-    assert guide_data["insert_frames"] == [guide_data["clean_latent_frames"] * 8]
+    assert guide_data["insert_frames"] == [
+        (guide_data["clean_latent_frames"] + LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES) * 8
+    ]
     assert guide_data["reference_images"][0]["label"] == "image1"
     assert guide_data["reference_images"][0]["hidden_tail"] is True
+    assert guide_data["reference_images"][0]["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
     assert guide_data["reference_images"][0]["image"].shape == guide_data["images"][0].shape
-    assert video_latent["samples"].shape[2] > guide_data["clean_latent_frames"]
+    assert video_latent["samples"].shape[2] >= guide_data["reserved_latent_frames"]
     assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.6
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
     assert runtime_debug["character_references"]["guide_count"] == 1
+    assert runtime_debug["character_references"]["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 
     cropped = crop_latent_to_frame_count(
         video_latent,
         guide_data["clean_latent_frames"],
         guide_data["hidden_reference_count"],
+        guide_data["hidden_reference_guard_latent_frames"],
     )
     assert cropped["samples"].shape[2] == guide_data["clean_latent_frames"]
     assert cropped["noise_mask"].shape[2] == guide_data["clean_latent_frames"]
+
+
+def test_crop_latent_to_frame_count_removes_guard_and_reference_tail():
+    latent = {
+        "samples": torch.arange(1 * 128 * 8 * 1 * 1, dtype=torch.float32).reshape(1, 128, 8, 1, 1),
+        "noise_mask": torch.ones((1, 1, 8, 1, 1), dtype=torch.float32),
+    }
+
+    cropped = crop_latent_to_frame_count(
+        latent,
+        3,
+        hidden_reference_count=2,
+        hidden_reference_guard_latent_frames=LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES,
+    )
+
+    assert cropped["samples"].shape[2] == 3
+    assert cropped["noise_mask"].shape[2] == 3
+    assert torch.equal(cropped["samples"], latent["samples"][:, :, :3])
+
+
+def test_crop_images_to_frame_count_removes_decoded_overhang():
+    images = torch.arange(6, dtype=torch.float32).reshape(6, 1, 1, 1)
+
+    cropped = crop_images_to_frame_count(images, 4)
+    unchanged = crop_images_to_frame_count(images, 6)
+    longer_target = crop_images_to_frame_count(images, 8)
+
+    assert cropped.shape[0] == 4
+    assert torch.equal(cropped[:, 0, 0, 0], torch.tensor([0.0, 1.0, 2.0, 3.0]))
+    assert unchanged is images
+    assert longer_target is images
 
 
 def test_character_references_work_in_guide_data_mode_without_prompt_relay(tmp_path):
@@ -1185,6 +1229,24 @@ def test_optional_latent_is_cloned_without_mutating_input():
     assert video_latent["samples"] is not samples
     assert torch.equal(samples, torch.zeros_like(samples))
     assert video_latent["samples"].shape == samples.shape
+
+
+def test_optional_latent_with_character_references_reserves_guard_and_hidden_tail(tmp_path):
+    reference_path = tmp_path / "hero-optional-latent.png"
+    Image.new("RGB", (64, 64), (20, 80, 220)).save(reference_path)
+    plan = _character_reference_plan(reference_path)
+    clean_frames = ((int(plan["resolved_output"]["frame_count"]) - 1) // 8) + 1
+    samples = torch.zeros((1, 128, clean_frames, 12, 12), dtype=torch.float32)
+    optional_latent = {"samples": samples, "downscale_ratio_spacial": 32}
+
+    _, _, _, video_latent, _, _, guide_data, *_ = build_ltx_runtime_outputs(
+        **_runtime_args(plan, optional_latent=optional_latent)
+    )
+
+    assert guide_data["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
+    assert guide_data["reserved_latent_frames"] == clean_frames + LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES + 1
+    assert video_latent["samples"].shape[2] >= guide_data["reserved_latent_frames"]
+    assert torch.equal(samples, torch.zeros_like(samples))
 
 
 def test_runtime_does_not_mutate_input_plan():

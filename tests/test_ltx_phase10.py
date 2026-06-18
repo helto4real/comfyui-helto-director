@@ -273,7 +273,12 @@ def test_crop_reference_tail_crops_samples_and_noise_mask():
         "samples": torch.arange(1 * 128 * 5 * 2 * 2, dtype=torch.float32).reshape(1, 128, 5, 2, 2),
         "noise_mask": torch.ones((1, 1, 5, 1, 1), dtype=torch.float32),
     }
-    guide_data = {"clean_latent_frames": 3, "clean_pixel_frames": 17}
+    guide_data = {
+        "clean_latent_frames": 3,
+        "clean_pixel_frames": 17,
+        "hidden_reference_count": 1,
+        "hidden_reference_guard_latent_frames": 2,
+    }
 
     cropped, clean_pixel_frames = classes["HeltoLTX23TimelineCropReferenceTail"].execute(latent, guide_data).result
 
