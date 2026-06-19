@@ -1,6 +1,6 @@
 # WAN 2.2 Timeline Support
 
-WAN 2.2 support is now in Phase 16 runtime-execution status. The path is:
+WAN 2.2 support uses this node path:
 
 `Video Timeline Director -> WAN 2.2 Timeline Config -> WAN 2.2 Timeline Planner -> WAN 2.2 Timeline Runtime`
 
@@ -18,10 +18,10 @@ The Director stays generic. WAN-specific behavior lives in the WAN Config, Plann
 
 ## Backend Profiles
 
-- `Plan Only`: diagnostic mode. It preserves planned prompts/keyframes/audio metadata and explains what would or would not run.
+- `Plan Only`: diagnostic mode. It preserves prompt, keyframe, and audio metadata and explains what would or would not run.
 - `Auto`: resolves to `ComfyUI Core` only when CLIP, VAE, and at least one high/low WAN model phase are connected; otherwise it resolves to `Plan Only`.
 - `ComfyUI Core`: executable mode for the supported core path. It builds prompt conditioning, patches connected model phases for Prompt Relay, calls ComfyUI Core WAN image/latent helpers, creates a WAN latent, and applies supported Start/End image conditioning.
-- `WanVideoWrapper`: reserved profile. It is not implemented in this nodepack yet and fails clearly if selected.
+- `WanVideoWrapper`: reserved profile. Selecting it fails clearly because this nodepack does not currently provide that backend.
 
 ## Runtime Model Wiring
 
@@ -81,7 +81,7 @@ Director character references are the Bernini subject-reference path. Add them f
 
 Only prompt-tagged references are passed to Bernini. Untagged active references stay available in the Director UI but do not influence WAN generation. Bernini accepts up to eight subject reference images through the current ComfyUI Core autogrow input; extra tagged references are reported and ignored.
 
-Additional timeline images/videos are preserved in planner/runtime debug as deferred media. Timeline media is never reclassified as a Bernini subject reference; timeline images/videos are source/background context, and Director references are subject references. `ads2v`, `vi2v`, `vrc2v`, and `mv2v` remain deferred.
+Additional timeline images/videos are preserved in planner/runtime debug as unavailable media for the selected backend. Timeline media is never reclassified as a Bernini subject reference; timeline images/videos are source/background context, and Director references are subject references. `ads2v`, `vi2v`, `vrc2v`, and `mv2v` are reported as unavailable task types.
 
 Bernini system prompts are prefixes only. ComfyUI Core execution fails with `BERNINI_NO_USER_CONDITIONING` if Bernini receives no user prompt text and no timeline image/video media, because generating from only the trained task prefix usually indicates an unconnected or unserialized Director timeline.
 
@@ -101,15 +101,15 @@ Runtime backend capabilities decide what can be applied:
 - `applied_keyframes`: keyframes applied by the selected backend
 - `unsupported_keyframes`: requested keyframes the backend cannot apply
 
-The `ComfyUI Core` backend currently applies Start and End image conditioning. Timed keyframes remain planned and visible in debug, but are reported unsupported.
+The `ComfyUI Core` backend currently applies Start and End image conditioning. Timed keyframes stay visible in debug, but are reported unsupported.
 
 For default `I2V-A14B` execution, at least one usable Image Section is required. If the timeline has no Start image keyframe, `ComfyUI Core` mode fails clearly with `WAN_REQUIRED_IMAGE_CONDITIONING_MISSING` instead of silently producing a text-only fallback. Use `Plan Only` for inspection, add an Image Section, or select a text-capable model mode when you intentionally want no image guidance.
 
 ## Video, Audio, And References
 
 - Video Sections are prompt-only fallback for vanilla WAN unless policy is set to error; Bernini can use the first Video Section as `source_video`.
-- Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned in Phase 16.
-- Bernini subject references come from Director character references. Vanilla WAN A14B subject reference images, Animate, S2V, arbitrary Timed keyframe tensor application, and WanVideoWrapper runtime integration are not implemented in Phase 16.
+- Audio clips are preserved as final-mix metadata only; WAN generation is not audio-conditioned.
+- Bernini subject references come from Director character references. Vanilla WAN A14B subject reference images, Animate, S2V, arbitrary Timed keyframe tensor application, and WanVideoWrapper runtime integration are not currently supported.
 
 ## Debugging
 

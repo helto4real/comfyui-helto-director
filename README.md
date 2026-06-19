@@ -23,13 +23,9 @@ See [LTX 2.3 Timeline Workflow Guide](docs/examples/ltx_timeline_workflow_guide.
 - [Media picker setup](docs/picker_setup.md)
 - [Privacy mode limitations](docs/privacy_limitations.md)
 - [Current limitations](docs/current_limitations.md)
-- [Implementation roadmap](docs/IMPLEMENTATION_ROADMAP.md)
 - [WAN 2.2 Timeline support](docs/WAN22_SUPPORT.md)
 - [WAN 2.2 manual test checklist](docs/WAN22_MANUAL_TEST_CHECKLIST.md)
-- [WAN 2.2 skeleton status](docs/wan_skeleton_status.md)
 
-## Source of Truth
+## Developer Context
 
-See [PLAN.md](PLAN.md) for the original locked product rules, VIDEO_TIMELINE contract, and phase roadmap.
-See [AGENTS.md](AGENTS.md) for the compact agent routing guide and validation commands.
-See [phase_status.md](phase_status.md) for current phase progress and next-phase boundaries.
+See [AGENTS.md](AGENTS.md) for the compact agent routing guide, code boundaries, and validation commands.

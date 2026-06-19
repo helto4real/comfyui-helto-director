@@ -17,8 +17,6 @@ DOC_PATHS = [
     REPO_ROOT / "docs" / "current_limitations.md",
     REPO_ROOT / "docs" / "WAN22_SUPPORT.md",
     REPO_ROOT / "docs" / "WAN22_MANUAL_TEST_CHECKLIST.md",
-    REPO_ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md",
-    REPO_ROOT / "docs" / "wan_skeleton_status.md",
 ]
 
 EXPECTED_WORKFLOWS = {
@@ -43,7 +41,7 @@ EXPECTED_WORKFLOWS = {
         "HeltoLTX23TimelineReferenceImageSelector",
         "HeltoLTX23TimelineCropReferenceTail",
     },
-    "wan_planner_skeleton_workflow.json": {
+    "wan_plan_only_workflow.json": {
         "HeltoVideoTimelineDirector",
         "HeltoWAN22TimelineConfig",
         "HeltoWAN22TimelinePlanner",
@@ -124,7 +122,7 @@ def test_workflow_links_reference_existing_nodes():
 
 
 def test_wan_example_uses_plan_only_runtime():
-    workflow = _load_workflow("wan_planner_skeleton_workflow.json")
+    workflow = _load_workflow("wan_plan_only_workflow.json")
     node_types = {node["type"] for node in workflow["nodes"]}
 
     assert "HeltoWAN22TimelineConfig" in node_types

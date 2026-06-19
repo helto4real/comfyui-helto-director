@@ -2,7 +2,7 @@
 
 This guide covers the current practical LTX Timeline path: generic timeline authoring in
 `Video Timeline Director`, model-specific planning in the LTX nodes, runtime guide/audio
-materialization, prompt optimization, privacy mode, and the Phase 10 identity/reference helpers.
+materialization, prompt optimization, privacy mode, and the identity/reference helpers.
 
 ![LTX Timeline workflow overview](../assets/ltx-timeline-workflow-overview.png)
 
@@ -77,7 +77,7 @@ Image and video thumbnails are visual context only. Exact technical instructions
 
 ![Identity and reference helper flow](../assets/identity-reference-helper-flow.png)
 
-Phase 10 helper nodes stay separate from the Director:
+Identity/reference helper nodes stay separate from the Director:
 
 - `LTX 2.3 Timeline Reference Image Selector` selects an image from Runtime `guide_data`.
 - `LTX 2.3 Timeline Identity Anchor: Latent Aware` builds a latent-aware identity anchor config.

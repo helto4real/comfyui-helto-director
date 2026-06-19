@@ -1,8 +1,7 @@
 # Agent Guide
 
-This file is the fast context map for this repo. Keep it short. The full original
-product plan and phase roadmap live in `PLAN.md`; read that only when you need
-locked product decisions, schema details, or roadmap acceptance criteria.
+This file is the fast context map for this repo. Keep it short and focused on
+agent routing, current code boundaries, and validation commands.
 
 ## Always-On Rules
 
@@ -20,10 +19,10 @@ locked product decisions, schema details, or roadmap acceptance criteria.
 
 ## Source Of Truth
 
-- `PLAN.md`: full locked design, original roadmap, schema contract, and phase
-  acceptance criteria.
-- `phase_status.md`: current implemented phases, current focus, and active UI
-  preferences.
+- `README.md`: user-facing overview and links to current documentation.
+- `docs/current_limitations.md`: current supported and unsupported behavior.
+- `docs/WAN22_SUPPORT.md`: WAN 2.2 workflow, defaults, backend profiles, and
+  debug fields.
 - Local ComfyUI checkout: `/home/thhel/git/ComfyUI/`. Use it for ComfyUI API
   source checks and Python test imports.
 - WhatDreamsCost reference repo: `/home/thhel/git/WhatDreamsCost-ComfyUI`.
@@ -145,29 +144,34 @@ planning, debug info, and LTX validation:
 - Tests: `tests/test_ltx_phase8.py`
 
 Keep all LTX-specific behavior in these LTX paths. If a change seems to require
-Director changes, check `PLAN.md` first and keep the Director generic.
+Director changes, keep the Director generic and promote shared behavior through
+the explicit contract surfaces above.
 
 ### WAN 2.2 Config, Planner, And Runtime
 
-WAN is planned but may not be scaffolded yet. When working on WAN, use the
-planned paths from `PLAN.md` and keep WAN-specific logic out of the Director:
+Start here for WAN-specific config, planning, runtime execution, prompt relay,
+Bernini task prompting, visual conditioning, backend compatibility, and debug
+output:
 
-- Future node paths: `nodes/wan_timeline_config/`,
-  `nodes/wan_timeline_planner/`, `nodes/wan_timeline_runtime/`
-- Future shared path: `shared/wan/`
-- Planned internal structure in `PLAN.md`: `wan22/config/`, `wan22/planner/`,
-  `wan22/runtime/`, and `wan22/shared/`
+- `nodes/wan_timeline_config/`
+- `nodes/wan_timeline_planner/`
+- `nodes/wan_timeline_runtime/`
+- `shared/wan/`
+- `shared/wan/runtime/`
+- Tests: `tests/test_wan_phase11.py`, `tests/test_wan_phase13.py`,
+  `tests/test_wan_phase14.py`, `tests/test_wan_phase15.py`,
+  `tests/test_wan_phase16.py`, `tests/test_wan_bernini.py`
 
-If the current repo does not contain these paths, create the minimal structure
-needed for the requested WAN phase and add focused tests alongside it.
+Keep all WAN-specific behavior in these WAN paths. The Director remains generic,
+and timeline media/reference semantics should cross the layer boundary through
+the shared contract and debug fields.
 
 ### Tests And Docs
 
 - Python tests live in `tests/`.
 - JavaScript tests live in `tests/js/`.
 - User-facing overview lives in `README.md`.
-- Keep this file focused on agent routing. Put long product detail in
-  `PLAN.md`, and current progress in `phase_status.md`.
+- Current user-facing details live under `docs/`.
 
 ## Commands
 
