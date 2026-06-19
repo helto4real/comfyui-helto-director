@@ -19,7 +19,13 @@ from ...segmented_executor import (
     trim_visible_segment_images,
 )
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
-from .audio import mix_timeline_audio
+from .audio import (
+    apply_native_source_video_audio_fallback,
+    build_native_av_sampling_latent,
+    decode_native_generated_audio,
+    mix_timeline_audio,
+    stitch_native_generated_audio,
+)
 from .runtime import build_ltx_runtime_outputs
 
 
@@ -75,6 +81,9 @@ def build_ltx_segmented_executor_outputs(
     guided_character_labels: set[str] = set()
     segment_debug = []
     cleanup_events = []
+    native_audio_segment_records = []
+    native_audio_diagnostics = []
+    use_native_audio = bool(plan.get("project", {}).get("audio", {}).get("use_native_audio"))
     config = plan.get("model_specific", {}).get("ltx", {}).get("config", {})
     configured_seam_blend_frames = segment_seam_blend_frames(
         config.get("segment_seam_blend_frames", 3) if isinstance(config, dict) else 3
@@ -109,7 +118,7 @@ def build_ltx_segmented_executor_outputs(
                 positive,
                 runtime_negative,
                 video_latent,
-                _audio_latent,
+                audio_latent,
                 _segment_audio,
                 guide_data,
                 *_rest,
@@ -134,11 +143,16 @@ def build_ltx_segmented_executor_outputs(
                 segment_index=segment_index,
                 segment_count=segment_count,
             )
+            native_audio_debug = {"enabled": use_native_audio, "av_latent_sampling": False, "diagnostics": []}
+            sampling_latent = video_latent
+            if use_native_audio:
+                sampling_latent, native_audio_debug = build_native_av_sampling_latent(video_latent, audio_latent)
+                native_audio_diagnostics.extend(native_audio_debug.get("diagnostics", []))
             sampled = sample_latent(
                 model=runtime_model,
                 positive=positive,
                 negative=runtime_negative,
-                latent=video_latent,
+                latent=sampling_latent,
                 seed=segment_seed(seed, index, seed_mode),
                 steps=steps,
                 cfg=cfg,
@@ -146,6 +160,15 @@ def build_ltx_segmented_executor_outputs(
                 scheduler=scheduler,
                 denoise=denoise,
             )
+            if use_native_audio and native_audio_debug.get("av_latent_sampling"):
+                decoded_audio, decoded_audio_debug = decode_native_generated_audio(sampled, audio_vae)
+                native_audio_debug["decode"] = decoded_audio_debug
+                native_audio_diagnostics.extend(decoded_audio_debug.get("diagnostics", []))
+                if decoded_audio is not None:
+                    native_audio_segment_records.append({
+                        "segment": deepcopy(segment),
+                        "audio": decoded_audio,
+                    })
             status_reporter.report(
                 "ltx.reference_tail_crop",
                 f"LTX Executor: segment {segment_index}/{segment_count} - cropping reference tail",
@@ -227,9 +250,10 @@ def build_ltx_segmented_executor_outputs(
                 "character_reference_labels_guided": reference_guidance_debug["character_reference_labels_guided"],
                 "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
+                "native_audio": native_audio_debug,
             })
             guided_character_labels.update(reference_guidance_debug["character_reference_labels_guided"])
-            del segment_plan, runtime_model, positive, runtime_negative, video_latent, sampled, cropped, decoded_images, images, visible_images
+            del segment_plan, runtime_model, positive, runtime_negative, video_latent, audio_latent, sampling_latent, sampled, cropped, decoded_images, images, visible_images
 
         status_reporter.report("timeline.stitch", "Timeline Executor: stitching segments")
         final_images = stitch_spilled_segment_images(
@@ -240,6 +264,34 @@ def build_ltx_segmented_executor_outputs(
         cleanup_summary = store.cleanup()
         status_reporter.report("timeline.audio", "Timeline Executor: mixing audio")
         combined_audio, audio_diagnostics = mix_timeline_audio(plan)
+        native_audio_debug = {
+            "enabled": use_native_audio,
+            "policy": "timeline_mix",
+            "decoded_segment_count": len(native_audio_segment_records),
+            "segment_audio_shapes": [
+                [int(dim) for dim in record["audio"]["waveform"].shape]
+                for record in native_audio_segment_records
+            ],
+        }
+        if use_native_audio:
+            native_audio, native_stitch_debug = stitch_native_generated_audio(
+                native_audio_segment_records,
+                final_frame_count=int(plan.get("resolved_output", {}).get("frame_count") or 1),
+                frame_rate=float(plan.get("resolved_output", {}).get("frame_rate") or 24.0),
+            )
+            native_audio_debug["stitch"] = native_stitch_debug
+            native_audio_diagnostics.extend(native_stitch_debug.get("diagnostics", []))
+            if native_audio is not None:
+                combined_audio = native_audio
+                native_audio_debug["policy"] = "native_generated"
+                native_audio_diagnostics.append("Native generated audio decoded and returned as executor audio output.")
+            else:
+                combined_audio, source_audio_diagnostics = apply_native_source_video_audio_fallback(plan, combined_audio)
+                native_audio_diagnostics.extend(source_audio_diagnostics)
+                if any("fallback applied" in entry for entry in source_audio_diagnostics):
+                    native_audio_debug["policy"] = "source_video_fallback"
+                else:
+                    native_audio_debug["policy"] = "timeline_mix_fallback"
         status_reporter.done("Timeline Executor: done")
         debug = {
             "enabled": bool(segmented.get("enabled")),
@@ -252,11 +304,13 @@ def build_ltx_segmented_executor_outputs(
             "stitching": {
                 "output_frame_count": int(final_images.shape[0]),
                 "target_frame_count": int(plan.get("resolved_output", {}).get("frame_count") or 1),
-                "audio_policy": "global_full_mix",
+                "audio_policy": native_audio_debug["policy"],
             },
+            "native_audio": native_audio_debug,
             "diagnostics": [
                 *(segmented.get("diagnostics") or []),
                 *audio_diagnostics,
+                *native_audio_diagnostics,
             ],
         }
         return final_images, combined_audio, float(plan.get("resolved_output", {}).get("frame_rate") or 24.0), debug

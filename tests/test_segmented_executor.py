@@ -19,6 +19,7 @@ from shared.timeline_status import TimelineStatusReporter
 import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
+import shared.ltx.runtime.audio as ltx_audio
 import shared.ltx.runtime.segmented as ltx_segmented
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline.segmentation import build_generation_segments
@@ -664,6 +665,271 @@ def test_ltx_segmented_executor_guides_new_character_in_continuation(monkeypatch
     assert debug["segments"][1]["character_reference_guidance"]["character_reference_labels_text_only"] == []
 
 
+def test_ltx_segmented_executor_uses_native_source_video_audio_fallback(monkeypatch, tmp_path):
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+    monkeypatch.setattr(
+        ltx_audio,
+        "decode_audio_file",
+        lambda _path: torch.full((2, 44100), 0.25, dtype=torch.float32),
+    )
+    plan = _ltx_native_video_audio_executor_plan()
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert audio["waveform"].shape == (1, 2, 44100)
+    assert torch.isclose(audio["waveform"].abs().max(), torch.tensor(0.25))
+    assert any("fallback applied" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_keeps_timeline_audio_over_native_fallback(monkeypatch, tmp_path):
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+    timeline_audio = {"waveform": torch.full((1, 2, 1), 0.75, dtype=torch.float32), "sample_rate": 44100}
+    monkeypatch.setattr(ltx_segmented, "mix_timeline_audio", lambda _plan: (timeline_audio, ["timeline audio mix"]))
+    monkeypatch.setattr(
+        ltx_audio,
+        "decode_audio_file",
+        lambda _path: torch.full((2, 44100), 0.25, dtype=torch.float32),
+    )
+    plan = _ltx_native_video_audio_executor_plan()
+    plan["audio_plan"] = [{"item_id": "audio_clip_001", "enabled": True, "path": "/tmp/music.wav"}]
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert audio is timeline_audio
+    assert torch.equal(audio["waveform"], torch.full((1, 2, 1), 0.75, dtype=torch.float32))
+    assert any("timeline audio clips are present" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_keeps_timeline_mix_when_native_source_audio_unavailable(monkeypatch, tmp_path):
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+
+    def raise_no_audio(_path):
+        raise ValueError("no audio stream")
+
+    monkeypatch.setattr(ltx_audio, "decode_audio_file", raise_no_audio)
+    plan = _ltx_native_video_audio_executor_plan()
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert torch.equal(audio["waveform"], torch.zeros((1, 2, 1)))
+    assert any("no decodable audio stream" in entry for entry in debug["diagnostics"])
+    assert any("returning timeline audio mix" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_samples_av_latent_and_returns_native_generated_audio(monkeypatch, tmp_path):
+    sampled_latents = []
+
+    def fake_build_runtime_outputs(**kwargs):
+        frame_count = int(kwargs["ltx_timeline_plan"]["resolved_output"]["frame_count"])
+        return _fake_ltx_runtime_result(
+            hidden_reference_count=0,
+            video_latent={"samples": torch.zeros((1, 16, frame_count, 1, 1), dtype=torch.float32)},
+            audio_latent={"samples": torch.ones((1, 4, frame_count, 2), dtype=torch.float32)},
+        )
+
+    def fake_sample_latent(**kwargs):
+        sampled_latents.append(kwargs["latent"])
+        return kwargs["latent"]
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+    monkeypatch.setattr(ltx_segmented, "sample_latent", fake_sample_latent)
+    plan = _ltx_one_segment_native_generated_audio_executor_plan()
+    audio_vae = _FakeNativeAudioVAE(
+        outputs=[torch.full((1, 44100, 2), 0.5, dtype=torch.float32)],
+        sample_rate=44100,
+    )
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+        audio_vae=audio_vae,
+    )
+
+    assert getattr(sampled_latents[0]["samples"], "is_nested", False) is True
+    assert audio["waveform"].shape == (1, 2, 44100)
+    assert torch.isclose(audio["waveform"].abs().max(), torch.tensor(0.5))
+    assert debug["native_audio"]["policy"] == "native_generated"
+    assert any("Native generated audio decoded" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_native_generated_audio_wins_over_timeline_audio(monkeypatch, tmp_path):
+    def fake_build_runtime_outputs(**kwargs):
+        frame_count = int(kwargs["ltx_timeline_plan"]["resolved_output"]["frame_count"])
+        return _fake_ltx_runtime_result(
+            hidden_reference_count=0,
+            video_latent={"samples": torch.zeros((1, 16, frame_count, 1, 1), dtype=torch.float32)},
+            audio_latent={"samples": torch.ones((1, 4, frame_count, 2), dtype=torch.float32)},
+        )
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+    timeline_audio = {"waveform": torch.full((1, 2, 44100), 0.75, dtype=torch.float32), "sample_rate": 44100}
+    monkeypatch.setattr(ltx_segmented, "mix_timeline_audio", lambda _plan: (timeline_audio, ["timeline audio mix"]))
+    plan = _ltx_one_segment_native_generated_audio_executor_plan()
+    plan["audio_plan"] = [{"item_id": "audio_clip_001", "enabled": True, "path": "/tmp/music.wav"}]
+    audio_vae = _FakeNativeAudioVAE(
+        outputs=[torch.full((1, 44100, 2), 0.25, dtype=torch.float32)],
+        sample_rate=44100,
+    )
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+        audio_vae=audio_vae,
+    )
+
+    assert torch.isclose(audio["waveform"].abs().max(), torch.tensor(0.25))
+    assert debug["native_audio"]["policy"] == "native_generated"
+
+
+def test_ltx_segmented_executor_falls_back_when_native_audio_latent_is_empty(monkeypatch, tmp_path):
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+    plan = _ltx_one_segment_native_generated_audio_executor_plan()
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert torch.equal(audio["waveform"], torch.zeros((1, 2, 1)))
+    assert debug["native_audio"]["policy"] == "timeline_mix_fallback"
+    assert any("empty audio latent" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_falls_back_when_native_audio_decode_fails(monkeypatch, tmp_path):
+    def fake_build_runtime_outputs(**kwargs):
+        frame_count = int(kwargs["ltx_timeline_plan"]["resolved_output"]["frame_count"])
+        return _fake_ltx_runtime_result(
+            hidden_reference_count=0,
+            video_latent={"samples": torch.zeros((1, 16, frame_count, 1, 1), dtype=torch.float32)},
+            audio_latent={"samples": torch.ones((1, 4, frame_count, 2), dtype=torch.float32)},
+        )
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+    plan = _ltx_one_segment_native_generated_audio_executor_plan()
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+        audio_vae=_FakeNativeAudioVAE(fail=True),
+    )
+
+    assert torch.equal(audio["waveform"], torch.zeros((1, 2, 1)))
+    assert debug["native_audio"]["policy"] == "timeline_mix_fallback"
+    assert any("decode failed" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_trims_and_stitches_native_generated_audio_segments(monkeypatch, tmp_path):
+    def fake_build_runtime_outputs(**kwargs):
+        frame_count = int(kwargs["ltx_timeline_plan"]["resolved_output"]["frame_count"])
+        return _fake_ltx_runtime_result(
+            hidden_reference_count=0,
+            video_latent={"samples": torch.zeros((1, 16, frame_count, 1, 1), dtype=torch.float32)},
+            audio_latent={"samples": torch.ones((1, 4, frame_count, 2), dtype=torch.float32)},
+        )
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+    plan = _ltx_native_generated_audio_executor_plan()
+    audio_vae = _FakeNativeAudioVAE(
+        outputs=[
+            torch.tensor([[[1.0, 1.0]] * 5], dtype=torch.float32),
+            torch.tensor([[[9.0, 9.0], [9.0, 9.0], [2.0, 2.0], [2.0, 2.0], [2.0, 2.0]]], dtype=torch.float32),
+        ],
+        sample_rate=8,
+    )
+
+    _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+        audio_vae=audio_vae,
+    )
+
+    assert audio["sample_rate"] == 8
+    assert torch.equal(audio["waveform"][0, 0], torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0]))
+    assert debug["native_audio"]["policy"] == "native_generated"
+    assert debug["native_audio"]["stitch"]["final_audio_shape"] == [1, 2, 8]
+
+
 def test_post_decode_memory_cleanup_reports_event():
     event = post_decode_memory_cleanup("post_decode_test")
 
@@ -1248,14 +1514,94 @@ def _ltx_character_reference_executor_plan(second_prompt, *, include_image2=Fals
     return plan
 
 
-def _fake_ltx_runtime_result(*, hidden_reference_count):
+def _ltx_native_video_audio_executor_plan():
+    plan = _two_segment_executor_plan("ltx")
+    plan["resolved_output"]["duration_seconds"] = 1.0
+    plan["project"]["audio"] = {
+        "use_native_audio": True,
+        "always_normalize": False,
+    }
+    plan["section_plan"] = [
+        {
+            "item_id": "section_video_001",
+            "type": "Video",
+            "start_frame": 0,
+            "end_frame_exclusive": 8,
+            "frame_count": 8,
+        }
+    ]
+    plan["prompt_plan"] = [
+        {
+            "item_id": "section_video_001",
+            "type": "Video",
+            "raw_prompt": "continue the source video",
+        }
+    ]
+    plan["media_plan"] = [
+        {
+            "item_id": "section_video_001",
+            "section_type": "Video",
+            "path": "/tmp/source-video.mp4",
+            "source_in": 0.0,
+            "source_out": None,
+        }
+    ]
+    plan["audio_plan"] = []
+    return plan
+
+
+def _ltx_native_generated_audio_executor_plan():
+    plan = _two_segment_executor_plan("ltx")
+    plan["resolved_output"]["duration_seconds"] = 1.0
+    plan["project"]["audio"] = {
+        "use_native_audio": True,
+        "always_normalize": False,
+    }
+    plan["audio_plan"] = []
+    return plan
+
+
+def _ltx_one_segment_native_generated_audio_executor_plan():
+    plan = _ltx_native_generated_audio_executor_plan()
+    plan["model_specific"]["ltx"]["segmented_generation"]["segments"] = [
+        {
+            "id": "gen_001",
+            "index": 0,
+            "start_frame": 0,
+            "end_frame_exclusive": 8,
+            "visible_frame_count": 8,
+            "generation_frame_count": 8,
+            "trim_leading_frames": 0,
+            "trim_trailing_frames": 0,
+            "continuity": {"mode": "initial", "continuity_frame_count": 0},
+        }
+    ]
+    return plan
+
+
+class _FakeNativeAudioVAE:
+    def __init__(self, *, outputs=None, sample_rate=44100, fail=False):
+        self.outputs = list(outputs or [])
+        self.fail = bool(fail)
+        self.first_stage_model = type("FakeAudioVAEModel", (), {"output_sample_rate": int(sample_rate)})()
+
+    def decode(self, audio_latent):
+        if self.fail:
+            raise ValueError("fake native audio decode failure")
+        if self.outputs:
+            return self.outputs.pop(0)
+        sample_count = max(1, int(audio_latent.shape[2]))
+        return torch.full((1, sample_count, 2), 0.5, dtype=torch.float32, device=audio_latent.device)
+
+
+def _fake_ltx_runtime_result(*, hidden_reference_count, video_latent=None, audio_latent=None):
     runtime_debug = {"summary": {}}
     return (
         object(),
         [],
         [],
-        {"samples": torch.zeros((1, 16, 3, 1, 1))},
-        None,
+        video_latent or {"samples": torch.zeros((1, 16, 3, 1, 1))},
+        audio_latent,
         None,
         {
             "clean_latent_frames": 3,
