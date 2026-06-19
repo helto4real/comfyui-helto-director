@@ -30,7 +30,52 @@ locked product decisions, schema details, or roadmap acceptance criteria.
   Use only as inspiration for picker/timeline concepts; do not copy its old
   all-in-one architecture blindly.
 
-## Load Only The Context You Need
+## Execution Model
+
+The main thread is the orchestrator and planner. It decides whether work is
+UI-only, backend-only, or cross-layer; owns shared contract changes; delegates
+focused worker threads; performs final integration review; and runs final
+validation.
+
+- UI-only work: assign a UI worker with frontend context and JavaScript tests.
+- Backend-only work: assign a backend worker with backend context and Python
+  tests.
+- Cross-layer work: define the shared contract change first, then split UI and
+  backend work against that contract.
+
+Backend workers load backend paths, Python tests, and only the minimum shared
+contract files needed for integration. UI workers load frontend paths,
+JavaScript tests, and only the minimum shared contract files needed for
+integration.
+
+Each worker report should list files read, files changed, contract assumptions,
+tests run, and open handoff risks. Do not broaden context because it might be
+interesting; broaden only when current evidence shows the boundary is wrong.
+
+## Shared Contract Boundary
+
+UI and backend work communicate through the shared contract, not through each
+other's implementation details. Shared contract surfaces are:
+
+- `shared/contracts/`
+- `shared/timeline/`
+- `web/timeline/schema.js`
+- `web/timeline/migration.js`
+- Hidden widget payload: `video_timeline_json`
+- Serialized `VIDEO_TIMELINE` data
+- Media browser/cache route request and response shapes
+- Validation errors, warning codes, fallback behavior, and debug fields
+
+If UI behavior depends on a backend detail, promote that detail into an explicit
+schema field, route response field, validation code, debug field, or documented
+fallback behavior. Cross-layer work starts with the orchestrator defining the
+contract change before UI or backend implementation begins.
+
+Backend workers may inspect frontend schema/migration files only to confirm the
+serialized contract. UI workers may inspect backend contract or route
+definitions only to confirm payload shapes.
+
+## Subsystem Context Maps
 
 ### Director Backend
 
@@ -176,11 +221,3 @@ PYTHONPATH=/home/thhel/git/ComfyUI python -m pytest
 python -m py_compile path/to/changed_file.py
 git diff --check
 ```
-
-## Phase Workflow
-
-When starting or resuming a roadmap phase, read `phase_status.md` first, then
-read only the relevant section of `PLAN.md`. Restate the phase goal, files to
-touch, locked decisions that apply, checks to run, and acceptance status.
-
-Do not proceed to the next phase unless the user asks.
