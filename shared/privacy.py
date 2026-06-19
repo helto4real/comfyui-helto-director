@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import secrets
 from pathlib import Path
@@ -23,9 +24,11 @@ except Exception as exc:  # noqa: BLE001 - dependency may be absent in ComfyUI i
 
 ENVELOPE_SCHEMA = "helto.timeline-director"
 BYTE_ENVELOPE_SCHEMA = "helto.timeline-director.bytes"
+BYTE_CHUNKED_ENVELOPE_SCHEMA = "helto.timeline-director.bytes.chunked"
 ENVELOPE_VERSION = 1
 ALGORITHM = "AES-256-GCM"
 KEY_FILE_NAME = "privacy_key.json"
+BYTE_CHUNK_SIZE = 64 * 1024 * 1024
 
 
 class PrivacyError(RuntimeError):
@@ -67,6 +70,9 @@ def is_encrypted_payload(value: Any) -> bool:
 
 def encrypt_bytes(data: bytes, purpose: str, base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     key, key_id = _load_or_create_key(base_dir, create=True)
+    chunk_size = _byte_chunk_size()
+    if len(data) > chunk_size:
+        return _encrypt_bytes_chunked(data, purpose, key, key_id, chunk_size)
     nonce = secrets.token_bytes(12)
     ciphertext = AESGCM(key).encrypt(nonce, data, _bytes_aad(key_id, purpose))  # type: ignore[operator]
     return {
@@ -90,15 +96,19 @@ def decrypt_bytes(payload: Any, purpose: str, base_dir: str | os.PathLike[str] |
     if not (
         isinstance(payload, Mapping)
         and payload.get("encrypted") is True
-        and payload.get("schema") == BYTE_ENVELOPE_SCHEMA
         and payload.get("algorithm") == ALGORITHM
     ):
         raise PrivacyError("Data is not an encrypted byte payload.")
+    schema = payload.get("schema")
     if str(payload.get("purpose", "")) != purpose:
         raise PrivacyError("Encrypted byte payload was created for a different purpose.")
     key, key_id = _load_or_create_key(base_dir, create=False)
     if str(payload.get("keyId", "")) != key_id:
         raise PrivacyError("Encrypted byte payload was created with a different local privacy key.")
+    if schema == BYTE_CHUNKED_ENVELOPE_SCHEMA:
+        return _decrypt_bytes_chunked(payload, purpose, key, key_id)
+    if schema != BYTE_ENVELOPE_SCHEMA:
+        raise PrivacyError("Data is not an encrypted byte payload.")
     try:
         nonce = _b64url_decode(str(payload.get("nonce", "")))
         ciphertext = _b64url_decode(str(payload.get("ciphertext", "")))
@@ -207,6 +217,92 @@ def _aad(key_id: str) -> bytes:
 
 def _bytes_aad(key_id: str, purpose: str) -> bytes:
     return f"{BYTE_ENVELOPE_SCHEMA}|{ENVELOPE_VERSION}|{ALGORITHM}|{key_id}|{purpose}".encode("utf-8")
+
+
+def _chunk_bytes_aad(key_id: str, purpose: str, index: int, total_chunks: int, plaintext_size: int) -> bytes:
+    return (
+        f"{BYTE_CHUNKED_ENVELOPE_SCHEMA}|{ENVELOPE_VERSION}|{ALGORITHM}|{key_id}|{purpose}|"
+        f"{int(index)}|{int(total_chunks)}|{int(plaintext_size)}"
+    ).encode("utf-8")
+
+
+def _byte_chunk_size() -> int:
+    try:
+        return max(1, int(BYTE_CHUNK_SIZE))
+    except (TypeError, ValueError):
+        return 64 * 1024 * 1024
+
+
+def _encrypt_bytes_chunked(data: bytes, purpose: str, key: bytes, key_id: str, chunk_size: int) -> dict[str, Any]:
+    plaintext_size = len(data)
+    total_chunks = max(1, int(math.ceil(plaintext_size / chunk_size)))
+    chunks = []
+    for index, offset in enumerate(range(0, plaintext_size, chunk_size)):
+        nonce = secrets.token_bytes(12)
+        chunk = data[offset: offset + chunk_size]
+        ciphertext = AESGCM(key).encrypt(
+            nonce,
+            chunk,
+            _chunk_bytes_aad(key_id, purpose, index, total_chunks, plaintext_size),  # type: ignore[operator]
+        )
+        chunks.append({
+            "index": index,
+            "nonce": _b64url_encode(nonce),
+            "ciphertext": _b64url_encode(ciphertext),
+        })
+    return {
+        "version": ENVELOPE_VERSION,
+        "schema": BYTE_CHUNKED_ENVELOPE_SCHEMA,
+        "encrypted": True,
+        "algorithm": ALGORITHM,
+        "purpose": purpose,
+        "keyId": key_id,
+        "chunkSize": int(chunk_size),
+        "plaintextSize": plaintext_size,
+        "chunks": chunks,
+    }
+
+
+def _decrypt_bytes_chunked(payload: Mapping[str, Any], purpose: str, key: bytes, key_id: str) -> bytes:
+    try:
+        plaintext_size = int(payload.get("plaintextSize"))
+        chunk_size = int(payload.get("chunkSize"))
+    except (TypeError, ValueError) as exc:
+        raise PrivacyError("Encrypted byte payload has invalid chunk metadata.") from exc
+    if plaintext_size < 0 or chunk_size <= 0:
+        raise PrivacyError("Encrypted byte payload has invalid chunk metadata.")
+    chunks = payload.get("chunks")
+    if not isinstance(chunks, list) or not chunks:
+        raise PrivacyError("Encrypted byte payload does not contain chunks.")
+    total_chunks = len(chunks)
+    expected_indexes = set(range(total_chunks))
+    seen_indexes = set()
+    plaintext_parts: list[bytes] = [b""] * total_chunks
+    try:
+        for entry in chunks:
+            if not isinstance(entry, Mapping):
+                raise PrivacyError("Encrypted byte payload contains an invalid chunk.")
+            index = int(entry.get("index"))
+            if index not in expected_indexes or index in seen_indexes:
+                raise PrivacyError("Encrypted byte payload contains invalid chunk indexes.")
+            nonce = _b64url_decode(str(entry.get("nonce", "")))
+            ciphertext = _b64url_decode(str(entry.get("ciphertext", "")))
+            plaintext_parts[index] = AESGCM(key).decrypt(  # type: ignore[operator]
+                nonce,
+                ciphertext,
+                _chunk_bytes_aad(key_id, purpose, index, total_chunks, plaintext_size),
+            )
+            seen_indexes.add(index)
+    except PrivacyError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - auth/tag/key failures should be user-readable.
+        raise PrivacyError(f"Could not decrypt chunked byte payload: {exc}") from exc
+    if seen_indexes != expected_indexes:
+        raise PrivacyError("Encrypted byte payload is missing chunks.")
+    plaintext = b"".join(plaintext_parts)
+    if len(plaintext) != plaintext_size:
+        raise PrivacyError("Encrypted byte payload decrypted to an unexpected size.")
+    return plaintext
 
 
 def _b64url_encode(data: bytes) -> str:

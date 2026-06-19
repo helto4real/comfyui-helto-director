@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 
 import torch
 
-from shared.privacy import CRYPTO_AVAILABLE
+import shared.privacy as privacy
+from shared.privacy import BYTE_CHUNKED_ENVELOPE_SCHEMA, CRYPTO_AVAILABLE
 from shared.segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
@@ -352,6 +354,26 @@ def test_segment_spill_store_encrypted_round_trips_without_plaintext(tmp_path):
     assert encrypted_text.startswith("{")
     assert summary["encrypted"] is True
     assert "path" not in summary["records"][0]
+
+
+def test_segment_spill_store_encrypted_chunked_round_trips(monkeypatch, tmp_path):
+    if not CRYPTO_AVAILABLE:
+        return
+    monkeypatch.setattr(privacy, "BYTE_CHUNK_SIZE", 64)
+    store = SegmentSpillStore(privacy_mode=True, root=tmp_path)
+    tensor = torch.arange(240, dtype=torch.float32).reshape(5, 4, 4, 3)
+
+    record = store.write_segment({"id": "secret_chunked_segment"}, tensor)
+    path = Path(record["path"])
+    encrypted = json.loads(path.read_text(encoding="utf-8"))
+    loaded = store.read_segment(record)
+    summary = store.cleanup()
+
+    assert encrypted["schema"] == BYTE_CHUNKED_ENVELOPE_SCHEMA
+    assert len(encrypted["chunks"]) > 1
+    assert torch.equal(loaded, tensor)
+    assert "secret_chunked_segment" not in json.dumps(encrypted)
+    assert summary["encrypted"] is True
 
 
 def test_stitch_spilled_segments_loads_sequentially_and_clamps(tmp_path):
