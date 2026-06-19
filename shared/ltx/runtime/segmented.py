@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from ...timeline.references import parse_reference_tags
 from ...ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from ...segmented_executor import (
     SegmentSpillStore,
@@ -71,6 +72,7 @@ def build_ltx_segmented_executor_outputs(
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     spill_records = []
     previous_images = None
+    guided_character_labels: set[str] = set()
     segment_debug = []
     cleanup_events = []
     config = plan.get("model_specific", {}).get("ltx", {}).get("config", {})
@@ -96,6 +98,11 @@ def build_ltx_segmented_executor_outputs(
                 segment,
                 model_key="ltx",
                 previous_tail_images=tail,
+            )
+            reference_guidance_debug = _filter_segment_character_reference_guides(
+                segment_plan,
+                guided_character_labels,
+                has_previous_tail=tail is not None,
             )
             (
                 runtime_model,
@@ -214,8 +221,14 @@ def build_ltx_segmented_executor_outputs(
                 "actual_tail_frame_count": int(tail.shape[0]) if tail is not None else 0,
                 "actual_tail_shape": [int(dim) for dim in tail.shape] if tail is not None else [],
                 "seam_blend": seam_blend_debug,
+                "character_reference_guidance": reference_guidance_debug,
+                "character_reference_guidance_policy": reference_guidance_debug["character_reference_guidance_policy"],
+                "character_reference_labels_requested": reference_guidance_debug["character_reference_labels_requested"],
+                "character_reference_labels_guided": reference_guidance_debug["character_reference_labels_guided"],
+                "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
             })
+            guided_character_labels.update(reference_guidance_debug["character_reference_labels_guided"])
             del segment_plan, runtime_model, positive, runtime_negative, video_latent, sampled, cropped, decoded_images, images, visible_images
 
         status_reporter.report("timeline.stitch", "Timeline Executor: stitching segments")
@@ -269,3 +282,86 @@ def _latent_frame_count(latent: dict[str, Any]) -> int | None:
         return int(shape[2])
     except Exception:
         return None
+
+
+def _filter_segment_character_reference_guides(
+    segment_plan: dict[str, Any],
+    guided_character_labels: set[str],
+    *,
+    has_previous_tail: bool,
+) -> dict[str, Any]:
+    character_references = segment_plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
+    if not isinstance(character_references, dict):
+        return _reference_guidance_debug([], [], [])
+
+    requested_labels = _segment_requested_character_labels(segment_plan.get("prompt_plan", []))
+    section_ids = {str(entry.get("item_id")) for entry in segment_plan.get("section_plan", []) if entry.get("item_id") is not None}
+    specs = character_references.get("guide_specs")
+    if not isinstance(specs, list):
+        character_references["segment_guidance"] = _reference_guidance_debug(requested_labels, [], [])
+        return character_references["segment_guidance"]
+
+    guided_specs = []
+    guided_labels: list[str] = []
+    text_only_labels: list[str] = []
+    for spec in specs:
+        label = _normalized_reference_label(spec.get("label") or spec.get("id"))
+        if not label or label not in requested_labels:
+            continue
+        if section_ids and not _spec_matches_section(spec, section_ids):
+            continue
+        if has_previous_tail and label in guided_character_labels:
+            text_only_labels.append(label)
+            continue
+        guided_specs.append(deepcopy(spec))
+        guided_labels.append(label)
+
+    for label in requested_labels:
+        if label in guided_labels or label in text_only_labels:
+            continue
+        if has_previous_tail and label in guided_character_labels:
+            text_only_labels.append(label)
+
+    debug = _reference_guidance_debug(requested_labels, guided_labels, text_only_labels)
+    character_references["guide_specs"] = guided_specs
+    character_references["segment_guidance"] = debug
+    return debug
+
+
+def _segment_requested_character_labels(prompt_plan: list[dict[str, Any]]) -> list[str]:
+    labels = []
+    seen = set()
+    for prompt in prompt_plan:
+        for tag in parse_reference_tags(str(prompt.get("raw_prompt") or "")):
+            if not tag.get("supported"):
+                continue
+            label = _normalized_reference_label(tag.get("label"))
+            if label and label not in seen:
+                seen.add(label)
+                labels.append(label)
+    return labels
+
+
+def _spec_matches_section(spec: dict[str, Any], section_ids: set[str]) -> bool:
+    raw = str(spec.get("section_id") or "").strip()
+    if not raw:
+        return True
+    spec_section_ids = {part for part in raw.split(",") if part}
+    return bool(spec_section_ids.intersection(section_ids))
+
+
+def _normalized_reference_label(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _reference_guidance_debug(
+    requested_labels: list[str],
+    guided_labels: list[str],
+    text_only_labels: list[str],
+) -> dict[str, Any]:
+    return {
+        "character_reference_guidance_policy": "segment_local_continuation",
+        "character_reference_labels_requested": sorted(set(requested_labels)),
+        "character_reference_labels_guided": sorted(set(guided_labels)),
+        "character_reference_labels_text_only": sorted(set(text_only_labels)),
+    }

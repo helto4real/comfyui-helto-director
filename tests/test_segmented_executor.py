@@ -566,6 +566,82 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     assert debug["stitching"]["output_frame_count"] == 8
 
 
+def test_ltx_segmented_executor_uses_text_only_for_repeated_character_reference(monkeypatch, tmp_path):
+    captured_guides = []
+    captured_runtime_prompts = []
+
+    def fake_build_runtime_outputs(**kwargs):
+        ltx = kwargs["ltx_timeline_plan"]["model_specific"]["ltx"]
+        captured_guides.append([
+            spec.get("label")
+            for spec in ltx.get("character_references", {}).get("guide_specs", [])
+        ])
+        captured_runtime_prompts.append([
+            prompt.get("runtime_prompt")
+            for prompt in kwargs["ltx_timeline_plan"].get("prompt_plan", [])
+        ])
+        return _fake_ltx_runtime_result(
+            hidden_reference_count=len(ltx.get("character_references", {}).get("guide_specs", []))
+        )
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+
+    _images, _audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=_ltx_character_reference_executor_plan("follow @image1:character"),
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert captured_guides == [["image1"], []]
+    assert captured_runtime_prompts[1] == ["Continuing from the previous segment, same subject, setting, style, and motion. follow red jacket hero"]
+    assert debug["segments"][0]["character_reference_guidance"]["character_reference_labels_guided"] == ["image1"]
+    assert debug["segments"][1]["character_reference_guidance"]["character_reference_labels_guided"] == []
+    assert debug["segments"][1]["character_reference_guidance"]["character_reference_labels_text_only"] == ["image1"]
+
+
+def test_ltx_segmented_executor_guides_new_character_in_continuation(monkeypatch, tmp_path):
+    captured_guides = []
+
+    def fake_build_runtime_outputs(**kwargs):
+        ltx = kwargs["ltx_timeline_plan"]["model_specific"]["ltx"]
+        captured_guides.append([
+            spec.get("label")
+            for spec in ltx.get("character_references", {}).get("guide_specs", [])
+        ])
+        return _fake_ltx_runtime_result(
+            hidden_reference_count=len(ltx.get("character_references", {}).get("guide_specs", []))
+        )
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+
+    _images, _audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=_ltx_character_reference_executor_plan("meet @image2:character", include_image2=True),
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert captured_guides == [["image1"], ["image2"]]
+    assert debug["segments"][1]["character_reference_guidance"]["character_reference_labels_requested"] == ["image2"]
+    assert debug["segments"][1]["character_reference_guidance"]["character_reference_labels_guided"] == ["image2"]
+    assert debug["segments"][1]["character_reference_guidance"]["character_reference_labels_text_only"] == []
+
+
 def test_post_decode_memory_cleanup_reports_event():
     event = post_decode_memory_cleanup("post_decode_test")
 
@@ -1093,3 +1169,106 @@ def _two_segment_executor_plan(model_key):
             },
         },
     }
+
+
+def _ltx_character_reference_executor_plan(second_prompt, *, include_image2=False):
+    plan = _two_segment_executor_plan("ltx")
+    plan["prompt_plan"] = [
+        {
+            "item_id": "section_001",
+            "type": "Text",
+            "raw_prompt": "follow @image1:character",
+            "runtime_prompt": "follow red jacket hero",
+        },
+        {
+            "item_id": "section_002",
+            "type": "Text",
+            "raw_prompt": second_prompt,
+            "runtime_prompt": (
+                "meet blue coat friend"
+                if "image2" in second_prompt
+                else "follow red jacket hero"
+            ),
+        },
+    ]
+    specs = [
+        {
+            "id": "ref_hero",
+            "label": "image1",
+            "kind": "character",
+            "description": "red jacket hero",
+            "strength": 1.0,
+            "image": {"path": "/tmp/hero.png"},
+            "section_id": "section_001,section_002",
+        },
+    ]
+    if include_image2:
+        specs.append(
+            {
+                "id": "ref_friend",
+                "label": "image2",
+                "kind": "character",
+                "description": "blue coat friend",
+                "strength": 1.0,
+                "image": {"path": "/tmp/friend.png"},
+                "section_id": "section_002",
+            }
+        )
+    plan["model_specific"]["ltx"]["character_references"] = {
+        "active": True,
+        "mode": "Prompt Relay",
+        "guide_specs": specs,
+        "section_usage": [],
+        "runtime_global_prompt": "",
+        "substitutions": [],
+        "diagnostics": [],
+    }
+    return plan
+
+
+def _fake_ltx_runtime_result(*, hidden_reference_count):
+    runtime_debug = {"summary": {}}
+    return (
+        object(),
+        [],
+        [],
+        {"samples": torch.zeros((1, 16, 3, 1, 1))},
+        None,
+        None,
+        {
+            "clean_latent_frames": 3,
+            "hidden_reference_count": hidden_reference_count,
+            "hidden_reference_guard_latent_frames": (
+                LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES if hidden_reference_count else 0
+            ),
+            "clean_pixel_frames": 5,
+        },
+        None,
+        runtime_debug,
+    )
+
+
+def _patch_ltx_executor_runtime(monkeypatch, tmp_path, build_runtime_outputs):
+    monkeypatch.setattr(ltx_segmented, "build_ltx_runtime_outputs", build_runtime_outputs)
+    monkeypatch.setattr(ltx_segmented, "sample_latent", lambda **kwargs: kwargs["latent"])
+    monkeypatch.setattr(ltx_segmented, "crop_latent_to_frame_count", lambda latent, _clean, _hidden, _guard=0: latent)
+    monkeypatch.setattr(
+        ltx_segmented,
+        "decode_latent_images",
+        lambda _vae, _latent: torch.zeros((5, 1, 1, 1), dtype=torch.float32),
+    )
+    monkeypatch.setattr(
+        ltx_segmented,
+        "post_decode_memory_cleanup",
+        lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []},
+    )
+    monkeypatch.setattr(
+        ltx_segmented,
+        "mix_timeline_audio",
+        lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []),
+    )
+    monkeypatch.setattr(
+        ltx_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
