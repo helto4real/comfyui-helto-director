@@ -65,11 +65,15 @@ register_prompt_optimizer_routes = importlib.import_module(
 register_privacy_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.privacy"
 ).register_privacy_routes
+register_timeline_library_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.timeline_library"
+).register_timeline_library_routes
 
 register_privacy_routes()
 register_media_cache_routes()
 register_media_browser_routes()
 register_prompt_optimizer_routes()
+register_timeline_library_routes()
 
 
 WEB_DIRECTORY = "./web"
@@ -158,4 +162,5 @@ __all__ = [
     "register_media_cache_routes",
     "register_privacy_routes",
     "register_prompt_optimizer_routes",
+    "register_timeline_library_routes",
 ]

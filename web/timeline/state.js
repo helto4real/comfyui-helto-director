@@ -158,6 +158,17 @@ export class TimelineStateController {
     });
   }
 
+  replaceTimelineFromLibrary(nextTimeline, reason = "replace timeline from library") {
+    this.flushDebouncedCommit("library replace flush", {
+      markDirty: false,
+      rerender: false,
+    });
+    const previousState = deepClone(this.timeline);
+    this.timeline = normalizeVideoTimeline(nextTimeline);
+    writeVisibleNodeProperties(this.timeline, this.node);
+    return this.commitTimelineChange(reason, { previousState });
+  }
+
   beginTimelineGesture() {
     if (!this.gestureStartState) {
       this.gestureStartState = deepClone(this.timeline);
@@ -240,6 +251,7 @@ export function mountTimelineState(node, app, options = {}) {
   node.scheduleDebouncedTimelineCommit = (reason, commitOptions) => controller.scheduleDebouncedCommit(reason, commitOptions);
   node.flushDebouncedTimelineCommit = (reason, commitOptions) => controller.flushDebouncedCommit(reason, commitOptions);
   node.flushTimelineBeforeSerialization = () => controller.flushTimelineBeforeSerialization();
+  node.replaceTimelineFromLibrary = (nextTimeline, reason) => controller.replaceTimelineFromLibrary(nextTimeline, reason);
   node.beginTimelineGesture = () => controller.beginTimelineGesture();
   node.endTimelineGesture = (reason) => controller.endTimelineGesture(reason);
   node.undoTimelineChange = () => controller.undoTimelineChange();
@@ -308,6 +320,16 @@ export function applyVisibleNodeProperties(timeline, node) {
   return timeline;
 }
 
+export function writeVisibleNodeProperties(timeline, node) {
+  const project = timeline?.project ?? {};
+  setWidgetValue(node, "duration_seconds", project.duration_seconds);
+  setWidgetValue(node, "frame_rate", project.frame_rate);
+  setWidgetValue(node, "aspect_ratio", project.aspect_ratio);
+  setWidgetValue(node, "orientation", project.orientation);
+  setWidgetValue(node, "quality_preset", project.quality_preset);
+  return timeline;
+}
+
 export function markGraphDirty(node, app) {
   node?.graph?.setDirtyCanvas?.(true, true);
   app?.graph?.setDirtyCanvas?.(true, true);
@@ -322,6 +344,12 @@ function getWidgetValue(node, name, fallback = undefined) {
 function getWidgetNumber(node, name) {
   const value = Number(getWidgetValue(node, name));
   return Number.isFinite(value) ? value : null;
+}
+
+function setWidgetValue(node, name, value) {
+  if (value == null) return;
+  const widget = findWidget(node, name);
+  if (widget) widget.value = value;
 }
 
 function isUndoRedoEvent(event) {

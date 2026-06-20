@@ -21,6 +21,7 @@ import {
   addPickedMediaItem,
   replacePickedSectionMedia,
 } from "./media_actions.js";
+import { showDirectorLibrary } from "./library.js";
 import { showMediaPicker } from "./media_picker.js";
 import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
@@ -249,6 +250,7 @@ export class TimelineRenderer {
         }, "settings change");
       }),
       toolbarSpacer(),
+      iconButton("library", "Director Library", () => this.openDirectorLibrary()),
       referenceManagerButton,
       referencePresentButton,
       toolbarSpacer(),
@@ -1369,6 +1371,28 @@ export class TimelineRenderer {
     });
   }
 
+  openDirectorLibrary() {
+    const privacyMode = Boolean(this.controller.timeline.project.privacy.mode);
+    if (privacyMode) {
+      this.privacyExternalModalOpen = true;
+      this.privacyRevealActive = false;
+      this.render();
+    }
+    showDirectorLibrary({
+      timeline: this.controller.timeline,
+      node: this.node,
+      app: this.app,
+      controller: this.controller,
+      documentRef: this.container.ownerDocument,
+      privacyMode,
+      onClose: () => {
+        if (!this.privacyExternalModalOpen) return;
+        this.privacyExternalModalOpen = false;
+        this.render();
+      },
+    });
+  }
+
   handleZoomToFit() {
     this.commitMutation((timeline) => zoomToFit(timeline), "zoom to fit");
   }
@@ -1839,6 +1863,7 @@ const ICONS = {
   references: `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="M4 5h4M16 5h4M4 5v4M20 5v4"/></svg>`,
   "reference-active": `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="m17 4 2 2 3-4"/></svg>`,
   "image-plus": `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="14" height="14" rx="2"/><path d="m7 16 3-3 2 2 2-2 3 3"/><path d="M19 8v6M16 11h6"/></svg>`,
+  library: `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="M7 8h2M15 8h2M7 12h2M15 12h2"/></svg>`,
   copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
   insert: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/><path d="M4 5h5M4 19h5M15 5h5M15 19h5"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M5 3l.7 1.8 1.8.7-1.8.7L5 8l-.7-1.8-1.8-.7 1.8-.7z"/></svg>`,

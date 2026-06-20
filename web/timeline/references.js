@@ -159,12 +159,87 @@ export function createCharacterReferenceFromPickedItem(timeline, item) {
   };
 }
 
+export function createCharacterReferenceFromLibraryItem(timeline, item, options = {}) {
+  const image = createReferenceImageFromLibraryItem(item);
+  if (!image) return null;
+  const references = getCharacterReferences(timeline);
+  const label = normalizeReferenceLabel(options.label, references.length);
+  const description = String(item?.description ?? item?.summary ?? item?.prompt ?? "");
+  const strength = clampStrength(options.strength ?? item?.strength);
+  return {
+    id: makeReferenceId(label, image.path || item?.id || image.name || ""),
+    label: options.preserveLabel === false ? nextReferenceLabel(references) : labelForNewReference(references, label),
+    kind: REFERENCE_KIND_CHARACTER,
+    enabled: item?.enabled !== false,
+    description,
+    strength,
+    image,
+  };
+}
+
 export function addCharacterReference(timeline, item) {
   const references = ensureCharacterReferences(timeline);
   const reference = createCharacterReferenceFromPickedItem(timeline, item);
   if (!reference) return null;
   references.push(reference);
   return reference;
+}
+
+export function addCharacterLibraryItemToTimeline(timeline, item, options = {}) {
+  const existing = findLoadedCharacterReferenceForLibraryItem(timeline, item);
+  if (existing) {
+    if (options.insertTag) insertCharacterReferenceTagIntoSelectedPrompt(timeline, existing);
+    return existing;
+  }
+  const references = ensureCharacterReferences(timeline);
+  const reference = createCharacterReferenceFromLibraryItem(timeline, item, {
+    label: options.label ?? nextReferenceLabel(references),
+    strength: options.strength,
+    preserveLabel: true,
+  });
+  if (!reference) return null;
+  references.push(reference);
+  if (options.insertTag) insertCharacterReferenceTagIntoSelectedPrompt(timeline, reference);
+  return reference;
+}
+
+export function replaceTimelineCharacterReferenceFromLibraryItem(timeline, referenceIdOrLabel, item, options = {}) {
+  const references = ensureCharacterReferences(timeline);
+  const index = references.findIndex((reference) => (
+    reference.id === referenceIdOrLabel ||
+    reference.label === referenceIdOrLabel
+  ));
+  if (index < 0) return null;
+  const current = references[index];
+  const next = createCharacterReferenceFromLibraryItem(timeline, item, {
+    label: options.preserveLabel === false ? nextReferenceLabel(references) : current.label,
+    strength: options.strength ?? current.strength,
+    preserveLabel: true,
+  });
+  if (!next) return null;
+  next.id = current.id || next.id;
+  next.label = options.preserveLabel === false ? next.label : current.label;
+  next.enabled = current.enabled !== false;
+  references[index] = next;
+  return next;
+}
+
+export function findLoadedCharacterReferenceForLibraryItem(timeline, item) {
+  const image = createReferenceImageFromLibraryItem(item);
+  const libraryId = String(item?.id ?? item?.library_id ?? "").trim();
+  const path = String(image?.path ?? "").trim();
+  return getCharacterReferences(timeline).find((reference) => {
+    const metadata = reference?.image?.metadata ?? {};
+    return Boolean(
+      (libraryId && String(metadata.library_item_id ?? metadata.library_id ?? "") === libraryId) ||
+      (path && String(reference?.image?.path ?? "") === path),
+    );
+  }) ?? null;
+}
+
+export function loadedCharacterReferenceLabelForLibraryItem(timeline, item) {
+  const reference = findLoadedCharacterReferenceForLibraryItem(timeline, item);
+  return reference ? formatCharacterReferenceTag(reference) : "";
 }
 
 export function removeCharacterReference(timeline, referenceId) {
@@ -194,6 +269,30 @@ export function createReferenceImageFromPickedItem(item) {
   });
 }
 
+export function createReferenceImageFromLibraryItem(item) {
+  const source = item?.image && typeof item.image === "object" && !Array.isArray(item.image)
+    ? item.image
+    : item?.media && typeof item.media === "object" && !Array.isArray(item.media)
+      ? item.media
+      : item;
+  const path = String(source?.path ?? source?.file_path ?? item?.path ?? "").trim();
+  if (!path) return null;
+  const normalized = normalizeReferenceImage({
+    ...source,
+    path,
+    name: source?.name ?? item?.name ?? item?.title ?? basename(path),
+    mime_type: source?.mime_type ?? item?.mime_type ?? "",
+    size_bytes: Number.isFinite(source?.size_bytes) ? source.size_bytes : Number.isFinite(item?.size) ? item.size : null,
+    metadata: {
+      ...(source?.metadata && typeof source.metadata === "object" && !Array.isArray(source.metadata) ? source.metadata : {}),
+      library_item_id: item?.id ?? item?.library_id ?? null,
+      library_name: item?.name ?? item?.title ?? null,
+      library_tags: Array.isArray(item?.tags) ? item.tags : [],
+    },
+  });
+  return stripEmbeddedMediaFields(normalized);
+}
+
 export function normalizeReferenceImage(image) {
   if (!image || typeof image !== "object" || Array.isArray(image)) return null;
   const path = String(image.path ?? image.file_path ?? "").trim();
@@ -211,11 +310,44 @@ export function normalizeReferenceImage(image) {
   return normalized;
 }
 
+function insertCharacterReferenceTagIntoSelectedPrompt(timeline, reference) {
+  const itemId = timeline?.ui_state?.selected_item_id;
+  const section = timeline?.director_track?.sections?.find((candidate) => candidate.item_id === itemId);
+  if (!section || !("prompt" in section)) return false;
+  const tag = formatCharacterReferenceTag(reference);
+  const current = String(section.prompt ?? "").trimEnd();
+  section.prompt = current ? `${current} ${tag}` : tag;
+  return true;
+}
+
 function nextReferenceLabel(references) {
   const used = new Set(references.map((reference, index) => normalizeReferenceLabel(reference?.label, index)));
   let index = 1;
   while (used.has(`image${index}`)) index += 1;
   return `image${index}`;
+}
+
+function labelForNewReference(references, preferredLabel) {
+  const normalized = normalizeReferenceLabel(preferredLabel, references.length);
+  const used = new Set(references.map((reference, index) => normalizeReferenceLabel(reference?.label, index)));
+  return used.has(normalized) ? nextReferenceLabel(references) : normalized;
+}
+
+function stripEmbeddedMediaFields(value) {
+  if (!value || typeof value !== "object") return value;
+  const copy = deepClone(value);
+  const stack = [copy];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    for (const key of ["data", "blob", "bytes", "thumbnail", "thumbnail_data", "waveform", "waveform_data"]) {
+      delete current[key];
+    }
+    for (const child of Object.values(current)) {
+      if (child && typeof child === "object") stack.push(child);
+    }
+  }
+  return copy;
 }
 
 function clampStrength(value) {
