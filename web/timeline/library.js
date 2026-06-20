@@ -23,6 +23,7 @@ export const TIMELINE_REPLACE_CONFIRMATION = "Replace current timeline?\n\nThis 
 
 const TAB_TIMELINES = "timelines";
 const TAB_CHARACTERS = "characters";
+const TIMELINE_LIBRARY_ITEM_ID_KEY = "library_item_id";
 const SORT_OPTIONS = [
   { value: "newest", label: "Recently Updated" },
   { value: "oldest", label: "Oldest First" },
@@ -66,22 +67,50 @@ export async function showDirectorLibrary(options = {}) {
     entry.textContent = option.label;
     sort.append(entry);
   }
-  const saveButton = textButton(documentRef, "Save Current", "Save Current Timeline", async () => {
+  const saveButton = iconButton(documentRef, "plus", "Add Current Timeline to Library", async (event) => {
     if (state.tab === TAB_CHARACTERS) {
       await saveCurrentCharacters({ timeline, documentRef, setStatus, privacyMode });
+      await refreshLibrary();
+      return;
+    }
+    const linkedId = linkedTimelineLibraryItemId(timeline);
+    if (linkedId) {
+      showTimelineSaveChoicePopup(documentRef, saveButton, {
+        update: async () => {
+          await updateCurrentTimelineLibraryItem({
+            timeline,
+            itemId: linkedId,
+            documentRef,
+            setStatus,
+            callbacks: options,
+          });
+          await refreshLibrary();
+        },
+        saveAsNew: async () => {
+          await saveCurrentTimelineAsNew({
+            timeline,
+            documentRef,
+            setStatus,
+            privacyMode,
+            saveTimeline: options.onSaveTimeline,
+            callbacks: options,
+          });
+          await refreshLibrary();
+        },
+      });
     } else {
-      await saveCurrentTimeline({
+      await saveCurrentTimelineAsNew({
         timeline,
         documentRef,
         setStatus,
         privacyMode,
         saveTimeline: options.onSaveTimeline,
+        callbacks: options,
       });
+      await refreshLibrary();
     }
-    await refreshLibrary();
   });
   saveButton.classList.add("htd-library-primary");
-  saveButton.prepend(iconSvg(documentRef, "plus"));
   controls.append(searchWrap, sort, saveButton);
 
   const tabs = el(documentRef, "div", "htd-library-tabs");
@@ -107,6 +136,8 @@ export async function showDirectorLibrary(options = {}) {
     sort: "newest",
     tag: "",
     filters: {},
+    menuKey: "",
+    renamingKey: "",
     timelines: [],
     characters: [],
     selectedId: "",
@@ -195,9 +226,14 @@ export async function showDirectorLibrary(options = {}) {
   const render = () => {
     const currentSelected = selectedItem();
     requestPrivatePreview(currentSelected);
-    saveButton.textContent = state.tab === TAB_CHARACTERS ? "Save Character" : "Save Current";
-    saveButton.prepend(iconSvg(documentRef, "plus"));
-    saveButton.title = state.tab === TAB_CHARACTERS ? "Save Current Character References" : "Save Current Timeline";
+    const linkedId = linkedTimelineLibraryItemId(timeline);
+    const saveTitle = state.tab === TAB_CHARACTERS
+      ? "Add Current Character References to Library"
+      : linkedId
+        ? "Save Current Timeline"
+        : "Add Current Timeline to Library";
+    saveButton.replaceChildren(iconSvg(documentRef, state.tab === TAB_CHARACTERS ? "character-plus" : linkedId ? "save" : "plus"));
+    saveButton.title = saveTitle;
     saveButton.setAttribute("aria-label", saveButton.title);
     timelinesTab.classList.toggle("is-active", state.tab === TAB_TIMELINES);
     charactersTab.classList.toggle("is-active", state.tab === TAB_CHARACTERS);
@@ -243,6 +279,8 @@ export async function showDirectorLibrary(options = {}) {
         callbacks: options,
         close: finish,
         refresh: refreshLibrary,
+        state,
+        render,
       },
     });
     renderDetails(documentRef, details, currentSelected, state.tab, timeline, privacyMode, {
@@ -252,6 +290,8 @@ export async function showDirectorLibrary(options = {}) {
       callbacks: options,
       close: finish,
       refresh: refreshLibrary,
+      state,
+      render,
     });
     renderActions(documentRef, actions, {
       item: currentSelected,
@@ -262,6 +302,8 @@ export async function showDirectorLibrary(options = {}) {
       callbacks: options,
       close: finish,
       refresh: refreshLibrary,
+      state,
+      render,
     });
   };
 
@@ -525,8 +567,7 @@ function renderDetails(documentRef, details, item, tab, timeline, privacyMode, c
 function renderTimelineCardContent(documentRef, item, privacyMode, context) {
   const fragment = documentRef.createDocumentFragment();
   fragment.append(renderTimelineMediaStrip(documentRef, item, privacyMode));
-  const title = el(documentRef, "div", "htd-library-card-title");
-  title.textContent = item.title;
+  const title = renderEditableLibraryTitle(documentRef, item, TAB_TIMELINES, context);
   const meta = el(documentRef, "div", "htd-library-card-meta-line");
   meta.textContent = timelineMetaLine(item);
   const counts = el(documentRef, "div", "htd-library-card-counts");
@@ -534,19 +575,36 @@ function renderTimelineCardContent(documentRef, item, privacyMode, context) {
   const status = statusPill(documentRef, timelineStatus(item));
   const actionRow = el(documentRef, "div", "htd-library-card-actions");
   actionRow.append(
-    quickButton(documentRef, "Load", "Load Saved Timeline", async () => {
-      const confirmFn = context.documentRef.defaultView?.confirm ?? globalThis.confirm;
-      if (confirmFn && !confirmFn(TIMELINE_REPLACE_CONFIRMATION)) return;
-      const full = await fetchTimelineForUse(item);
-      replaceTimelineFromLibrary(context.callbacks, deepClone(full.timeline), full);
-      context.close?.();
-    }, "primary"),
-    quickButton(documentRef, "Overwrite", "Overwrite Saved Timeline", async () => {
-      await updateTimelineLibraryItem(item.id, context.timeline);
-      context.setStatus?.("Overwrote saved timeline.");
+    quickIconButton(documentRef, "load", "Load Saved Timeline", () => loadTimelineLibraryItem(item, context), "primary"),
+    quickIconButton(documentRef, "overwrite", "Overwrite Saved Timeline", async () => {
+      await updateCurrentTimelineLibraryItem({
+        timeline: context.timeline,
+        itemId: item.id,
+        documentRef,
+        setStatus: context.setStatus,
+        callbacks: context.callbacks,
+      });
       await context.refresh?.();
-    }),
-    quickButton(documentRef, "...", "More Timeline Actions", () => context.setStatus?.("More timeline actions are available in the bottom bar."), "icon"),
+    }, "positive"),
+    renderLibraryActionMenu(documentRef, `${TAB_TIMELINES}:${item.id}`, "More Timeline Actions", [
+      menuAction("edit", "Rename", () => beginLibraryRename(context, TAB_TIMELINES, item)),
+      menuAction("copy", "Duplicate Saved Timeline", async () => {
+        await duplicateLibraryItem(TAB_TIMELINES, item.id);
+        context.setStatus?.("Duplicated timeline.");
+        await context.refresh?.();
+      }),
+      menuAction("download", "Export Timeline JSON", async () => {
+        const full = await fetchTimelineForUse(item);
+        exportJson(documentRef, `${safeFilename(item.title)}.json`, full.timeline);
+        context.setStatus?.("Exported timeline JSON.");
+      }),
+      menuAction("delete", "Delete Saved Timeline", async () => {
+        if (!confirmDelete(documentRef, `Delete "${item.title}"?`)) return;
+        await deleteLibraryItem(TAB_TIMELINES, item.id);
+        context.setStatus?.("Deleted timeline.");
+        await context.refresh?.();
+      }, "danger"),
+    ], context),
   );
   fragment.append(title, meta, counts, status, actionRow);
   return fragment;
@@ -555,8 +613,7 @@ function renderTimelineCardContent(documentRef, item, privacyMode, context) {
 function renderCharacterCardContent(documentRef, item, timeline, privacyMode, context) {
   const fragment = documentRef.createDocumentFragment();
   fragment.append(renderPreview(documentRef, item, privacyMode, "htd-library-card-preview"));
-  const title = el(documentRef, "div", "htd-library-card-title");
-  title.textContent = item.title;
+  const title = renderEditableLibraryTitle(documentRef, item, TAB_CHARACTERS, context);
   const description = el(documentRef, "div", "htd-library-description");
   description.textContent = item.description;
   const loaded = findLoadedCharacterReferenceForLibraryItem(timeline, item.source);
@@ -564,19 +621,47 @@ function renderCharacterCardContent(documentRef, item, timeline, privacyMode, co
   defaultRow.textContent = characterDefaultsLine(item);
   const actionRow = el(documentRef, "div", "htd-library-card-actions");
   actionRow.append(
-    quickButton(documentRef, "Add to Timeline", "Add Character to Timeline", async () => {
+    quickIconButton(documentRef, "insert", "Add Character to Timeline", async () => {
       const full = await fetchCharacterForUse(item);
       const reference = addCharacterFromLibrary(context.callbacks, full.character, item, false);
       if (reference) context.setStatus?.(`Added ${formatCharacterReferenceTag(reference)}.`);
     }, "primary"),
-    quickButton(documentRef, "Replace", "Replace Character Reference", async () => {
+    quickIconButton(documentRef, "replace", "Replace Character Reference", async () => {
       const references = getCharacterReferences(context.timeline);
       if (!references.length) return context.setStatus?.("No loaded character reference to replace.");
       const full = await fetchCharacterForUse(item);
       const reference = replaceCharacterFromLibrary(context.callbacks, references[0].id, full.character, item);
       if (reference) context.setStatus?.(`Replaced ${formatCharacterReferenceTag(reference)}.`);
     }),
-    quickButton(documentRef, "...", "More Character Actions", () => context.setStatus?.("More character actions are available in the bottom bar."), "icon"),
+    renderLibraryActionMenu(documentRef, `${TAB_CHARACTERS}:${item.id}`, "More Character Actions", [
+      menuAction("insert", "Add and Insert Reference Tag", async () => {
+        const full = await fetchCharacterForUse(item);
+        const reference = addCharacterFromLibrary(context.callbacks, full.character, item, true);
+        if (reference) context.setStatus?.(`Inserted ${formatCharacterReferenceTag(reference)}.`);
+      }),
+      menuAction("copy", "Copy Reference Tag", async () => {
+        const tag = tagForCharacterItem(timeline, item.source);
+        await copyTextWithPromptFallback(documentRef, tag, "Character reference tag");
+        context.setStatus?.(`Copied ${tag}.`);
+      }),
+      menuAction("edit", "Rename", () => beginLibraryRename(context, TAB_CHARACTERS, item)),
+      menuAction("duplicate", "Duplicate Character", async () => {
+        await duplicateLibraryItem(TAB_CHARACTERS, item.id);
+        context.setStatus?.("Duplicated character.");
+        await context.refresh?.();
+      }),
+      menuAction("download", "Export Character JSON", async () => {
+        const full = await fetchCharacterForUse(item);
+        exportJson(documentRef, `${safeFilename(item.title)}.json`, full.character);
+        context.setStatus?.("Exported character JSON.");
+      }),
+      menuAction("delete", "Delete Character", async () => {
+        if (!confirmDelete(documentRef, `Delete "${item.title}"?`)) return;
+        await deleteLibraryItem(TAB_CHARACTERS, item.id);
+        context.setStatus?.("Deleted character.");
+        await context.refresh?.();
+      }, "danger"),
+    ], context),
   );
   fragment.append(title, description, renderTags(documentRef, item.tags), defaultRow);
   if (loaded) fragment.append(statusPill(documentRef, { label: "Loaded", tone: "loaded" }));
@@ -613,17 +698,17 @@ function renderCharacterDetails(documentRef, details, item, timeline, privacyMod
   details.append(renderInfoSection(documentRef, "Details", characterRowsForDetails(item, existing)));
   const stack = el(documentRef, "div", "htd-library-inspector-actions");
   stack.append(
-    quickButton(documentRef, "Add to Timeline", "Add Character to Timeline", async () => {
+    quickIconButton(documentRef, "insert", "Add Character to Timeline", async () => {
       const full = await fetchCharacterForUse(item);
       const reference = addCharacterFromLibrary(context.callbacks, full.character, item, false);
       if (reference) context.setStatus?.(`Added ${formatCharacterReferenceTag(reference)}.`);
     }, "primary"),
-    quickButton(documentRef, "Add + Insert Tag", "Add and Insert Reference Tag", async () => {
+    quickIconButton(documentRef, "plus", "Add and Insert Reference Tag", async () => {
       const full = await fetchCharacterForUse(item);
       const reference = addCharacterFromLibrary(context.callbacks, full.character, item, true);
       if (reference) context.setStatus?.(`Inserted ${formatCharacterReferenceTag(reference)}.`);
-    }),
-    quickButton(documentRef, "Copy Tag", "Copy Reference Tag", async () => {
+    }, "positive"),
+    quickIconButton(documentRef, "copy", "Copy Reference Tag", async () => {
       const tag = tagForCharacterItem(timeline, item.source);
       await copyTextWithPromptFallback(documentRef, tag, "Character reference tag");
       context.setStatus?.(`Copied ${tag}.`);
@@ -728,15 +813,121 @@ function statusPill(documentRef, status) {
   return pill;
 }
 
-function quickButton(documentRef, text, title, onClick, variant = "") {
-  const button = textButton(documentRef, text, title, async (event) => {
+function renderEditableLibraryTitle(documentRef, item, tab, context) {
+  const key = libraryUiKey(tab, item);
+  if (context.state?.renamingKey !== key) {
+    const title = el(documentRef, "div", "htd-library-card-title");
+    title.textContent = item.title;
+    title.title = "Double-click to rename";
+    title.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      beginLibraryRename(context, tab, item);
+    });
+    return title;
+  }
+
+  const editor = el(documentRef, "div", "htd-library-title-editor");
+  const input = el(documentRef, "input", "htd-library-title-input");
+  input.type = "text";
+  input.value = item.title;
+  input.setAttribute("aria-label", "Library item name");
+  const confirm = iconButton(documentRef, "check", "Save Name", async (event) => {
+    event.stopPropagation();
+    const name = input.value.trim();
+    if (!name || name === item.title) {
+      endLibraryRename(context);
+      return;
+    }
+    await patchLibraryItem(tab, item.id, { name });
+    context.setStatus?.("Renamed library item.");
+    endLibraryRename(context);
+    await context.refresh?.();
+  });
+  confirm.classList.add("htd-library-title-confirm", "is-positive");
+  const cancel = iconButton(documentRef, "cancel", "Cancel Rename", (event) => {
+    event.stopPropagation();
+    endLibraryRename(context);
+  });
+  cancel.classList.add("htd-library-title-cancel");
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("dblclick", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      confirm.click();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancel.click();
+    }
+  });
+  editor.addEventListener("click", (event) => event.stopPropagation());
+  editor.append(input, confirm, cancel);
+  setTimeout(() => input.focus?.(), 0);
+  return editor;
+}
+
+function beginLibraryRename(context, tab, item) {
+  if (!context.state) return;
+  context.state.renamingKey = libraryUiKey(tab, item);
+  context.state.menuKey = "";
+  context.render?.();
+}
+
+function endLibraryRename(context) {
+  if (!context.state) return;
+  context.state.renamingKey = "";
+  context.render?.();
+}
+
+function libraryUiKey(tab, item) {
+  return `${tab}:${item?.id ?? ""}`;
+}
+
+function quickIconButton(documentRef, iconName, title, onClick, variant = "") {
+  const control = iconButton(documentRef, iconName, title, async (event) => {
     event?.stopPropagation?.();
     await onClick?.(event);
   });
-  button.classList.add("htd-library-quick-action");
-  if (variant) button.classList.add(`is-${variant}`);
-  button.addEventListener("keydown", (event) => event.stopPropagation?.());
-  return button;
+  control.classList.add("htd-library-quick-action");
+  if (variant) control.classList.add(`is-${variant}`);
+  control.addEventListener("keydown", (event) => event.stopPropagation?.());
+  return control;
+}
+
+function menuAction(icon, label, run, tone = "") {
+  return { icon, label, run, tone };
+}
+
+function renderLibraryActionMenu(documentRef, key, title, items, context) {
+  const wrap = el(documentRef, "div", "htd-library-action-menu");
+  const control = quickIconButton(documentRef, "more", title, (event) => {
+    event?.stopPropagation?.();
+    if (!context.state) return;
+    context.state.menuKey = context.state.menuKey === key ? "" : key;
+    context.render?.();
+  }, "neutral");
+  wrap.append(control);
+  if (context.state?.menuKey === key) {
+    const menu = el(documentRef, "div", "htd-library-menu");
+    menu.setAttribute("role", "menu");
+    for (const item of items) {
+      const option = textButton(documentRef, "", item.label, async (event) => {
+        event.stopPropagation();
+        context.state.menuKey = "";
+        context.render?.();
+        await item.run?.();
+      });
+      option.classList.add("htd-library-menu-item");
+      if (item.tone) option.classList.add(`is-${item.tone}`);
+      option.setAttribute("role", "menuitem");
+      option.append(iconSvg(documentRef, item.icon), span(documentRef, item.label));
+      menu.append(option);
+    }
+    wrap.append(menu);
+  }
+  return wrap;
 }
 
 function toggleFilterButton(documentRef, filter, active, onClick) {
@@ -939,102 +1130,15 @@ function truncateText(value, length) {
 }
 
 function renderActions(documentRef, actions, context) {
-  const { item, tab, timeline, callbacks, setStatus, close, refresh } = context;
   actions.replaceChildren();
-  if (!item) return;
-  if (tab === TAB_TIMELINES) {
-    actions.append(textButton(documentRef, "Replace Current Timeline", "Replace Current Timeline", async () => {
-      const confirmFn = documentRef.defaultView?.confirm ?? globalThis.confirm;
-      if (confirmFn && !confirmFn(TIMELINE_REPLACE_CONFIRMATION)) return;
-      const full = await fetchTimelineForUse(item);
-      replaceTimelineFromLibrary(callbacks, deepClone(full.timeline), full);
-      close();
-    }));
-    actions.append(textButton(documentRef, "Overwrite", "Overwrite Saved Timeline", async () => {
-      await updateTimelineLibraryItem(item.id, timeline);
-      setStatus("Overwrote saved timeline.");
-      await refresh?.();
-    }));
-    actions.append(textButton(documentRef, "Duplicate", "Duplicate Saved Timeline", async () => {
-      await duplicateLibraryItem(TAB_TIMELINES, item.id);
-      setStatus("Duplicated timeline.");
-      await refresh?.();
-    }));
-    actions.append(textButton(documentRef, "Rename", "Rename Saved Timeline", async () => {
-      const name = promptForText(documentRef, "Timeline name", item.title);
-      if (!name) return;
-      await patchLibraryItem(TAB_TIMELINES, item.id, { name });
-      setStatus("Renamed timeline.");
-      await refresh?.();
-    }));
-    actions.append(textButton(documentRef, "Delete", "Delete Saved Timeline", async () => {
-      if (!confirmDelete(documentRef, `Delete "${item.title}"?`)) return;
-      await deleteLibraryItem(TAB_TIMELINES, item.id);
-      setStatus("Deleted timeline.");
-      await refresh?.();
-    }));
-    actions.append(textButton(documentRef, "Export JSON", "Export Timeline JSON", async () => {
-      const full = await fetchTimelineForUse(item);
-      exportJson(documentRef, `${safeFilename(item.title)}.json`, full.timeline);
-      setStatus("Exported timeline JSON.");
-    }));
-    return;
-  }
+}
 
-  actions.append(
-    textButton(documentRef, "Add to Timeline", "Add to Timeline", async () => {
-      const full = await fetchCharacterForUse(item);
-      const reference = addCharacterFromLibrary(callbacks, full.character, item, false);
-      if (reference) setStatus(`Added ${formatCharacterReferenceTag(reference)}.`);
-    }),
-    textButton(documentRef, "Add + Insert Tag", "Add and Insert Reference Tag", async () => {
-      const full = await fetchCharacterForUse(item);
-      const reference = addCharacterFromLibrary(callbacks, full.character, item, true);
-      if (reference) setStatus(`Inserted ${formatCharacterReferenceTag(reference)}.`);
-    }),
-    textButton(documentRef, "Copy Tag", "Copy Reference Tag", async () => {
-      const tag = tagForCharacterItem(timeline, item.source);
-      await copyTextWithPromptFallback(documentRef, tag, "Character reference tag");
-      setStatus(`Copied ${tag}.`);
-    }),
-  );
-
-  const references = getCharacterReferences(timeline);
-  const replaceSelect = el(documentRef, "select", "htd-library-replace-select");
-  replaceSelect.title = "Reference to Replace";
-  for (const reference of references) {
-    const option = documentRef.createElement("option");
-    option.value = reference.id;
-    option.textContent = formatCharacterReferenceTag(reference);
-    replaceSelect.append(option);
-  }
-  const replaceButton = textButton(documentRef, "Replace", "Replace preserving label", () => {
-    fetchCharacterForUse(item).then((full) => {
-      const reference = replaceCharacterFromLibrary(callbacks, replaceSelect.value, full.character, item);
-      if (reference) setStatus(`Replaced ${formatCharacterReferenceTag(reference)}.`);
-    }).catch((error) => setStatus(error.message));
-  });
-  replaceButton.disabled = references.length === 0;
-  replaceSelect.disabled = references.length === 0;
-  actions.append(replaceSelect, replaceButton);
-  actions.append(
-    textButton(documentRef, "Duplicate", "Duplicate Character", async () => {
-      await duplicateLibraryItem(TAB_CHARACTERS, item.id);
-      setStatus("Duplicated character.");
-      await context.refresh?.();
-    }),
-    textButton(documentRef, "Delete", "Delete Character", async () => {
-      if (!confirmDelete(documentRef, `Delete "${item.title}"?`)) return;
-      await deleteLibraryItem(TAB_CHARACTERS, item.id);
-      setStatus("Deleted character.");
-      await context.refresh?.();
-    }),
-    textButton(documentRef, "Export", "Export Character JSON", async () => {
-      const full = await fetchCharacterForUse(item);
-      exportJson(documentRef, `${safeFilename(item.title)}.json`, full.character);
-      setStatus("Exported character JSON.");
-    }),
-  );
+async function loadTimelineLibraryItem(item, context) {
+  const confirmFn = context.documentRef.defaultView?.confirm ?? globalThis.confirm;
+  if (confirmFn && !confirmFn(TIMELINE_REPLACE_CONFIRMATION)) return;
+  const full = await fetchTimelineForUse(item);
+  replaceTimelineFromLibrary(context.callbacks, stampTimelineLibraryItemId(deepClone(full.timeline), item.id), full);
+  context.close?.();
 }
 
 function replaceTimelineFromLibrary(options, nextTimeline, item) {
@@ -1089,6 +1193,39 @@ export function libraryPreviewAssetForItem(item) {
   return item.kind === TAB_CHARACTERS ? item.previewAsset ?? item.image ?? null : item.previewAsset ?? null;
 }
 
+export function linkedTimelineLibraryItemId(timeline) {
+  return String(timeline?.project?.metadata?.[TIMELINE_LIBRARY_ITEM_ID_KEY] ?? "").trim();
+}
+
+export function stampTimelineLibraryItemId(timeline, itemId) {
+  if (!timeline || typeof timeline !== "object") return timeline;
+  timeline.project ??= {};
+  timeline.project.metadata = timeline.project.metadata && typeof timeline.project.metadata === "object" && !Array.isArray(timeline.project.metadata)
+    ? timeline.project.metadata
+    : {};
+  const id = String(itemId ?? "").trim();
+  if (id) {
+    timeline.project.metadata[TIMELINE_LIBRARY_ITEM_ID_KEY] = id;
+  } else {
+    delete timeline.project.metadata[TIMELINE_LIBRARY_ITEM_ID_KEY];
+  }
+  return timeline;
+}
+
+export function clearTimelineLibraryItemId(timeline) {
+  return stampTimelineLibraryItemId(timeline, "");
+}
+
+function stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId) {
+  if (callbacks?.controller?.updateTimeline) {
+    callbacks.controller.updateTimeline((current) => {
+      stampTimelineLibraryItemId(current, itemId);
+    }, "link library timeline", { rerender: false });
+    return;
+  }
+  stampTimelineLibraryItemId(timeline, itemId);
+}
+
 function renderTags(documentRef, tags) {
   const row = el(documentRef, "div", "htd-library-tags");
   for (const tag of tags.slice(0, 4)) {
@@ -1099,27 +1236,43 @@ function renderTags(documentRef, tags) {
   return row;
 }
 
-async function saveCurrentTimeline({ timeline, documentRef, setStatus, saveTimeline }) {
+async function saveCurrentTimelineAsNew({ timeline, documentRef, setStatus, privacyMode, saveTimeline, callbacks }) {
   if (!timeline) return;
   try {
     if (typeof saveTimeline === "function") {
-      await saveTimeline(deepClone(timeline));
+      await saveTimeline(clearTimelineLibraryItemId(deepClone(timeline)));
     } else {
-      await fetchLibraryJson(`${ROUTE_PREFIX}/timelines`, {
+      const saveTimelinePayload = clearTimelineLibraryItemId(deepClone(timeline));
+      const data = await fetchLibraryJson(`${ROUTE_PREFIX}/timelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: timelineName(timeline),
-          private: Boolean(timeline?.project?.privacy?.mode),
-          timeline,
+          name: timelineName(saveTimelinePayload),
+          private: Boolean(privacyMode ?? saveTimelinePayload?.project?.privacy?.mode),
+          timeline: saveTimelinePayload,
         }),
       });
+      const itemId = data?.item?.id;
+      if (itemId) stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId);
     }
     setStatus("Saved current timeline.");
   } catch (error) {
     const alertFn = documentRef.defaultView?.alert ?? globalThis.alert;
     alertFn?.(error.message);
     setStatus(error.message || "Could not save current timeline.");
+  }
+}
+
+async function updateCurrentTimelineLibraryItem({ timeline, itemId, documentRef, setStatus, callbacks }) {
+  if (!timeline || !itemId) return;
+  try {
+    await updateTimelineLibraryItem(itemId, timeline);
+    stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId);
+    setStatus?.("Updated current library timeline.");
+  } catch (error) {
+    const alertFn = documentRef.defaultView?.alert ?? globalThis.alert;
+    alertFn?.(error.message);
+    setStatus?.(error.message || "Could not update timeline.");
   }
 }
 
@@ -1164,6 +1317,37 @@ async function copyTextWithPromptFallback(documentRef, value, label) {
   }
 }
 
+function showTimelineSaveChoicePopup(documentRef, anchor, actions) {
+  documentRef.querySelector?.(".htd-library-save-popup")?.remove();
+  const popup = el(documentRef, "div", "htd-library-save-popup");
+  popup.setAttribute("role", "menu");
+  const update = textButton(documentRef, "", "Update Current Library Item", async (event) => {
+    event.stopPropagation();
+    popup.remove();
+    await actions.update?.();
+  });
+  update.classList.add("htd-library-menu-item", "is-positive");
+  update.setAttribute("role", "menuitem");
+  update.append(iconSvg(documentRef, "save"), span(documentRef, "Update Current Library Item"));
+  const saveAsNew = textButton(documentRef, "", "Save As New", async (event) => {
+    event.stopPropagation();
+    popup.remove();
+    await actions.saveAsNew?.();
+  });
+  saveAsNew.classList.add("htd-library-menu-item");
+  saveAsNew.setAttribute("role", "menuitem");
+  saveAsNew.append(iconSvg(documentRef, "plus"), span(documentRef, "Save As New"));
+  const cancel = textButton(documentRef, "", "Cancel", (event) => {
+    event.stopPropagation();
+    popup.remove();
+  });
+  cancel.classList.add("htd-library-menu-item");
+  cancel.setAttribute("role", "menuitem");
+  cancel.append(iconSvg(documentRef, "cancel"), span(documentRef, "Cancel"));
+  popup.append(update, saveAsNew, cancel);
+  anchor.closest?.(".htd-library-controls")?.append(popup);
+}
+
 async function fetchLibraryItems() {
   const data = await fetchLibraryJson(`${ROUTE_PREFIX}/items`);
   return {
@@ -1201,13 +1385,14 @@ async function fetchCharacterForUse(item) {
 }
 
 async function updateTimelineLibraryItem(itemId, timeline) {
+  const timelinePayload = stampTimelineLibraryItemId(deepClone(timeline), itemId);
   return fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(itemId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      name: timelineName(timeline),
-      private: Boolean(timeline?.project?.privacy?.mode),
-      timeline,
+      name: timelineName(timelinePayload),
+      private: Boolean(timelinePayload?.project?.privacy?.mode),
+      timeline: timelinePayload,
     }),
   });
 }
@@ -1377,11 +1562,6 @@ function timelineName(timeline) {
   return String(metadata.title || metadata.name || "Untitled Timeline");
 }
 
-function promptForText(documentRef, label, value) {
-  const promptFn = documentRef.defaultView?.prompt ?? globalThis.prompt;
-  return String(promptFn?.(label, value) ?? "").trim();
-}
-
 function confirmDelete(documentRef, message) {
   const confirmFn = documentRef.defaultView?.confirm ?? globalThis.confirm;
   return !confirmFn || confirmFn(message);
@@ -1462,8 +1642,10 @@ const ICONS = {
   timeline: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   character: `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="M4 5h4M16 5h4M4 5v4M20 5v4"/></svg>`,
   close: `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  cancel: `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
   search: `<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>`,
   plus: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>`,
+  "character-plus": `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="M19 6v6M16 9h6"/></svg>`,
   chevron: `<svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><path d="M12 8v8M8 12h8"/><circle cx="12" cy="12" r="9"/></svg>`,
   image: `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m7 17 4-4 3 3 2-2 3 3"/></svg>`,
@@ -1472,6 +1654,16 @@ const ICONS = {
   lock: `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
   tag: `<svg viewBox="0 0 24 24"><path d="M20 13 13 20 4 11V4h7l9 9Z"/><circle cx="8.5" cy="8.5" r="1.5"/></svg>`,
   check: `<svg viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></svg>`,
+  save: `<svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg>`,
+  load: `<svg viewBox="0 0 24 24"><path d="M5 4h14v6H5z"/><path d="M12 20V9M7 15l5 5 5-5"/></svg>`,
+  overwrite: `<svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4"/><path d="m8 16 3 3 5-6"/></svg>`,
+  more: `<svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/></svg>`,
+  edit: `<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/></svg>`,
+  duplicate: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
+  copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
+  insert: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/><path d="M4 5h5M4 19h5M15 5h5M15 19h5"/></svg>`,
+  replace: `<svg viewBox="0 0 24 24"><path d="M7 7h10l-3-3M17 17H7l3 3"/><path d="M17 7a5 5 0 0 1 0 10M7 17a5 5 0 0 1 0-10"/></svg>`,
+  delete: `<svg viewBox="0 0 24 24"><path d="M6 7h12M10 7V5h4v2M9 10v7M15 10v7M8 7l1 12h6l1-12"/></svg>`,
   download: `<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>`,
   blank: `<svg viewBox="0 0 24 24"></svg>`,
 };
@@ -1485,7 +1677,7 @@ function installDirectorLibraryStyles(documentRef) {
     .htd-library-panel { width: min(1120px, calc(100vw - 72px)); height: min(760px, calc(100vh - 72px)); min-height: 560px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto auto; border: 1px solid rgba(129, 143, 164, 0.52); border-radius: 8px; background: linear-gradient(135deg, rgba(18, 24, 31, 0.98), rgba(12, 17, 22, 0.98)); box-shadow: 0 28px 78px rgba(0,0,0,0.62), inset 0 1px rgba(255,255,255,0.04); overflow: hidden; }
     .htd-library-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 24px 8px; }
     .htd-library-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 22px; font-weight: 700; color: #f6f8fb; }
-    .htd-library-controls { min-width: 0; display: grid; grid-template-columns: minmax(220px, 360px) 184px auto 1fr; gap: 12px; align-items: center; padding: 8px 24px 10px; }
+    .htd-library-controls { position: relative; min-width: 0; display: grid; grid-template-columns: minmax(220px, 360px) 184px auto 1fr; gap: 12px; align-items: center; padding: 8px 24px 10px; }
     .htd-library-search-wrap { min-width: 0; height: 38px; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 4px; padding: 0 12px; border: 1px solid rgba(111, 123, 143, 0.68); border-radius: 5px; background: rgba(11, 16, 22, 0.72); box-sizing: border-box; color: #9da9ba; }
     .htd-library-search { min-width: 0; height: 34px; border: 0; outline: 0; background: transparent; color: #f3f6fa; }
     .htd-library-search::placeholder { color: #9ba5b3; }
@@ -1502,7 +1694,10 @@ function installDirectorLibraryStyles(documentRef) {
     .htd-library-details { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; border-left: 1px solid rgba(65, 76, 91, 0.72); }
     .htd-library-button { min-width: 32px; min-height: 32px; padding: 0 12px; border: 1px solid rgba(78, 89, 105, 0.9); border-radius: 5px; background: linear-gradient(180deg, rgba(36, 44, 54, 0.82), rgba(22, 28, 35, 0.86)); color: #f4f7fb; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
     .htd-library-primary, .htd-library-quick-action.is-primary { border-color: #2c6af0; background: linear-gradient(180deg, #3278ff, #2057d9); color: #fff; }
+    .htd-library-quick-action.is-positive, .htd-library-button.is-positive { border-color: rgba(73, 164, 95, 0.9); background: linear-gradient(180deg, rgba(50, 147, 75, 0.9), rgba(32, 103, 55, 0.94)); color: #f6fff8; }
+    .htd-library-quick-action.is-neutral { border-color: rgba(78, 89, 105, 0.9); background: linear-gradient(180deg, rgba(36, 44, 54, 0.82), rgba(22, 28, 35, 0.86)); }
     .htd-library-icon-button { width: 34px; min-width: 34px; padding: 0; border: 0; background: transparent; color: #f4f7fb; }
+    .htd-library-icon-button.htd-library-primary { border: 1px solid #2c6af0; background: linear-gradient(180deg, #3278ff, #2057d9); color: #fff; }
     .htd-library-button:disabled, .htd-library-replace-select:disabled { opacity: 0.44; cursor: not-allowed; }
     .htd-library-icon { width: 16px; height: 16px; flex: 0 0 16px; display: inline-flex; align-items: center; justify-content: center; }
     .htd-library-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -1538,6 +1733,9 @@ function installDirectorLibraryStyles(documentRef) {
     .htd-library-segment.is-empty { background: #647085; }
     .htd-library-segment-times { display: flex; justify-content: space-between; color: #98a4b5; font-size: 11px; }
     .htd-library-card-title, .htd-library-detail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #f4f7fb; font-weight: 700; font-size: 14px; }
+    .htd-library-title-editor { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 30px 30px; gap: 5px; align-items: center; }
+    .htd-library-title-input { min-width: 0; height: 30px; box-sizing: border-box; border: 1px solid rgba(93, 111, 139, 0.86); border-radius: 4px; background: #111923; color: #f4f7fb; padding: 0 8px; font: inherit; font-weight: 700; }
+    .htd-library-title-confirm, .htd-library-title-cancel { width: 30px; min-width: 30px; height: 30px; min-height: 30px; border: 1px solid rgba(78, 89, 105, 0.9); background: rgba(19, 25, 33, 0.92); }
     .htd-library-detail-name { font-size: 18px; }
     .htd-library-card-meta-line, .htd-library-card-counts, .htd-library-character-defaults, .htd-library-detail-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #a8b3c3; }
     .htd-library-description, .htd-library-detail-description { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: #a8b3c3; }
@@ -1550,9 +1748,16 @@ function installDirectorLibraryStyles(documentRef) {
     .htd-library-status-pill.is-private { color: #c6cad2; background: rgba(130, 139, 153, 0.17); }
     .htd-library-status-pill.is-loaded, .htd-library-loaded { color: #7de0a0; background: rgba(38, 137, 76, 0.16); border: 1px solid rgba(72, 177, 109, 0.35); }
     .htd-library-loaded { min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 5px; }
-    .htd-library-card-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto 38px; gap: 8px; margin-top: auto; }
-    .htd-library-quick-action { height: 32px; min-height: 32px; padding: 0 12px; }
-    .htd-library-quick-action.is-icon { width: 38px; min-width: 38px; padding: 0; font-size: 18px; line-height: 1; }
+    .htd-library-card-actions, .htd-library-inspector-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin-top: auto; }
+    .htd-library-quick-action { width: 34px; min-width: 34px; height: 32px; min-height: 32px; padding: 0; border: 1px solid rgba(78, 89, 105, 0.9); background: linear-gradient(180deg, rgba(36, 44, 54, 0.82), rgba(22, 28, 35, 0.86)); }
+    .htd-library-action-menu { position: relative; display: inline-flex; }
+    .htd-library-menu, .htd-library-save-popup { position: absolute; z-index: 20; min-width: 190px; display: grid; gap: 4px; padding: 6px; border: 1px solid rgba(82, 97, 119, 0.96); border-radius: 6px; background: #111821; box-shadow: 0 12px 28px rgba(0,0,0,0.46); }
+    .htd-library-menu { right: 0; bottom: calc(100% + 6px); }
+    .htd-library-save-popup { top: 48px; left: 432px; }
+    .htd-library-menu-item { width: 100%; min-height: 30px; justify-content: start; border: 0; background: transparent; color: #e5ebf5; }
+    .htd-library-menu-item:hover { background: rgba(68, 84, 108, 0.52); }
+    .htd-library-menu-item.is-positive { color: #a7efad; }
+    .htd-library-menu-item.is-danger { color: #ffafa8; }
     .htd-library-info-section { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(65, 76, 91, 0.72); }
     .htd-library-info-title { color: #f3f6fa; font-weight: 700; }
     .htd-library-summary { display: grid; gap: 8px; }
@@ -1562,11 +1767,9 @@ function installDirectorLibraryStyles(documentRef) {
     .htd-library-summary-row.is-ok .htd-library-summary-value { color: #9be6a2; }
     .htd-library-summary-row.is-warning .htd-library-summary-value { color: #ffc75f; }
     .htd-library-muted { color: #9ba8bd; }
-    .htd-library-inspector-actions { display: grid; gap: 10px; padding: 0 12px 12px; }
+    .htd-library-inspector-actions { padding: 0 12px 12px; }
     .htd-library-status { min-height: 18px; padding: 0 24px 6px; color: #9ba8bd; }
-    .htd-library-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; padding: 14px 18px; border-top: 1px solid rgba(65, 76, 91, 0.72); }
-    .htd-library-actions .htd-library-button:first-child { border-color: #2c6af0; background: linear-gradient(180deg, #3278ff, #2057d9); }
-    .htd-library-actions .htd-library-button[aria-label^="Delete"] { border-color: rgba(143, 52, 47, 0.86); background: linear-gradient(180deg, rgba(116, 42, 38, 0.82), rgba(76, 28, 26, 0.9)); }
+    .htd-library-actions { display: none; }
     .htd-library-empty { grid-column: 1 / -1; padding: 28px 8px; text-align: center; color: #9ba8bd; }
     .htd-library-dialog.privacy-mode .htd-library-preview img,
     .htd-library-dialog.privacy-mode .htd-library-strip-thumb img,

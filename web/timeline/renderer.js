@@ -79,6 +79,7 @@ const INSPECTOR_HEIGHT = 34;
 const INSPECTOR_EDITOR_HEIGHT = 188;
 const ROOT_GAP = 6;
 const NODE_BODY_HORIZONTAL_PADDING = 20;
+const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";
 const DELETE_MENU_LABELS = {
   Image: "Delete Image",
   Video: "Delete Video",
@@ -207,6 +208,12 @@ export class TimelineRenderer {
       : "No Character References";
     const referencePresentButton = iconButton("reference-active", referenceToggleTitle, () => this.toggleCharacterReferences(), { disabled: referenceCount === 0 });
     const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer", () => this.openPromptOptimizer());
+    const timelineLibraryItemId = timelineLibraryItemIdFor(this.controller.timeline);
+    const timelineLibraryButton = iconButton(
+      timelineLibraryItemId ? "library-update" : "library-add",
+      timelineLibraryItemId ? "Update Current Timeline in Library" : "Add Current Timeline to Library",
+      async () => this.saveCurrentTimelineToLibrary(timelineLibraryButton),
+    );
     const repairButtons = hasOverflow
       ? [
           iconButton("fit-last-section", "Fit Last Section", () => {
@@ -218,6 +225,8 @@ export class TimelineRenderer {
         ]
       : [];
     promptOptimizerButton.classList.add("htd-prompt-optimizer-button");
+    timelineLibraryButton.classList.add("htd-timeline-library-save-button");
+    timelineLibraryButton.classList.toggle("is-active", Boolean(timelineLibraryItemId));
     referenceManagerButton.classList.add("htd-reference-manager-button");
     referencePresentButton.classList.add("htd-reference-present-button");
     referencePresentButton.classList.toggle("is-active", referenceCount > 0 && referencesEnabled);
@@ -251,6 +260,7 @@ export class TimelineRenderer {
       }),
       toolbarSpacer(),
       iconButton("library", "Director Library", () => this.openDirectorLibrary()),
+      timelineLibraryButton,
       referenceManagerButton,
       referencePresentButton,
       toolbarSpacer(),
@@ -989,7 +999,21 @@ export class TimelineRenderer {
     strengthRow.append(strengthLabel, strengthSlider, strengthNumber);
 
     const actions = el("div", "htd-reference-actions");
+    const libraryItemId = referenceLibraryItemId(reference);
+    let libraryButton;
+    if (libraryItemId) {
+      libraryButton = iconButton("library-update", "Update Director Library Character", async () => {
+        await this.updateReferenceLibraryCharacter(reference, libraryItemId, libraryButton);
+      });
+      libraryButton.classList.add("htd-reference-library-action", "is-active");
+    } else {
+      libraryButton = iconButton("library-add", "Add Reference to Director Library", async () => {
+        await this.addReferenceToDirectorLibrary(reference, privacyMode, libraryButton);
+      });
+      libraryButton.classList.add("htd-reference-library-action");
+    }
     actions.append(
+      libraryButton,
       iconButton("copy", "Copy Reference Tag", () => this.copyReferenceTag(reference)),
       iconButton("insert", "Insert Reference Tag", () => this.insertReferenceTag(reference)),
       iconButton("delete", "Remove Character Reference", () => {
@@ -1000,6 +1024,94 @@ export class TimelineRenderer {
     meta.append(labelRow, description, strengthRow, actions);
     card.append(thumb, meta);
     return card;
+  }
+
+  async addReferenceToDirectorLibrary(reference, privacyMode, control = null) {
+    const liveReference = this.prepareReferenceLibraryAction(reference);
+    if (!liveReference) return;
+    await withDisabledControl(control, async () => {
+      try {
+        const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(referenceLibraryPayload(liveReference, privacyMode)),
+        });
+        const itemId = String(data?.item?.id ?? "").trim();
+        if (!itemId) throw new Error("Director Library did not return a character id.");
+        this.commitMutation((timeline) => {
+          stampReferenceLibraryItemId(timeline, reference, itemId);
+        }, "save reference to library");
+      } catch (error) {
+        this.alertReferenceLibraryError(error);
+      }
+    });
+  }
+
+  async updateReferenceLibraryCharacter(reference, libraryItemId, control = null) {
+    const itemId = String(libraryItemId ?? "").trim();
+    if (!itemId) return;
+    const liveReference = this.prepareReferenceLibraryAction(reference);
+    if (!liveReference) return;
+    await withDisabledControl(control, async () => {
+      try {
+        await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(referenceLibraryPayload(liveReference, Boolean(this.controller.timeline.project.privacy.mode))),
+        });
+      } catch (error) {
+        this.alertReferenceLibraryError(error);
+      }
+    });
+  }
+
+  prepareReferenceLibraryAction(reference) {
+    this.controller.flushDebouncedCommit("reference library save", { rerender: false });
+    return findLiveReference(this.controller.timeline, reference) ?? reference;
+  }
+
+  alertReferenceLibraryError(error) {
+    const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
+    alertFn?.(error?.message || "Could not update Director Library character.");
+  }
+
+  async saveCurrentTimelineToLibrary(control = null) {
+    this.controller.flushDebouncedCommit("timeline library save", { rerender: false });
+    const itemId = timelineLibraryItemIdFor(this.controller.timeline);
+    await withDisabledControl(control, async () => {
+      try {
+        if (itemId) {
+          await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines/${encodeURIComponent(itemId)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, itemId)),
+          });
+          this.stampCurrentTimelineLibraryItemId(itemId, { rerender: false });
+          return;
+        }
+        const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, "")),
+        });
+        const nextItemId = String(data?.item?.id ?? "").trim();
+        if (!nextItemId) throw new Error("Director Library did not return a timeline id.");
+        this.stampCurrentTimelineLibraryItemId(nextItemId);
+      } catch (error) {
+        this.alertTimelineLibraryError(error);
+      }
+    });
+  }
+
+  stampCurrentTimelineLibraryItemId(itemId, options = {}) {
+    this.commitMutation((timeline) => {
+      stampTimelineLibraryItemId(timeline, itemId);
+    }, "link library timeline", { pushUndo: false, ...options });
+  }
+
+  alertTimelineLibraryError(error) {
+    const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
+    alertFn?.(error?.message || "Could not update Director Library timeline.");
   }
 
   openReferenceManager() {
@@ -1742,6 +1854,95 @@ function setLiveReferenceField(timeline, reference, field, value) {
   return liveReference;
 }
 
+function stampReferenceLibraryItemId(timeline, reference, itemId) {
+  const liveReference = findLiveReference(timeline, reference);
+  if (!liveReference?.image || !itemId) return null;
+  liveReference.image.metadata = liveReference.image.metadata && typeof liveReference.image.metadata === "object" && !Array.isArray(liveReference.image.metadata)
+    ? liveReference.image.metadata
+    : {};
+  liveReference.image.metadata.library_item_id = itemId;
+  return liveReference;
+}
+
+function referenceLibraryItemId(reference) {
+  return String(reference?.image?.metadata?.library_item_id ?? "").trim();
+}
+
+function timelineLibraryItemIdFor(timeline) {
+  return String(timeline?.project?.metadata?.library_item_id ?? "").trim();
+}
+
+function stampTimelineLibraryItemId(timeline, itemId) {
+  if (!timeline || typeof timeline !== "object") return timeline;
+  timeline.project ??= {};
+  timeline.project.metadata = timeline.project.metadata && typeof timeline.project.metadata === "object" && !Array.isArray(timeline.project.metadata)
+    ? timeline.project.metadata
+    : {};
+  const normalizedItemId = String(itemId ?? "").trim();
+  if (normalizedItemId) {
+    timeline.project.metadata.library_item_id = normalizedItemId;
+  } else {
+    delete timeline.project.metadata.library_item_id;
+  }
+  return timeline;
+}
+
+function referenceLibraryPayload(reference, privacyMode) {
+  return {
+    name: reference?.description || formatCharacterReferenceTag(reference),
+    description: reference?.description || "",
+    private: Boolean(privacyMode),
+    character: cloneReferenceForLibrary(reference),
+  };
+}
+
+function timelineLibraryPayload(timeline, itemId) {
+  const payloadTimeline = cloneTimelineForLibrary(timeline, itemId);
+  return {
+    name: timelineLibraryName(payloadTimeline),
+    private: Boolean(payloadTimeline?.project?.privacy?.mode),
+    timeline: payloadTimeline,
+  };
+}
+
+function cloneTimelineForLibrary(timeline, itemId) {
+  const clone = JSON.parse(JSON.stringify(timeline ?? {}));
+  return stampTimelineLibraryItemId(clone, itemId);
+}
+
+function timelineLibraryName(timeline) {
+  const metadata = timeline?.project?.metadata ?? {};
+  return String(metadata.title || metadata.name || "Untitled Timeline");
+}
+
+function cloneReferenceForLibrary(reference) {
+  return JSON.parse(JSON.stringify(reference ?? {}));
+}
+
+async function fetchDirectorLibraryJson(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || response.statusText || `HTTP ${response.status}`);
+  }
+  if (!response.ok || data.error) throw new Error(data.error || response.statusText || `HTTP ${response.status}`);
+  return data;
+}
+
+async function withDisabledControl(control, action) {
+  if (!control) return action();
+  const wasDisabled = control.disabled;
+  control.disabled = true;
+  try {
+    return await action();
+  } finally {
+    control.disabled = wasDisabled;
+  }
+}
+
 function deleteLabelForItemType(itemType) {
   return DELETE_MENU_LABELS[itemType] ?? "Delete Item";
 }
@@ -1864,6 +2065,8 @@ const ICONS = {
   "reference-active": `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="m17 4 2 2 3-4"/></svg>`,
   "image-plus": `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="14" height="14" rx="2"/><path d="m7 16 3-3 2 2 2-2 3 3"/><path d="M19 8v6M16 11h6"/></svg>`,
   library: `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="M7 8h2M15 8h2M7 12h2M15 12h2"/></svg>`,
+  "library-add": `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="M17 8v6M14 11h6"/></svg>`,
+  "library-update": `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="m14.5 12 2 2 4-5"/></svg>`,
   copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
   insert: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/><path d="M4 5h5M4 19h5M15 5h5M15 19h5"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M5 3l.7 1.8 1.8.7-1.8.7L5 8l-.7-1.8-1.8-.7 1.8-.7z"/></svg>`,
@@ -2046,6 +2249,10 @@ function installStyles(documentRef) {
     .htd-reference-strength-row { min-width: 0; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
     .htd-reference-strength-label { flex: 0 0 auto; color: #9ba8bd; }
     .htd-reference-actions { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+    .htd-timeline-library-save-button { color: #8fb7ff; }
+    .htd-timeline-library-save-button.is-active { color: #7de0a0; }
+    .htd-reference-library-action { color: #8fb7ff; }
+    .htd-reference-library-action.is-active { color: #7de0a0; }
     .htd-reference-overlay.privacy-mode .htd-reference-thumb img,
     .htd-reference-overlay.privacy-mode .htd-reference-description { opacity: 0; }
     .htd-reference-overlay.privacy-mode .htd-reference-card:hover .htd-reference-thumb img,

@@ -21,12 +21,15 @@ import {
   applyCharacterPreviewPayload,
   applyTimelinePreviewPayload,
   clearDirectorLibraryDisplay,
+  clearTimelineLibraryItemId,
   libraryPreviewAssetForItem,
   libraryDialogClassName,
+  linkedTimelineLibraryItemId,
   normalizeLibraryCharacterItem,
   normalizeLibraryTimelineItem,
   shouldRequestPrivateCharacterPreview,
   shouldRequestPrivateTimelinePreview,
+  stampTimelineLibraryItemId,
 } from "../../web/timeline/library.js";
 import { thumbnailUrl } from "../../web/timeline/media_cache.js";
 
@@ -344,6 +347,17 @@ function testPrivateCharacterPreviewHydratesImageShell() {
   assert.equal(shouldRequestPrivateCharacterPreview(hydrated, true), false);
 }
 
+function testTimelineLibraryIdentityHelpers() {
+  const timeline = createDefaultVideoTimeline();
+  assert.equal(linkedTimelineLibraryItemId(timeline), "");
+  assert.equal(stampTimelineLibraryItemId(timeline, "timeline_abc"), timeline);
+  assert.equal(linkedTimelineLibraryItemId(timeline), "timeline_abc");
+  assert.equal(timeline.project.metadata.library_item_id, "timeline_abc");
+  clearTimelineLibraryItemId(timeline);
+  assert.equal(linkedTimelineLibraryItemId(timeline), "");
+  assert.equal("library_item_id" in timeline.project.metadata, false);
+}
+
 function testRendererAndLibraryContractStrings() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
   const librarySource = readFileSync(new URL("../../web/timeline/library.js", import.meta.url), "utf8");
@@ -355,6 +369,10 @@ function testRendererAndLibraryContractStrings() {
   );
   assert.equal(rendererSource.includes('import { showDirectorLibrary } from "./library.js";'), true);
   assert.equal(rendererSource.includes('iconButton("library", "Director Library", () => this.openDirectorLibrary())'), true);
+  const directorLibraryButtonIndex = rendererSource.indexOf('iconButton("library", "Director Library", () => this.openDirectorLibrary())');
+  const timelineSaveButtonIndex = rendererSource.indexOf("timelineLibraryButton,", directorLibraryButtonIndex);
+  assert.notEqual(directorLibraryButtonIndex, -1);
+  assert.notEqual(timelineSaveButtonIndex, -1);
   assert.equal(rendererSource.includes("controller: this.controller,"), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/items`)'), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
@@ -364,7 +382,13 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes("addCharacterLibraryItemToTimeline(timeline, item"), true);
   assert.equal(librarySource.includes("replaceTimelineCharacterReferenceFromLibraryItem(timeline, referenceId, item)"), true);
   assert.equal(librarySource.includes('overlay.className = libraryDialogClassName(privacyMode);'), true);
-  assert.equal(librarySource.includes('const saveButton = textButton(documentRef, "Save Current", "Save Current Timeline"'), true);
+  assert.equal(librarySource.includes('const saveButton = iconButton(documentRef, "plus", "Add Current Timeline to Library"'), true);
+  assert.equal(librarySource.includes('showTimelineSaveChoicePopup(documentRef, saveButton'), true);
+  assert.equal(librarySource.includes('stampTimelineLibraryItemId(deepClone(full.timeline), item.id)'), true);
+  assert.equal(librarySource.includes('updateCurrentTimelineLibraryItem({'), true);
+  assert.equal(librarySource.includes('renderEditableLibraryTitle(documentRef, item, TAB_TIMELINES, context)'), true);
+  assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_TIMELINES}:${item.id}`, "More Timeline Actions"'), true);
+  assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_CHARACTERS}:${item.id}`, "More Character Actions"'), true);
   assert.equal(librarySource.includes('panel.append(header, controls, tabs, body, status, actions);'), true);
   assert.equal(librarySource.includes('renderTimelineMediaStrip(documentRef, item, privacyMode)'), true);
   assert.equal(librarySource.includes('renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context)'), true);
@@ -373,6 +397,29 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes('timelinePreviewAssets(item).slice(0, 3)'), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-preview img"), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-strip-thumb img"), true);
+  assert.equal(rendererSource.includes('const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";'), true);
+  assert.equal(rendererSource.includes("const timelineLibraryItemId = timelineLibraryItemIdFor(this.controller.timeline);"), true);
+  assert.equal(rendererSource.includes('const timelineLibraryButton = iconButton('), true);
+  assert.equal(rendererSource.includes('timelineLibraryItemId ? "library-update" : "library-add"'), true);
+  assert.equal(rendererSource.includes('timelineLibraryItemId ? "Update Current Timeline in Library" : "Add Current Timeline to Library"'), true);
+  assert.equal(rendererSource.includes("async () => this.saveCurrentTimelineToLibrary(timelineLibraryButton)"), true);
+  assert.equal(rendererSource.includes('timelineLibraryButton.classList.add("htd-timeline-library-save-button");'), true);
+  assert.equal(rendererSource.includes('timelineLibraryButton.classList.toggle("is-active", Boolean(timelineLibraryItemId));'), true);
+  assert.equal(rendererSource.includes('async saveCurrentTimelineToLibrary(control = null)'), true);
+  assert.equal(rendererSource.includes('const itemId = timelineLibraryItemIdFor(this.controller.timeline);'), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines/${encodeURIComponent(itemId)}`'), true);
+  assert.equal(rendererSource.includes('method: "PUT"'), true);
+  assert.equal(rendererSource.includes("body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, itemId))"), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines`'), true);
+  assert.equal(rendererSource.includes('method: "POST"'), true);
+  assert.equal(rendererSource.includes('body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, ""))'), true);
+  assert.equal(rendererSource.includes('const nextItemId = String(data?.item?.id ?? "").trim();'), true);
+  assert.equal(rendererSource.includes("this.stampCurrentTimelineLibraryItemId(nextItemId);"), true);
+  assert.equal(rendererSource.includes("stampTimelineLibraryItemId(timeline, itemId)"), true);
+  assert.equal(rendererSource.includes('iconButton("library-add", "Add Reference to Director Library"'), true);
+  assert.equal(rendererSource.includes('iconButton("library-update", "Update Director Library Character"'), true);
+  assert.equal(rendererSource.includes("stampReferenceLibraryItemId(timeline, reference, itemId)"), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`'), true);
 }
 
 await testLibraryTimelineReplacementSyncsWidgetsAndUndo();
@@ -380,6 +427,7 @@ testCharacterLibraryHelpersAddReplaceAndDetectLoaded();
 testLibraryItemNormalizationAndPrivacyHelpers();
 testCharacterLibraryPreviewUsesImageSourceMetadata();
 testPrivateCharacterPreviewHydratesImageShell();
+testTimelineLibraryIdentityHelpers();
 testRendererAndLibraryContractStrings();
 
 console.log("phase18 director library tests passed");
