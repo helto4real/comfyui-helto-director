@@ -15,7 +15,7 @@
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
       "title": "WAN Audio Notes",
       "properties": {},
-      "widgets_values": ["WAN audio final-mix-only example. The audio clip is preserved in audio_plan metadata; WAN generation is not audio conditioned in this phase."]
+      "widgets_values": ["WAN audio final-mix-only example. The audio clip is preserved in audio_plan metadata; WAN generation is not audio conditioned by the current runtime."]
     },
     {
       "id": 2,

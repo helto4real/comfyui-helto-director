@@ -28,4 +28,4 @@ Use this checklist inside ComfyUI when verifying WAN Timeline workflows.
 - [ ] Add Start and End Image Sections and verify Runtime reports two applied keyframes.
 - [ ] Connect both high-noise and low-noise model phases.
 - [ ] Verify Prompt Relay patch status reports both phases patched.
-- [ ] Keep notes on any sampler/model/VAE mismatch errors for future backend hardening.
+- [ ] Keep notes on any sampler/model/VAE mismatch errors for follow-up backend hardening.
