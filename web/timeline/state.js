@@ -158,8 +158,8 @@ export class TimelineStateController {
     });
   }
 
-  replaceTimelineFromLibrary(nextTimeline, reason = "replace timeline from library") {
-    this.flushDebouncedCommit("library replace flush", {
+  replaceTimeline(nextTimeline, reason = "replace timeline", options = {}) {
+    this.flushDebouncedCommit(options.flushReason ?? "timeline replace flush", {
       markDirty: false,
       rerender: false,
     });
@@ -167,6 +167,10 @@ export class TimelineStateController {
     this.timeline = normalizeVideoTimeline(nextTimeline);
     writeVisibleNodeProperties(this.timeline, this.node);
     return this.commitTimelineChange(reason, { previousState });
+  }
+
+  replaceTimelineFromLibrary(nextTimeline, reason = "replace timeline from library") {
+    return this.replaceTimeline(nextTimeline, reason, { flushReason: "library replace flush" });
   }
 
   beginTimelineGesture() {
@@ -251,6 +255,7 @@ export function mountTimelineState(node, app, options = {}) {
   node.scheduleDebouncedTimelineCommit = (reason, commitOptions) => controller.scheduleDebouncedCommit(reason, commitOptions);
   node.flushDebouncedTimelineCommit = (reason, commitOptions) => controller.flushDebouncedCommit(reason, commitOptions);
   node.flushTimelineBeforeSerialization = () => controller.flushTimelineBeforeSerialization();
+  node.replaceTimeline = (nextTimeline, reason) => controller.replaceTimeline(nextTimeline, reason);
   node.replaceTimelineFromLibrary = (nextTimeline, reason) => controller.replaceTimelineFromLibrary(nextTimeline, reason);
   node.beginTimelineGesture = () => controller.beginTimelineGesture();
   node.endTimelineGesture = (reason) => controller.endTimelineGesture(reason);

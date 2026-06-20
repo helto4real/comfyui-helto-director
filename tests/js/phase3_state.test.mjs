@@ -6,6 +6,7 @@ import {
   VIDEO_TIMELINE_WIDGET,
 } from "../../web/timeline/state.js";
 import { PRIVACY_SCHEMA } from "../../web/timeline/privacy.js";
+import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
 
 function createWidget(name, value) {
   return { name, value, type: "string" };
@@ -406,6 +407,51 @@ async function testUndoRestoresDeleteKeyRemoval() {
   assert.equal(getHiddenTimeline(node).director_track.sections[0].prompt, "restore me");
 }
 
+async function testReplaceTimelineClearsLibraryLinkAndIsUndoable() {
+  const node = createNode();
+  const controller = mountTimelineState(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    timeline.project.metadata.library_item_id = "timeline_123";
+    timeline.project.metadata.character_references.push({
+      id: "reference_001",
+      label: "image1",
+      image: { asset_id: "asset_001" },
+    });
+    timeline.assets.push({
+      asset_id: "asset_001",
+      type: "Image",
+      source_kind: "FilePath",
+      path: "/media/reference.png",
+      name: "reference.png",
+    });
+    timeline.director_track.sections.push({
+      item_id: "section_001",
+      type: "Text",
+      start_time: 0,
+      end_time: 1,
+      prompt: "linked timeline",
+    });
+    timeline.ui_state.selected_item_id = "section_001";
+  }, "link timeline");
+
+  controller.replaceTimeline(createDefaultVideoTimeline(), "clear current timeline");
+
+  const cleared = getHiddenTimeline(node);
+  assert.equal("library_item_id" in cleared.project.metadata, false);
+  assert.equal(cleared.assets.length, 0);
+  assert.equal(cleared.director_track.sections.length, 0);
+  assert.equal(cleared.audio_tracks.length, 0);
+  assert.equal(cleared.project.metadata.character_references.length, 0);
+  assert.equal(cleared.ui_state.selected_item_id, null);
+
+  assert.equal(controller.undoTimelineChange(), true);
+  const restored = getHiddenTimeline(node);
+  assert.equal(restored.project.metadata.library_item_id, "timeline_123");
+  assert.equal(restored.assets.length, 1);
+  assert.equal(restored.director_track.sections.length, 1);
+}
+
 async function testPrivacyModeWritesEncryptedHiddenWidget() {
   const restoreXhr = installPrivacyXhrStub();
   try {
@@ -502,6 +548,7 @@ await testDeleteKeyIsIgnoredOnInteractiveTimelineControls();
 await testDeleteKeyIsIgnoredInsideDirectorLibraryDialog();
 await testDeleteKeyIsIgnoredWhileTyping();
 await testUndoRestoresDeleteKeyRemoval();
+await testReplaceTimelineClearsLibraryLinkAndIsUndoable();
 await testPrivacyModeWritesEncryptedHiddenWidget();
 await testEncryptedWorkflowLoadDecryptsBeforeRender();
 

@@ -101,7 +101,7 @@ function testInspectorNoLongerRendersPathAttachChooseClearControls() {
   assert.equal(rendererSource.includes("renderMediaControls"), false);
   assert.equal(rendererSource.includes("Attach"), false);
   assert.equal(rendererSource.includes("Choose"), false);
-  assert.equal(rendererSource.includes("Clear"), false);
+  assert.equal(rendererSource.includes("Clear Media"), false);
   assert.equal(rendererSource.includes("htd-media-path"), false);
 }
 

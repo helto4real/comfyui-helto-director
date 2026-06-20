@@ -11,6 +11,7 @@ import {
   VIDEO_GUIDANCE_FRAME_COUNTS,
   VIDEO_GUIDANCE_RANGES,
   VIDEO_TIMING_MODES,
+  createDefaultVideoTimeline,
 } from "./schema.js";
 import {
   mediaLabel,
@@ -83,6 +84,7 @@ const INSPECTOR_EDITOR_HEIGHT = 188;
 const ROOT_GAP = 6;
 const NODE_BODY_HORIZONTAL_PADDING = 20;
 const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";
+const CLEAR_TIMELINE_CONFIRMATION = "Clear current timeline? This will replace the current timeline with a new blank timeline and remove its Director Library link. Saved library items and media files will not be deleted.";
 const DELETE_MENU_LABELS = {
   Image: "Delete Image",
   Video: "Delete Video",
@@ -117,6 +119,10 @@ export function setLiveItemField(timeline, item, field, value) {
   const liveItem = resolveLiveTimelineItem(timeline, item) ?? item;
   liveItem[field] = value;
   return liveItem;
+}
+
+export function isDefaultEmptyTimeline(timeline) {
+  return timelineComparisonPayload(timeline) === timelineComparisonPayload(createDefaultVideoTimeline());
 }
 
 export class TimelineRenderer {
@@ -211,6 +217,11 @@ export class TimelineRenderer {
       : "No Character References";
     const referencePresentButton = iconButton("reference-active", referenceToggleTitle, () => this.toggleCharacterReferences(), { disabled: referenceCount === 0 });
     const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer", () => this.openPromptOptimizer());
+    const clearTimelineButton = iconButton("timeline-clear", "Clear Current Timeline", () => this.clearCurrentTimeline(), {
+      disabled: isDefaultEmptyTimeline(this.controller.timeline),
+    });
+    const selectedSection = findSection(this.controller.timeline, this.controller.timeline?.ui_state?.selected_item_id);
+    const deleteButton = iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete"));
     const timelineLibraryItemId = timelineLibraryItemIdFor(this.controller.timeline);
     const timelineLibraryButton = iconButton(
       timelineLibraryItemId ? "library-update" : "library-add",
@@ -228,6 +239,8 @@ export class TimelineRenderer {
         ]
       : [];
     promptOptimizerButton.classList.add("htd-prompt-optimizer-button");
+    clearTimelineButton.classList.add("htd-clear-timeline-button", "is-danger");
+    deleteButton.classList.toggle("is-danger", Boolean(selectedSection));
     timelineLibraryButton.classList.add("htd-timeline-library-save-button");
     timelineLibraryButton.classList.toggle("is-active", Boolean(timelineLibraryItemId));
     referenceManagerButton.classList.add("htd-reference-manager-button");
@@ -264,12 +277,13 @@ export class TimelineRenderer {
       toolbarSpacer(),
       iconButton("library", "Director Library", () => this.openDirectorLibrary()),
       timelineLibraryButton,
+      clearTimelineButton,
       referenceManagerButton,
       referencePresentButton,
       toolbarSpacer(),
       iconButton("split", "Split", () => this.commitMutation((timeline) => splitSelectedSection(timeline), "split")),
       iconButton("duplicate", "Duplicate", () => this.commitMutation((timeline) => duplicateSelectedSection(timeline), "duplicate")),
-      iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete")),
+      deleteButton,
       ...repairButtons,
       toolbarSpacer(),
       iconButton("fit", "Zoom to Fit", () => this.handleZoomToFit()),
@@ -277,6 +291,16 @@ export class TimelineRenderer {
       settingsButton,
     );
     return toolbar;
+  }
+
+  clearCurrentTimeline() {
+    if (isDefaultEmptyTimeline(this.controller.timeline)) return false;
+    const confirmFn = this.container.ownerDocument?.defaultView?.confirm ?? globalThis.confirm;
+    if (confirmFn && !confirmFn(CLEAR_TIMELINE_CONFIRMATION)) return false;
+    this.controller.replaceTimeline(createDefaultVideoTimeline(), "clear current timeline", {
+      flushReason: "clear timeline flush",
+    });
+    return true;
   }
 
   renderToolbarMenu(id, title, iconName, value, options, onChange) {
@@ -1646,6 +1670,13 @@ function resolveLiveTimelineItem(timeline, item) {
   return findSection(timeline, itemId) ?? findAudioClip(timeline, itemId) ?? item;
 }
 
+function timelineComparisonPayload(timeline) {
+  const copy = JSON.parse(JSON.stringify(timeline ?? {}));
+  delete copy.validation;
+  if (copy.ui_state && typeof copy.ui_state === "object") copy.ui_state.state_revision = 0;
+  return JSON.stringify(copy);
+}
+
 function getInspectorHeight(timeline) {
   const selected = timeline?.director_track?.sections?.find((section) => section.item_id === timeline?.ui_state?.selected_item_id);
   const selectedAudio = findAudioClip(timeline, timeline?.ui_state?.selected_item_id);
@@ -2065,6 +2096,7 @@ const ICONS = {
   library: `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="M7 8h2M15 8h2M7 12h2M15 12h2"/></svg>`,
   "library-add": `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="M17 8v6M14 11h6"/></svg>`,
   "library-update": `<svg viewBox="0 0 24 24"><path d="M5 5h6v14H5z"/><path d="M13 5h6v14h-6z"/><path d="m14.5 12 2 2 4-5"/></svg>`,
+  "timeline-clear": `<svg viewBox="0 0 24 24"><path d="M5 5h14v14H5z"/><path d="M9 9h6M9 13h4"/><path d="m16 16 4 4M20 16l-4 4"/></svg>`,
   copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 14H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/></svg>`,
   insert: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/><path d="M4 5h5M4 19h5M15 5h5M15 19h5"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M5 3l.7 1.8 1.8.7-1.8.7L5 8l-.7-1.8-1.8-.7 1.8-.7z"/></svg>`,
@@ -2136,6 +2168,8 @@ function installStyles(documentRef) {
     .htd-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .htd-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
     .htd-button:disabled { opacity: 0.42; cursor: not-allowed; }
+    .htd-button.is-danger { border-color: #8f2f36; background: #552029; color: #ffd6dc; }
+    .htd-button.is-danger:hover:not(:disabled) { border-color: #d0505f; background: #6a2530; color: #fff3f5; }
     .htd-toolbar-spacer { width: 1px; height: 18px; margin: 0 4px; background: #3d4658; opacity: 0.9; flex: 0 0 auto; }
     .htd-prompt-optimizer-button { margin-left: auto; }
     .htd-menu { position: relative; display: inline-flex; align-items: center; }

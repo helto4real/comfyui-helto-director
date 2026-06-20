@@ -10,6 +10,7 @@ import {
 } from "../../web/timeline/geometry.js";
 import {
   getTimelineWidgetHeight,
+  isDefaultEmptyTimeline,
   measureStableTimelineViewportWidth,
   setLiveItemField,
   waveformPeakCountForWidth,
@@ -26,6 +27,27 @@ function testTimelineHeightIsTripled() {
     RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + AUDIO_LANE_HEIGHT + TIMELINE_VIEWPORT_BORDER_HEIGHT,
   );
   assert.equal(getTimelineWidgetHeight(timeline), 302);
+}
+
+function testClearTimelineButtonEnablementHelper() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.validation = { errors: [], warnings: [], info: [] };
+  timeline.ui_state.state_revision = 12;
+
+  assert.equal(isDefaultEmptyTimeline(timeline), true);
+
+  timeline.project.metadata.library_item_id = "timeline_123";
+  assert.equal(isDefaultEmptyTimeline(timeline), false);
+  delete timeline.project.metadata.library_item_id;
+
+  timeline.director_track.sections.push({
+    item_id: "section_001",
+    type: "Text",
+    start_time: 0,
+    end_time: 1,
+    prompt: "not empty",
+  });
+  assert.equal(isDefaultEmptyTimeline(timeline), false);
 }
 
 function testSelectedPromptUsesFiveRowInspector() {
@@ -214,7 +236,7 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selectedAudio.audio, "Audio")'), true);
   assert.equal(rendererSource.includes("Attach"), false);
   assert.equal(rendererSource.includes("Choose"), false);
-  assert.equal(rendererSource.includes("Clear"), false);
+  assert.equal(rendererSource.includes("Clear Media"), false);
 
   const migrationSource = readFileSync(new URL("../../web/timeline/migration.js", import.meta.url), "utf8");
   assert.equal(migrationSource.includes('normalized.video_guidance_range ??= "Last Frames"'), true);
@@ -267,6 +289,9 @@ function testToolbarUsesGroupedIconControls() {
 
   assert.equal(toolbarSpacers.length >= 4, true);
   assert.equal(rendererSource.includes("const hasOverflow = hasDirectorSectionOverflow(this.controller.timeline)"), true);
+  assert.equal(rendererSource.includes("const selectedSection = findSection(this.controller.timeline, this.controller.timeline?.ui_state?.selected_item_id)"), true);
+  assert.equal(rendererSource.includes('const deleteButton = iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete"))'), true);
+  assert.equal(rendererSource.includes('deleteButton.classList.toggle("is-danger", Boolean(selectedSection))'), true);
   assert.equal(rendererSource.includes("const repairButtons = hasOverflow"), true);
   assert.equal(rendererSource.includes('"Fit Last Section"'), true);
   assert.equal(rendererSource.includes('"Fit All Sections Evenly"'), true);
@@ -275,6 +300,15 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes("canFitLastDirectorSectionToDuration(this.controller.timeline)"), true);
   assert.equal(rendererSource.includes("...repairButtons"), true);
   assert.equal(rendererSource.includes("control.disabled = Boolean(options.disabled)"), true);
+  assert.equal(rendererSource.includes('const clearTimelineButton = iconButton("timeline-clear", "Clear Current Timeline", () => this.clearCurrentTimeline(), {'), true);
+  assert.equal(rendererSource.includes("disabled: isDefaultEmptyTimeline(this.controller.timeline)"), true);
+  assert.equal(rendererSource.includes('clearTimelineButton.classList.add("htd-clear-timeline-button", "is-danger")'), true);
+  assert.equal(rendererSource.includes("if (isDefaultEmptyTimeline(this.controller.timeline)) return false;"), true);
+  assert.equal(rendererSource.includes("CLEAR_TIMELINE_CONFIRMATION"), true);
+  assert.equal(rendererSource.includes("Saved library items and media files will not be deleted."), true);
+  assert.equal(rendererSource.includes("this.controller.replaceTimeline(createDefaultVideoTimeline(), \"clear current timeline\""), true);
+  assert.equal(rendererSource.includes('"timeline-clear": `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes(".htd-button.is-danger {"), true);
   assert.equal(rendererSource.includes('const promptOptimizerButton = iconButton("sparkle", "Prompt Optimizer"'), true);
   assert.equal(rendererSource.includes('const referenceManagerButton = iconButton("references", "Manage Character References"'), true);
   assert.equal(rendererSource.includes('const referencePresentButton = iconButton("reference-active"'), true);
@@ -439,6 +473,7 @@ function testViewportMeasurementIgnoresCollapsedChildWidth() {
 }
 
 testTimelineHeightIsTripled();
+testClearTimelineButtonEnablementHelper();
 testSelectedPromptUsesFiveRowInspector();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
