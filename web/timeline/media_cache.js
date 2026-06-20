@@ -134,5 +134,7 @@ function paramsFor(asset, extra = {}) {
 }
 
 function sourceTypeForAsset(asset) {
+  const sourceType = String(asset?.source_type ?? asset?.metadata?.source_type ?? "").trim();
+  if (sourceType) return sourceType;
   return asset.source_kind === "UploadedFile" ? "input" : "";
 }

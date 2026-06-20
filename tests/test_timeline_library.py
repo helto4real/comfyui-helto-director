@@ -14,6 +14,7 @@ from shared.timeline_library import (
     list_items,
     load_library,
     patch_item,
+    preview_character_item,
     preview_timeline_item,
     replace_item,
     use_item,
@@ -283,6 +284,63 @@ def test_private_timeline_preview_decrypts_without_mutating_or_leaking_items_she
     assert "/private/reveal-reference.png" not in json.dumps(list_items(tmp_path))
 
 
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
+def test_private_character_preview_decrypts_without_mutating_or_leaking_items_shell(tmp_path):
+    character = {
+        "label": "image7",
+        "description": "private hero notes",
+        "strength": 0.65,
+        "image": {
+            "path": "/private/hero-reference.png",
+            "thumbnail": "embedded thumb",
+            "preview_data": "secret",
+            "width": 512,
+            "height": 768,
+        },
+    }
+    create_item(
+        "character",
+        character,
+        metadata={"id": "private-character", "name": "Private Hero", "private": True},
+        base_dir=tmp_path,
+    )
+
+    before = load_library(tmp_path)["characters"][0]
+    public_item = list_items(tmp_path)["characters"][0]
+    preview = preview_character_item("private-character", base_dir=tmp_path)
+    after = load_library(tmp_path)["characters"][0]
+
+    assert public_item["description"] == ""
+    assert "character" not in public_item
+    assert "/private/hero-reference.png" not in json.dumps(public_item)
+    assert "private hero notes" not in json.dumps(public_item)
+    assert "last_used_at" not in before
+    assert "last_used_at" not in after
+    assert before == after
+    assert preview["item"]["is_private"] is True
+    assert preview["item"]["description"] == "private hero notes"
+    assert preview["item"]["character"] == preview["character"]
+    assert preview["character"] == {
+        "id": "image7",
+        "label": "image7",
+        "kind": "character",
+        "enabled": True,
+        "description": "private hero notes",
+        "strength": pytest.approx(0.65),
+        "image": {
+            "height": 768,
+            "name": "hero-reference.png",
+            "path": "/private/hero-reference.png",
+            "source_kind": "FilePath",
+            "type": "Image",
+            "width": 512,
+        },
+    }
+    assert "thumbnail" not in json.dumps(preview)
+    assert "preview_data" not in json.dumps(preview)
+    assert "/private/hero-reference.png" not in json.dumps(list_items(tmp_path))
+
+
 def test_route_prefix_and_registration_shape():
     assert timeline_library_routes.ROUTE_PREFIX == "/helto_director/library"
     assert callable(timeline_library_routes.register_timeline_library_routes)
@@ -295,6 +353,8 @@ def test_route_prefix_and_registration_shape():
     route_source = Path(timeline_library_routes.__file__).read_text(encoding="utf-8")
     assert '/timelines" + "/{item_id}/preview"' in route_source
     assert "preview_timeline_item(request.match_info" in route_source
+    assert '/characters" + "/{item_id}/preview"' in route_source
+    assert "preview_character_item(request.match_info" in route_source
 
 
 def sample_timeline(prompt="hello", path="/media/ref.png"):

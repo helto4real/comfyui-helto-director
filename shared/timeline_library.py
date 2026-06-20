@@ -277,6 +277,21 @@ def preview_timeline_item(
     return {"item": item, "preview_assets": preview_assets}
 
 
+def preview_character_item(
+    item_id: str,
+    *,
+    base_dir: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    library = load_library(base_dir)
+    entry = _find_entry(library, CHARACTER_KIND, item_id)
+    payload = _unpack_payload(entry, base_dir=base_dir)
+    character = preview_character_shell(payload)
+    item = _public_item(entry)
+    item["description"] = character.get("description", "")
+    item["character"] = copy.deepcopy(character)
+    return {"item": item, "character": character}
+
+
 def _pack_entry(
     kind: str,
     *,
@@ -420,6 +435,22 @@ def preview_assets_for_timeline(payload: Any) -> list[dict[str, Any]]:
         if len(preview_assets) >= PREVIEW_ASSET_LIMIT:
             break
     return preview_assets
+
+
+def preview_character_shell(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    shell: dict[str, Any] = {}
+    for key in ("id", "label", "kind", "enabled", "description", "strength"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            shell[key] = _safe_preview_text(value, key)
+        elif value is None or isinstance(value, (bool, int, float)):
+            shell[key] = value
+    image = _preview_asset_shell(payload.get("image"))
+    if image:
+        shell["image"] = image
+    return shell
 
 
 def _preview_asset_shell(asset: Any) -> dict[str, Any] | None:

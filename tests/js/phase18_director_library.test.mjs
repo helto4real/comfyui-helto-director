@@ -18,13 +18,17 @@ import {
 import {
   ROUTE_PREFIX,
   TIMELINE_REPLACE_CONFIRMATION,
+  applyCharacterPreviewPayload,
   applyTimelinePreviewPayload,
   clearDirectorLibraryDisplay,
+  libraryPreviewAssetForItem,
   libraryDialogClassName,
   normalizeLibraryCharacterItem,
   normalizeLibraryTimelineItem,
+  shouldRequestPrivateCharacterPreview,
   shouldRequestPrivateTimelinePreview,
 } from "../../web/timeline/library.js";
+import { thumbnailUrl } from "../../web/timeline/media_cache.js";
 
 function createWidget(name, value) {
   return { name, value, type: "string" };
@@ -246,6 +250,7 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   assert.equal(shouldRequestPrivateTimelinePreview(hydratedPrivateShellItem, true), false);
   assert.equal(character.title, "Hero");
   assert.equal(character.image.path, "/library/hero.png");
+  assert.equal(character.previewAsset.path, "/library/hero.png");
   assert.equal(libraryDialogClassName(true), "htd-library-dialog privacy-mode");
   assert.equal(libraryDialogClassName(false), "htd-library-dialog");
 
@@ -268,6 +273,77 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   assert.equal(description.textContent, "");
 }
 
+function testCharacterLibraryPreviewUsesImageSourceMetadata() {
+  const character = normalizeLibraryCharacterItem(characterItem({
+    image: {
+      path: "characters/hero.png",
+      name: "hero.png",
+      source_kind: "FilePath",
+      source_type: "output",
+      thumbnail: "data:image/png;base64,AAAA",
+      metadata: {
+        source_type: "output",
+        thumbnail_data: "data:image/png;base64,BBBB",
+      },
+    },
+  }));
+  const previewAsset = libraryPreviewAssetForItem(character);
+  const url = thumbnailUrl(previewAsset, 320, false);
+
+  assert.equal(previewAsset.path, "characters/hero.png");
+  assert.equal(previewAsset.source_kind, "FilePath");
+  assert.equal(previewAsset.source_type, "output");
+  assert.equal("thumbnail" in previewAsset, false);
+  assert.equal("metadata" in previewAsset, false);
+  assert.ok(url.startsWith("/helto_director/media/thumbnail?"));
+  assert.ok(url.includes("path=characters%2Fhero.png"));
+  assert.ok(url.includes("type=output"));
+}
+
+function testPrivateCharacterPreviewHydratesImageShell() {
+  const privateCharacter = normalizeLibraryCharacterItem({
+    id: "private_hero",
+    name: "Private Hero",
+    is_private: true,
+    summary: { is_private: true },
+  });
+  assert.equal(privateCharacter.previewAsset, null);
+  assert.equal(privateCharacter.previewHydrated, false);
+  assert.equal(shouldRequestPrivateCharacterPreview(privateCharacter, true), true);
+  assert.equal(shouldRequestPrivateCharacterPreview(privateCharacter, false), false);
+
+  const hydrated = applyCharacterPreviewPayload(privateCharacter, {
+    item: {
+      id: "private_hero",
+      is_private: true,
+      character: {
+        label: "image3",
+        description: "private hero",
+        image: {
+          path: "/private/hero.png",
+          source_kind: "FilePath",
+          thumbnail: "must not normalize",
+        },
+      },
+    },
+    character: {
+      label: "image3",
+      description: "private hero",
+      image: {
+        path: "/private/hero.png",
+        source_kind: "FilePath",
+        thumbnail: "must not normalize",
+      },
+    },
+  });
+
+  assert.equal(hydrated.previewAsset.path, "/private/hero.png");
+  assert.equal(hydrated.description, "private hero");
+  assert.equal(hydrated.previewHydrated, true);
+  assert.equal("thumbnail" in hydrated.previewAsset, false);
+  assert.equal(shouldRequestPrivateCharacterPreview(hydrated, true), false);
+}
+
 function testRendererAndLibraryContractStrings() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
   const librarySource = readFileSync(new URL("../../web/timeline/library.js", import.meta.url), "utf8");
@@ -282,6 +358,7 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(rendererSource.includes("controller: this.controller,"), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/items`)'), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
+  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
   assert.equal(librarySource.includes("card.addEventListener(\"pointerenter\", revealPreview);"), true);
   assert.equal(librarySource.includes('options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace timeline from library")'), true);
   assert.equal(librarySource.includes("addCharacterLibraryItemToTimeline(timeline, item"), true);
@@ -301,6 +378,8 @@ function testRendererAndLibraryContractStrings() {
 await testLibraryTimelineReplacementSyncsWidgetsAndUndo();
 testCharacterLibraryHelpersAddReplaceAndDetectLoaded();
 testLibraryItemNormalizationAndPrivacyHelpers();
+testCharacterLibraryPreviewUsesImageSourceMetadata();
+testPrivateCharacterPreviewHydratesImageShell();
 testRendererAndLibraryContractStrings();
 
 console.log("phase18 director library tests passed");

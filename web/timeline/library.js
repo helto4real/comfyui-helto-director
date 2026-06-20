@@ -145,6 +145,12 @@ export async function showDirectorLibrary(options = {}) {
     state.timelines[index] = applyTimelinePreviewPayload(state.timelines[index], payload);
   };
 
+  const mergeCharacterPreview = (itemId, payload) => {
+    const index = state.characters.findIndex((item) => item.id === itemId);
+    if (index < 0) return;
+    state.characters[index] = applyCharacterPreviewPayload(state.characters[index], payload);
+  };
+
   const requestPrivateTimelinePreview = (item) => {
     if (!shouldRequestPrivateTimelinePreview(item, privacyMode) || previewRequests.has(item.id)) return null;
     const request = fetchTimelinePreview(item)
@@ -163,9 +169,32 @@ export async function showDirectorLibrary(options = {}) {
     return request;
   };
 
+  const requestPrivateCharacterPreview = (item) => {
+    if (!shouldRequestPrivateCharacterPreview(item, privacyMode) || previewRequests.has(item.id)) return null;
+    const request = fetchCharacterPreview(item)
+      .then((payload) => {
+        mergeCharacterPreview(item.id, payload);
+        render();
+      })
+      .catch((error) => {
+        mergeCharacterPreview(item.id, { character: null, error });
+        console.warn("Helto Director private character preview failed", error);
+      })
+      .finally(() => {
+        previewRequests.delete(item.id);
+      });
+    previewRequests.set(item.id, request);
+    return request;
+  };
+
+  const requestPrivatePreview = (item) => {
+    requestPrivateTimelinePreview(item);
+    requestPrivateCharacterPreview(item);
+  };
+
   const render = () => {
     const currentSelected = selectedItem();
-    requestPrivateTimelinePreview(currentSelected);
+    requestPrivatePreview(currentSelected);
     saveButton.textContent = state.tab === TAB_CHARACTERS ? "Save Character" : "Save Current";
     saveButton.prepend(iconSvg(documentRef, "plus"));
     saveButton.title = state.tab === TAB_CHARACTERS ? "Save Current Character References" : "Save Current Timeline";
@@ -206,7 +235,7 @@ export async function showDirectorLibrary(options = {}) {
         requestPrivateTimelinePreview(item);
         render();
       },
-      reveal: requestPrivateTimelinePreview,
+      reveal: requestPrivatePreview,
       context: {
         timeline,
         documentRef,
@@ -356,9 +385,19 @@ export function shouldRequestPrivateTimelinePreview(item, privacyMode) {
   );
 }
 
+export function shouldRequestPrivateCharacterPreview(item, privacyMode) {
+  return Boolean(
+    privacyMode &&
+    item?.kind === TAB_CHARACTERS &&
+    item?.isPrivate &&
+    !item.previewHydrated,
+  );
+}
+
 export function normalizeLibraryCharacterItem(item) {
   const source = item?.character ?? item?.payload ?? item;
   const image = createReferenceImageFromLibraryItem(source) ?? null;
+  const previewAsset = normalizeCharacterPreviewAsset(item, source, image);
   const summary = item?.summary && typeof item.summary === "object" && !Array.isArray(item.summary) ? item.summary : {};
   return {
     id: String(item?.id ?? item?.library_id ?? stableHash(image?.path ?? item?.name ?? item?.updated_at)),
@@ -370,7 +409,30 @@ export function normalizeLibraryCharacterItem(item) {
     summary,
     isPrivate: Boolean(item?.is_private ?? item?.private),
     image,
+    previewAsset,
+    previewHydrated: Boolean(image?.path || previewAsset?.path || !Boolean(item?.is_private ?? item?.private)),
     source,
+  };
+}
+
+export function applyCharacterPreviewPayload(item, payload) {
+  const character = payload?.character ?? payload?.item?.character ?? payload?.item?.payload;
+  const merged = normalizeLibraryCharacterItem({
+    ...(item?.source ?? item ?? {}),
+    ...(payload?.item && typeof payload.item === "object" && !Array.isArray(payload.item) ? payload.item : {}),
+    character: character ?? item?.source,
+    id: item?.id ?? payload?.item?.id,
+    name: item?.title ?? payload?.item?.name,
+    title: item?.title ?? payload?.item?.title,
+    tags: item?.tags ?? payload?.item?.tags,
+    is_private: item?.isPrivate ?? payload?.item?.is_private,
+    summary: item?.summary ?? payload?.item?.summary,
+  });
+  return {
+    ...item,
+    ...merged,
+    source: character ?? merged.source ?? item?.source,
+    previewHydrated: true,
   };
 }
 
@@ -1005,7 +1067,7 @@ function renderPreview(documentRef, item, privacyMode, className) {
   const preview = el(documentRef, "button", `htd-library-preview ${className}`);
   preview.type = "button";
   preview.title = "Open Preview";
-  const asset = item.kind === TAB_CHARACTERS ? item.image : item.previewAsset;
+  const asset = libraryPreviewAssetForItem(item);
   if (asset?.path) {
     const img = documentRef.createElement("img");
     img.alt = item.title;
@@ -1020,6 +1082,11 @@ function renderPreview(documentRef, item, privacyMode, className) {
     preview.append(iconSvg(documentRef, item.kind === TAB_TIMELINES ? "timeline" : "character"));
   }
   return preview;
+}
+
+export function libraryPreviewAssetForItem(item) {
+  if (!item) return null;
+  return item.kind === TAB_CHARACTERS ? item.previewAsset ?? item.image ?? null : item.previewAsset ?? null;
 }
 
 function renderTags(documentRef, tags) {
@@ -1117,6 +1184,10 @@ async function fetchTimelineForUse(item) {
 
 async function fetchTimelinePreview(item) {
   return fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
+}
+
+async function fetchCharacterPreview(item) {
+  return fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
 }
 
 async function fetchCharacterForUse(item) {
@@ -1233,6 +1304,7 @@ function normalizePreviewAsset(asset) {
     "path",
     "size_bytes",
     "source_kind",
+    "source_type",
     "type",
     "width",
   ]) {
@@ -1247,6 +1319,18 @@ function normalizePreviewAsset(asset) {
   normalized.type = asset.type;
   normalized.path = path;
   return normalized;
+}
+
+function normalizeCharacterPreviewAsset(item, source, image) {
+  const asset = normalizePreviewAsset({
+    ...source,
+    ...(source?.image && typeof source.image === "object" && !Array.isArray(source.image) ? source.image : {}),
+    ...image,
+    source_kind: image?.source_kind ?? source?.source_kind ?? source?.image?.source_kind,
+    source_type: image?.source_type ?? image?.metadata?.source_type ?? image?.metadata?.browser_alias ?? source?.source_type ?? source?.image?.source_type ?? source?.metadata?.source_type ?? source?.metadata?.browser_alias ?? item?.source_type,
+    type: ASSET_TYPE_IMAGE,
+  });
+  return asset;
 }
 
 function safePreviewText(value) {
