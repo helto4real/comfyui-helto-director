@@ -276,6 +276,15 @@ class SegmentSpillStore:
         }
 
 
+def cleanup_spill_store_once(store: SegmentSpillStore, state: dict[str, Any]) -> dict[str, Any] | None:
+    if state.get("cleaned"):
+        return state.get("summary")
+    state["cleaned"] = True
+    summary = store.cleanup()
+    state["summary"] = summary
+    return summary
+
+
 def trim_visible_segment_images(images: torch.Tensor, segment: dict[str, Any]) -> torch.Tensor:
     trim_leading = max(0, int(segment.get("trim_leading_frames") or 0))
     trim_trailing = max(0, int(segment.get("trim_trailing_frames") or 0))

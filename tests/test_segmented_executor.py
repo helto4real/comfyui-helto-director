@@ -532,6 +532,84 @@ def test_segment_spill_cleanup_after_stitch_failure(tmp_path):
     assert store.root.exists() is False
 
 
+def test_wan_segmented_executor_cleans_spill_on_base_exception(monkeypatch, tmp_path):
+    abort = _SegmentAbort("interrupt after spill")
+
+    def fake_build_runtime_outputs(**_kwargs):
+        runtime_debug = {
+            "wan": {
+                "visual_conditioning": {
+                    "requested_keyframes": [],
+                    "applied_keyframes": [],
+                    "media_decisions": [],
+                },
+                "bernini": None,
+            },
+            "summary": {},
+        }
+        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 1, 1))}, runtime_debug
+
+    monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", lambda **kwargs: (kwargs["latent"], {"sampling_policy": "two_phase", "unload_events": []}))
+    monkeypatch.setattr(wan_segmented, "decode_latent_images", lambda _vae, _latent: torch.zeros((5, 1, 1, 1), dtype=torch.float32))
+    monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda _stage: (_ for _ in ()).throw(abort))
+    monkeypatch.setattr(
+        wan_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    try:
+        wan_segmented.build_wan_segmented_executor_outputs(
+            high_noise_model=object(),
+            low_noise_model=object(),
+            clip=object(),
+            vae=object(),
+            wan_timeline_plan=_two_segment_executor_plan("wan"),
+            seed=1,
+            steps=4,
+            cfg=5.0,
+            sampler_name="euler",
+            scheduler="normal",
+            denoise=1.0,
+            seed_mode="Increment Per Segment",
+        )
+    except _SegmentAbort as exc:
+        assert exc is abort
+    else:
+        raise AssertionError("Expected WAN segmented executor to propagate the interruption.")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ltx_segmented_executor_cleans_spill_on_base_exception(monkeypatch, tmp_path):
+    abort = _SegmentAbort("interrupt after spill")
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+    monkeypatch.setattr(ltx_segmented, "post_decode_memory_cleanup", lambda _stage: (_ for _ in ()).throw(abort))
+
+    try:
+        ltx_segmented.build_ltx_segmented_executor_outputs(
+            model=object(),
+            clip=object(),
+            vae=object(),
+            ltx_timeline_plan=_two_segment_executor_plan("ltx"),
+            seed=1,
+            steps=4,
+            cfg=5.0,
+            sampler_name="euler",
+            scheduler="normal",
+            denoise=1.0,
+            seed_mode="Increment Per Segment",
+        )
+    except _SegmentAbort as exc:
+        assert exc is abort
+    else:
+        raise AssertionError("Expected LTX segmented executor to propagate the interruption.")
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_path):
     decode_calls = {"count": 0}
 
@@ -1570,6 +1648,10 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
     assert runtime_calls[1]["fmlf_motion_frames"].shape[0] == 5
     assert debug["segments"][1]["fmlf_advanced_i2v"]["used_prev_latent"] is True
     assert len(sample_calls) == 2
+
+
+class _SegmentAbort(BaseException):
+    pass
 
 
 def _two_segment_executor_plan(model_key):

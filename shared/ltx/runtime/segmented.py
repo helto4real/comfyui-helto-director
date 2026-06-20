@@ -9,6 +9,7 @@ from ...segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
     build_segment_plan,
+    cleanup_spill_store_once,
     decode_latent_images,
     external_sigmas_step_count,
     post_decode_memory_cleanup,
@@ -78,6 +79,7 @@ def build_ltx_segmented_executor_outputs(
     privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
     sampling_debug = _sampling_schedule_debug(sigmas, steps, scheduler)
     store = SegmentSpillStore(privacy_mode=privacy_mode)
+    cleanup_state: dict[str, Any] = {}
     spill_records = []
     previous_images = None
     guided_character_labels: set[str] = set()
@@ -265,7 +267,7 @@ def build_ltx_segmented_executor_outputs(
             store,
             final_frame_count=int(plan.get("resolved_output", {}).get("frame_count") or 1),
         )
-        cleanup_summary = store.cleanup()
+        cleanup_summary = cleanup_spill_store_once(store, cleanup_state)
         status_reporter.report("timeline.audio", "Timeline Executor: mixing audio")
         combined_audio, audio_diagnostics = mix_timeline_audio(plan)
         native_audio_debug = {
@@ -320,9 +322,8 @@ def build_ltx_segmented_executor_outputs(
             ],
         }
         return final_images, combined_audio, float(plan.get("resolved_output", {}).get("frame_rate") or 24.0), debug
-    except Exception:
-        store.cleanup()
-        raise
+    finally:
+        cleanup_spill_store_once(store, cleanup_state)
 
 
 def _sampling_schedule_debug(sigmas, steps: int, scheduler: str) -> dict[str, Any]:

@@ -12,6 +12,7 @@ from ...segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
     build_segment_plan,
+    cleanup_spill_store_once,
     decode_latent_images,
     post_decode_memory_cleanup,
     previous_tail,
@@ -77,6 +78,7 @@ def build_wan_segmented_executor_outputs(
     status_reporter.report("timeline.prepare", f"WAN Executor: preparing {len(segments)} segment(s)")
     privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
     store = SegmentSpillStore(privacy_mode=privacy_mode)
+    cleanup_state: dict[str, Any] = {}
     spill_records = []
     previous_images = None
     previous_latent = None
@@ -224,7 +226,7 @@ def build_wan_segmented_executor_outputs(
             store,
             final_frame_count=int(plan.get("resolved_output", {}).get("frame_count") or 1),
         )
-        cleanup_summary = store.cleanup()
+        cleanup_summary = cleanup_spill_store_once(store, cleanup_state)
         status_reporter.report("timeline.audio", "Timeline Executor: mixing audio")
         combined_audio, audio_diagnostics = mix_timeline_audio(_wan_plan_as_audio_mix_plan(plan))
         status_reporter.done("Timeline Executor: done")
@@ -247,9 +249,8 @@ def build_wan_segmented_executor_outputs(
             ],
         }
         return final_images, combined_audio, float(plan.get("resolved_output", {}).get("frame_rate") or 24.0), debug
-    except Exception:
-        store.cleanup()
-        raise
+    finally:
+        cleanup_spill_store_once(store, cleanup_state)
 
 
 def sample_wan_segment_latent(
