@@ -36,20 +36,41 @@ UI-only, backend-only, or cross-layer; owns shared contract changes; delegates
 focused worker threads; performs final integration review; and runs final
 validation.
 
-Worker delegation is mandatory for implementation work, including small or
-single-file changes. Do not treat narrow scope as a reason to skip the worker
-step. If the worker tools are unavailable or the user explicitly asks for
-single-threaded execution, state that before making changes and include the
+Worker delegation is for meaningful implementation slices, not ceremony. The
+main thread may make tightly scoped edits directly when delegation would add
+coordination noise, especially for docs-only edits, test expectation updates,
+one-line fixes, or follow-up corrections to work it just integrated. If worker
+tools are unavailable, or the user explicitly asks for single-threaded
+execution, state that before making implementation changes and include the
 reason in the final response.
 
-- UI-only implementation: assign a UI worker with frontend context and
-  JavaScript tests before editing.
-- Backend-only implementation: assign a backend worker with backend context and
-  Python tests before editing.
-- Cross-layer implementation: define the shared contract change first, then
-  split UI and backend work against that contract before editing.
-- Advice-only, review-only, or planning-only turns do not need a worker unless
-  they become implementation work.
+Main thread responsibilities:
+
+- Define the shared contract before spawning implementation workers. This
+  includes route shapes, API stubs, JSON/schema fields, hidden widget payload
+  changes, validation codes, debug fields, migration behavior, and fallback
+  rules.
+- Keep contract edits small and explicit so workers can code against them
+  without guessing.
+- Review child-agent work, integrate it, resolve inconsistencies, fix errors,
+  and run final validation.
+- Avoid delegating a task while also editing the same files or behavior in
+  parallel. If the main thread edits while a worker is running, use a disjoint
+  write scope and review carefully before integration.
+
+Worker responsibilities:
+
+- UI worker: receives the shared contract plus frontend context, implements all
+  assigned UI code, and runs focused JavaScript tests for that UI slice.
+- Backend worker: receives the shared contract plus backend context, implements
+  all assigned backend code, and runs focused Python tests for that backend
+  slice.
+- Cross-layer implementation: the main thread defines and lands or clearly
+  sketches the shared contract first, then splits UI and backend work against
+  that contract.
+- Advice-only, review-only, planning-only, docs-only, and tiny follow-up turns
+  do not need a worker unless the task grows into a meaningful implementation
+  slice.
 
 Backend workers load backend paths, Python tests, and only the minimum shared
 contract files needed for integration. UI workers load frontend paths,
