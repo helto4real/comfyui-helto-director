@@ -10,6 +10,7 @@ from ...segmented_executor import (
     blend_segment_seam,
     build_segment_plan,
     decode_latent_images,
+    external_sigmas_step_count,
     post_decode_memory_cleanup,
     previous_tail,
     sample_latent,
@@ -75,6 +76,7 @@ def build_ltx_segmented_executor_outputs(
     )
     status_reporter.report("timeline.prepare", f"LTX Executor: preparing {len(segments)} segment(s)")
     privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
+    sampling_debug = _sampling_schedule_debug(sigmas, steps, scheduler)
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     spill_records = []
     previous_images = None
@@ -159,6 +161,7 @@ def build_ltx_segmented_executor_outputs(
                 sampler_name=sampler_name,
                 scheduler=scheduler,
                 denoise=denoise,
+                sigmas=sigmas,
             )
             if use_native_audio and native_audio_debug.get("av_latent_sampling"):
                 decoded_audio, decoded_audio_debug = decode_native_generated_audio(sampled, audio_vae)
@@ -250,6 +253,7 @@ def build_ltx_segmented_executor_outputs(
                 "character_reference_labels_guided": reference_guidance_debug["character_reference_labels_guided"],
                 "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
+                "sampling": sampling_debug,
                 "native_audio": native_audio_debug,
             })
             guided_character_labels.update(reference_guidance_debug["character_reference_labels_guided"])
@@ -306,9 +310,11 @@ def build_ltx_segmented_executor_outputs(
                 "target_frame_count": int(plan.get("resolved_output", {}).get("frame_count") or 1),
                 "audio_policy": native_audio_debug["policy"],
             },
+            "sampling": sampling_debug,
             "native_audio": native_audio_debug,
             "diagnostics": [
                 *(segmented.get("diagnostics") or []),
+                *sampling_debug.get("diagnostics", []),
                 *audio_diagnostics,
                 *native_audio_diagnostics,
             ],
@@ -317,6 +323,32 @@ def build_ltx_segmented_executor_outputs(
     except Exception:
         store.cleanup()
         raise
+
+
+def _sampling_schedule_debug(sigmas, steps: int, scheduler: str) -> dict[str, Any]:
+    if sigmas is None:
+        return {
+            "external_sigmas_used": False,
+            "configured_steps": int(steps),
+            "configured_scheduler": str(scheduler),
+            "effective_steps": int(steps),
+            "diagnostics": [],
+        }
+    effective_steps = external_sigmas_step_count(sigmas)
+    sigma_count = effective_steps + 1
+    return {
+        "external_sigmas_used": True,
+        "configured_steps": int(steps),
+        "configured_scheduler": str(scheduler),
+        "sigma_count": sigma_count,
+        "effective_steps": effective_steps,
+        "diagnostics": [
+            (
+                "Connected sigmas input is controlling the sampling schedule; "
+                f"executor Steps ({int(steps)}) and Scheduler ({str(scheduler)}) are ignored for schedule construction."
+            )
+        ],
+    }
 
 
 def _latent_frame_count(latent: dict[str, Any]) -> int | None:

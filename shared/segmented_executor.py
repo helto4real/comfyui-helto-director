@@ -56,6 +56,7 @@ def sample_latent(
     start_step: int | None = None,
     last_step: int | None = None,
     force_full_denoise: bool = False,
+    sigmas=None,
 ) -> dict[str, Any]:
     try:
         import comfy.sample
@@ -76,11 +77,12 @@ def sample_latent(
     else:
         batch_inds = latent.get("batch_index")
         noise = comfy.sample.prepare_noise(latent_image, int(seed), batch_inds)
-    callback = latent_preview.prepare_callback(model, int(steps))
+    effective_steps = external_sigmas_step_count(sigmas) if sigmas is not None else int(steps)
+    callback = latent_preview.prepare_callback(model, effective_steps)
     samples = comfy.sample.sample(
         model,
         noise,
-        int(steps),
+        effective_steps,
         float(cfg),
         str(sampler_name),
         str(scheduler),
@@ -93,6 +95,7 @@ def sample_latent(
         last_step=last_step,
         force_full_denoise=bool(force_full_denoise),
         noise_mask=latent.get("noise_mask"),
+        sigmas=sigmas,
         callback=callback,
         disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED,
         seed=int(seed),
@@ -102,6 +105,19 @@ def sample_latent(
     output.pop("downscale_ratio_temporal", None)
     output["samples"] = samples
     return output
+
+
+def external_sigmas_step_count(sigmas) -> int:
+    try:
+        sigma_count = int(sigmas.shape[-1])
+    except AttributeError:
+        try:
+            sigma_count = len(sigmas)
+        except TypeError as exc:
+            raise ValueError("Connected sigmas input must be a sequence or tensor with at least two values.") from exc
+    if sigma_count < 2:
+        raise ValueError("Connected sigmas input must contain at least two values to define a sampling schedule.")
+    return sigma_count - 1
 
 
 def decode_latent_images(vae, latent: dict[str, Any]) -> torch.Tensor:

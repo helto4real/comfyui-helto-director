@@ -8,7 +8,9 @@ from shared.privacy import BYTE_CHUNKED_ENVELOPE_SCHEMA, CRYPTO_AVAILABLE
 from shared.segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
+    external_sigmas_step_count,
     post_decode_memory_cleanup,
+    sample_latent,
     segment_seam_blend_frames,
     segment_seed,
     stitch_segment_images,
@@ -37,6 +39,81 @@ def test_segment_seam_blend_frame_options_normalize():
     assert segment_seam_blend_frames("5") == 5
     assert segment_seam_blend_frames("4") == 3
     assert segment_seam_blend_frames("bad") == 3
+
+
+def test_sample_latent_passes_connected_sigmas_to_comfy_sampler(monkeypatch):
+    import sys
+    import types
+
+    calls = {}
+    callback_steps = []
+    sigmas = torch.tensor([1.0, 0.6, 0.0], dtype=torch.float32)
+    latent = {"samples": torch.zeros((1, 16, 3, 1, 1), dtype=torch.float32)}
+
+    comfy_module = types.ModuleType("comfy")
+    comfy_sample_module = types.ModuleType("comfy.sample")
+    comfy_utils_module = types.ModuleType("comfy.utils")
+    latent_preview_module = types.ModuleType("latent_preview")
+    comfy_module.sample = comfy_sample_module
+    comfy_module.utils = comfy_utils_module
+    comfy_sample_module.fix_empty_latent_channels = lambda _model, samples, _spatial, _temporal: samples
+    comfy_sample_module.prepare_noise = lambda latent_image, _seed, _batch_inds: torch.zeros_like(latent_image)
+    comfy_utils_module.PROGRESS_BAR_ENABLED = True
+    latent_preview_module.prepare_callback = lambda _model, steps: callback_steps.append(steps) or "callback"
+    monkeypatch.setitem(sys.modules, "comfy", comfy_module)
+    monkeypatch.setitem(sys.modules, "comfy.sample", comfy_sample_module)
+    monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils_module)
+    monkeypatch.setitem(sys.modules, "latent_preview", latent_preview_module)
+
+    def fake_sample(
+        model,
+        noise,
+        steps,
+        cfg,
+        sampler_name,
+        scheduler,
+        positive,
+        negative,
+        latent_image,
+        **kwargs,
+    ):
+        calls.update(
+            {
+                "model": model,
+                "noise": noise,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "positive": positive,
+                "negative": negative,
+                "latent_image": latent_image,
+                **kwargs,
+            }
+        )
+        return latent_image + 1
+
+    comfy_sample_module.sample = fake_sample
+
+    output = sample_latent(
+        model=object(),
+        positive=[["positive"]],
+        negative=[["negative"]],
+        latent=latent,
+        seed=123,
+        steps=20,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        sigmas=sigmas,
+    )
+
+    assert callback_steps == [2]
+    assert calls["steps"] == 2
+    assert calls["sigmas"] is sigmas
+    assert calls["scheduler"] == "normal"
+    assert torch.equal(output["samples"], torch.ones_like(latent["samples"]))
 
 
 def test_timeline_status_reporter_records_progress_text_and_safe_events():
@@ -587,6 +664,103 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     assert debug["segments"][1]["spilled_frame_count"] == 3
     assert debug["segments"][1]["seam_blend"]["actual_frame_count"] == 3
     assert debug["stitching"]["output_frame_count"] == 8
+
+
+def test_ltx_segmented_executor_uses_connected_sigmas_as_sampling_schedule(monkeypatch, tmp_path):
+    sample_calls = []
+    sigmas = torch.tensor([1.0, 0.7, 0.2, 0.0], dtype=torch.float32)
+
+    def fake_sample_latent(**kwargs):
+        sample_calls.append(kwargs)
+        return kwargs["latent"]
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+    monkeypatch.setattr(ltx_segmented, "sample_latent", fake_sample_latent)
+
+    _images, _audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=_ltx_one_segment_native_generated_audio_executor_plan(),
+        seed=1,
+        steps=20,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+        sigmas=sigmas,
+    )
+
+    assert sample_calls[0]["sigmas"] is sigmas
+    assert sample_calls[0]["steps"] == 20
+    assert sample_calls[0]["scheduler"] == "normal"
+    assert debug["sampling"]["external_sigmas_used"] is True
+    assert debug["sampling"]["sigma_count"] == 4
+    assert debug["sampling"]["effective_steps"] == 3
+    assert debug["segments"][0]["sampling"]["effective_steps"] == 3
+    assert any("Connected sigmas input is controlling" in entry for entry in debug["diagnostics"])
+
+
+def test_ltx_segmented_executor_uses_widget_schedule_without_sigmas(monkeypatch, tmp_path):
+    sample_calls = []
+
+    def fake_sample_latent(**kwargs):
+        sample_calls.append(kwargs)
+        return kwargs["latent"]
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
+    monkeypatch.setattr(ltx_segmented, "sample_latent", fake_sample_latent)
+
+    _images, _audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=_ltx_one_segment_native_generated_audio_executor_plan(),
+        seed=1,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="sgm_uniform",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    assert sample_calls[0]["sigmas"] is None
+    assert sample_calls[0]["steps"] == 12
+    assert sample_calls[0]["scheduler"] == "sgm_uniform"
+    assert debug["sampling"] == {
+        "external_sigmas_used": False,
+        "configured_steps": 12,
+        "configured_scheduler": "sgm_uniform",
+        "effective_steps": 12,
+        "diagnostics": [],
+    }
+
+
+def test_ltx_segmented_executor_rejects_connected_sigmas_without_sampling_steps():
+    for sigmas in (torch.tensor([], dtype=torch.float32), torch.tensor([1.0], dtype=torch.float32)):
+        try:
+            ltx_segmented.build_ltx_segmented_executor_outputs(
+                model=object(),
+                clip=object(),
+                vae=object(),
+                ltx_timeline_plan=_ltx_one_segment_native_generated_audio_executor_plan(),
+                seed=1,
+                steps=12,
+                cfg=5.0,
+                sampler_name="euler",
+                scheduler="normal",
+                denoise=1.0,
+                seed_mode="Reuse Seed",
+                sigmas=sigmas,
+            )
+        except ValueError as exc:
+            assert "at least two values" in str(exc)
+        else:
+            raise AssertionError("Expected too-short sigmas to raise ValueError.")
+
+    assert external_sigmas_step_count(torch.tensor([1.0, 0.0], dtype=torch.float32)) == 1
 
 
 def test_ltx_segmented_executor_uses_text_only_for_repeated_character_reference(monkeypatch, tmp_path):
