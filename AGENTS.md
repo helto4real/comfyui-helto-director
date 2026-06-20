@@ -211,6 +211,15 @@ Use the ComfyUI Python environment/checkout when possible:
 PYTHONPATH=/home/thhel/git/ComfyUI python -m pytest
 ```
 
+If `python -m pytest` reports `No module named pytest`, do not assume pytest is
+missing globally. The user's pyenv Python at
+`/home/thhel/.pyenv/versions/3.13.2/bin/python` has pytest installed and should
+be used for validation before reporting pytest as unavailable:
+
+```bash
+PYTHONPATH=/home/thhel/git/ComfyUI /home/thhel/.pyenv/versions/3.13.2/bin/python -m pytest
+```
+
 Run focused Python tests:
 
 ```bash
