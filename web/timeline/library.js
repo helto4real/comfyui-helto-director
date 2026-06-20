@@ -998,9 +998,7 @@ function filterMatches(item, key, tab, timeline) {
 }
 
 function timelinePreviewAssets(item) {
-  const assets = (item.timeline?.assets ?? []).filter((asset) => (
-    (asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && asset.path
-  ));
+  const assets = timelineSectionPreviewAssets(item.timeline);
   if (assets.length) return assets;
   if (Array.isArray(item.previewAssets) && item.previewAssets.length) return item.previewAssets;
   return item.previewAsset ? [item.previewAsset] : [];
@@ -1100,6 +1098,41 @@ function mediaHealthRows(item) {
     asset.missing || asset.status === "missing" || asset.exists === false ? "Missing" : "OK",
     asset.missing || asset.status === "missing" || asset.exists === false ? "warning" : "ok",
   ]);
+}
+
+function timelineSectionPreviewAssets(timeline) {
+  if (!timeline) return [];
+  const assetsById = new Map((timeline.assets ?? []).map((asset) => [String(asset?.asset_id ?? ""), asset]));
+  const previews = [];
+  for (const section of timeline.director_track?.sections ?? []) {
+    if (section?.type !== ASSET_TYPE_IMAGE && section?.type !== ASSET_TYPE_VIDEO) continue;
+    const sectionType = section.type;
+    const reference = sectionType === ASSET_TYPE_VIDEO ? section.video : section.image;
+    const preview = timelinePreviewAssetFromReference(reference, assetsById, sectionType);
+    if (preview) previews.push(preview);
+  }
+  return previews;
+}
+
+function timelinePreviewAssetFromReference(reference, assetsById, fallbackType = ASSET_TYPE_IMAGE) {
+  if (!reference) return null;
+  if (typeof reference === "string") {
+    return normalizePreviewAsset({ type: fallbackType, path: reference });
+  }
+  if (reference.asset_id) {
+    const asset = assetsById.get(String(reference.asset_id));
+    if (asset?.type === ASSET_TYPE_IMAGE || asset?.type === ASSET_TYPE_VIDEO) {
+      return normalizePreviewAsset(asset);
+    }
+  }
+  if (reference.path || reference.file_path) {
+    return normalizePreviewAsset({
+      ...reference,
+      type: reference.type === ASSET_TYPE_VIDEO ? ASSET_TYPE_VIDEO : fallbackType,
+      path: reference.path ?? reference.file_path,
+    });
+  }
+  return null;
 }
 
 function characterRowsForDetails(item, existing) {
@@ -1216,6 +1249,38 @@ export function clearTimelineLibraryItemId(timeline) {
   return stampTimelineLibraryItemId(timeline, "");
 }
 
+export function cloneTimelineForDirectorLibrary(timeline, itemId = "") {
+  const clone = deepClone(timeline ?? {});
+  pruneUnreferencedTimelineAssets(clone);
+  return stampTimelineLibraryItemId(clone, itemId);
+}
+
+function pruneUnreferencedTimelineAssets(timeline) {
+  if (!Array.isArray(timeline?.assets)) return timeline;
+  const referencedAssetIds = collectTimelineAssetReferences(timeline);
+  timeline.assets = timeline.assets.filter((asset) => referencedAssetIds.has(String(asset?.asset_id ?? "")));
+  return timeline;
+}
+
+function collectTimelineAssetReferences(timeline) {
+  const ids = new Set();
+  const addAssetId = (reference) => {
+    const assetId = String(reference?.asset_id ?? "").trim();
+    if (assetId) ids.add(assetId);
+  };
+  for (const section of timeline?.director_track?.sections ?? []) {
+    if (section?.type === ASSET_TYPE_IMAGE) addAssetId(section.image);
+    if (section?.type === ASSET_TYPE_VIDEO) addAssetId(section.video);
+  }
+  for (const track of timeline?.audio_tracks ?? []) {
+    for (const clip of track?.clips ?? []) addAssetId(clip?.audio);
+  }
+  for (const reference of getCharacterReferences(timeline)) {
+    addAssetId(reference?.image);
+  }
+  return ids;
+}
+
 function stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId) {
   if (callbacks?.controller?.updateTimeline) {
     callbacks.controller.updateTimeline((current) => {
@@ -1240,9 +1305,9 @@ async function saveCurrentTimelineAsNew({ timeline, documentRef, setStatus, priv
   if (!timeline) return;
   try {
     if (typeof saveTimeline === "function") {
-      await saveTimeline(clearTimelineLibraryItemId(deepClone(timeline)));
+      await saveTimeline(cloneTimelineForDirectorLibrary(timeline, ""));
     } else {
-      const saveTimelinePayload = clearTimelineLibraryItemId(deepClone(timeline));
+      const saveTimelinePayload = cloneTimelineForDirectorLibrary(timeline, "");
       const data = await fetchLibraryJson(`${ROUTE_PREFIX}/timelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1385,7 +1450,7 @@ async function fetchCharacterForUse(item) {
 }
 
 async function updateTimelineLibraryItem(itemId, timeline) {
-  const timelinePayload = stampTimelineLibraryItemId(deepClone(timeline), itemId);
+  const timelinePayload = cloneTimelineForDirectorLibrary(timeline, itemId);
   return fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(itemId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -1456,10 +1521,7 @@ function visibleTags(items) {
 }
 
 function firstTimelinePreviewAsset(timeline) {
-  return (timeline?.assets ?? []).find((asset) => (
-    (asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) &&
-    asset.path
-  )) ?? null;
+  return timelineSectionPreviewAssets(timeline)[0] ?? null;
 }
 
 function normalizePreviewAssets(value) {

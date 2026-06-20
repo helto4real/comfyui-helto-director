@@ -21,7 +21,10 @@ import {
   addPickedMediaItem,
   replacePickedSectionMedia,
 } from "./media_actions.js";
-import { showDirectorLibrary } from "./library.js";
+import {
+  cloneTimelineForDirectorLibrary,
+  showDirectorLibrary,
+} from "./library.js";
 import { showMediaPicker } from "./media_picker.js";
 import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
@@ -1897,17 +1900,12 @@ function referenceLibraryPayload(reference, privacyMode) {
 }
 
 function timelineLibraryPayload(timeline, itemId) {
-  const payloadTimeline = cloneTimelineForLibrary(timeline, itemId);
+  const payloadTimeline = cloneTimelineForDirectorLibrary(timeline, itemId);
   return {
     name: timelineLibraryName(payloadTimeline),
     private: Boolean(payloadTimeline?.project?.privacy?.mode),
     timeline: payloadTimeline,
   };
-}
-
-function cloneTimelineForLibrary(timeline, itemId) {
-  const clone = JSON.parse(JSON.stringify(timeline ?? {}));
-  return stampTimelineLibraryItemId(clone, itemId);
 }
 
 function timelineLibraryName(timeline) {

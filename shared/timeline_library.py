@@ -9,7 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .contracts.video_timeline import ASSET_TYPE_IMAGE, ASSET_TYPE_VIDEO
+from .contracts.video_timeline import (
+    ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
+    SECTION_TYPE_IMAGE,
+    SECTION_TYPE_VIDEO,
+)
 from .privacy import decrypt_state, encrypt_state
 from .timeline.normalize import normalize_video_timeline
 from .timeline.references import normalize_character_references
@@ -383,6 +388,7 @@ def _normalize_payload(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     sanitized = _sanitize_embedded_media(copy.deepcopy(dict(payload)))
     if kind == TIMELINE_KIND:
         timeline = normalize_video_timeline(sanitized)
+        _keep_referenced_assets_only(timeline)
         timeline["validation"] = validate_video_timeline(timeline)
         return timeline
     references = normalize_character_references([sanitized])
@@ -423,18 +429,123 @@ def _sanitize_embedded_media(value: Any, *, key: str = "") -> Any:
 def preview_assets_for_timeline(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, Mapping):
         return []
-    assets = payload.get("assets")
-    if not isinstance(assets, list):
-        return []
+    assets_by_id = _assets_by_id(payload)
     preview_assets: list[dict[str, Any]] = []
-    for asset in assets:
-        preview_asset = _preview_asset_shell(asset)
+    for reference, asset_type in _timeline_preview_media_references(payload):
+        preview_asset = _preview_shell_for_media_reference(reference, assets_by_id, asset_type)
         if not preview_asset:
             continue
         preview_assets.append(preview_asset)
         if len(preview_assets) >= PREVIEW_ASSET_LIMIT:
             break
     return preview_assets
+
+
+def _keep_referenced_assets_only(timeline: dict[str, Any]) -> None:
+    assets = timeline.get("assets")
+    if not isinstance(assets, list):
+        timeline["assets"] = []
+        return
+    referenced_asset_ids = _referenced_asset_ids_for_timeline(timeline)
+    timeline["assets"] = [
+        asset
+        for asset in assets
+        if isinstance(asset, Mapping) and str(asset.get("asset_id") or "") in referenced_asset_ids
+    ]
+
+
+def _referenced_asset_ids_for_timeline(timeline: Mapping[str, Any]) -> set[str]:
+    asset_ids: set[str] = set()
+    for reference, _asset_type in _timeline_media_references(timeline):
+        asset_id = _asset_id_from_reference(reference)
+        if asset_id:
+            asset_ids.add(asset_id)
+    return asset_ids
+
+
+def _timeline_media_references(timeline: Mapping[str, Any]) -> list[tuple[Any, str | None]]:
+    references: list[tuple[Any, str | None]] = []
+    references.extend(_timeline_preview_media_references(timeline))
+    audio_tracks = timeline.get("audio_tracks")
+    for track in audio_tracks if isinstance(audio_tracks, list) else []:
+        if not isinstance(track, Mapping):
+            continue
+        clips = track.get("clips")
+        for clip in clips if isinstance(clips, list) else []:
+            if isinstance(clip, Mapping):
+                references.append((clip.get("audio"), None))
+    project = _mapping_child(timeline, "project")
+    metadata = _mapping_child(project, "metadata")
+    character_references = metadata.get("character_references")
+    for reference in character_references if isinstance(character_references, list) else []:
+        if isinstance(reference, Mapping):
+            references.append((reference.get("image"), ASSET_TYPE_IMAGE))
+    return references
+
+
+def _timeline_preview_media_references(timeline: Mapping[str, Any]) -> list[tuple[Any, str]]:
+    director_track = _mapping_child(timeline, "director_track")
+    sections = director_track.get("sections")
+    references: list[tuple[Any, str]] = []
+    for section in sections if isinstance(sections, list) else []:
+        if not isinstance(section, Mapping):
+            continue
+        if section.get("type") == SECTION_TYPE_IMAGE:
+            references.append((section.get("image"), ASSET_TYPE_IMAGE))
+        elif section.get("type") == SECTION_TYPE_VIDEO:
+            references.append((section.get("video"), ASSET_TYPE_VIDEO))
+    return references
+
+
+def _preview_shell_for_media_reference(
+    reference: Any,
+    assets_by_id: Mapping[str, Mapping[str, Any]],
+    asset_type: str,
+) -> dict[str, Any] | None:
+    asset_id = _asset_id_from_reference(reference)
+    if asset_id:
+        asset = assets_by_id.get(asset_id)
+        if asset:
+            return _preview_asset_shell(asset)
+        return None
+    direct_asset = _direct_reference_asset(reference, asset_type)
+    return _preview_asset_shell(direct_asset)
+
+
+def _assets_by_id(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    assets = payload.get("assets")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for asset in assets if isinstance(assets, list) else []:
+        if not isinstance(asset, Mapping):
+            continue
+        asset_id = str(asset.get("asset_id") or "")
+        if asset_id:
+            by_id[asset_id] = asset
+    return by_id
+
+
+def _asset_id_from_reference(reference: Any) -> str:
+    if not isinstance(reference, Mapping):
+        return ""
+    return str(reference.get("asset_id") or "").strip()
+
+
+def _direct_reference_asset(reference: Any, asset_type: str) -> dict[str, Any] | None:
+    if isinstance(reference, Mapping):
+        path = reference.get("path") or reference.get("file_path")
+        if not path:
+            return None
+        asset = dict(reference)
+        asset["type"] = asset_type
+        return asset
+    if isinstance(reference, str) and reference.strip():
+        return {"type": asset_type, "path": reference.strip()}
+    return None
+
+
+def _mapping_child(parent: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    child = parent.get(key)
+    return child if isinstance(child, Mapping) else {}
 
 
 def preview_character_shell(payload: Any) -> dict[str, Any]:

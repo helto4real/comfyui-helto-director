@@ -142,6 +142,17 @@ def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_i
             "name": "clip.mp4",
         }
     )
+    timeline["project"]["duration_seconds"] = 4.0
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section-video",
+            "type": "Video",
+            "start_time": 2.0,
+            "end_time": 4.0,
+            "prompt": "video prompt",
+            "video": {"asset_id": "asset-video"},
+        }
+    )
 
     create_item("timeline", timeline, metadata={"id": "preview-shell"}, base_dir=tmp_path)
 
@@ -170,6 +181,48 @@ def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_i
     assert "waveform" not in json.dumps(item)
     assert "preview_data" not in json.dumps(item)
     assert "cache_key" not in json.dumps(item)
+
+
+def test_replace_timeline_drops_orphan_assets_and_previews_direct_paths(tmp_path):
+    create_item(
+        "timeline",
+        sample_timeline(path="/media/old.png"),
+        metadata={"id": "replace-orphan"},
+        base_dir=tmp_path,
+    )
+
+    replacement = sample_timeline(prompt="direct path", path="/media/old.png")
+    replacement["assets"].append(
+        {
+            "asset_id": "orphan-image",
+            "type": "Image",
+            "source_kind": "FilePath",
+            "path": "/media/orphan.png",
+            "name": "orphan.png",
+        }
+    )
+    replacement["director_track"]["sections"][0]["image"] = {
+        "path": "/media/new-direct.png",
+        "name": "new-direct.png",
+    }
+
+    replaced = replace_item("timeline", "replace-orphan", replacement, base_dir=tmp_path)
+    stored_payload = load_library(tmp_path)["timelines"][0]["payload"]
+    listed_item = list_items(tmp_path)["timelines"][0]
+    preview = preview_timeline_item("replace-orphan", base_dir=tmp_path)
+
+    assert replaced["timeline"]["assets"] == []
+    assert stored_payload["assets"] == []
+    assert "old.png" not in json.dumps(stored_payload)
+    assert "orphan.png" not in json.dumps(stored_payload)
+    assert listed_item["preview_assets"] == [
+        {
+            "name": "new-direct.png",
+            "path": "/media/new-direct.png",
+            "type": "Image",
+        }
+    ]
+    assert preview["preview_assets"] == listed_item["preview_assets"]
 
 
 def test_embedded_media_and_cache_payloads_are_sanitized_before_persistence(tmp_path):

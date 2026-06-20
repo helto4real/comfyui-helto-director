@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { addSection } from "../../web/timeline/operations.js";
+import {
+  addAudioClip,
+  addSection,
+} from "../../web/timeline/operations.js";
 import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
 import {
   TimelineStateController,
@@ -22,6 +25,7 @@ import {
   applyTimelinePreviewPayload,
   clearDirectorLibraryDisplay,
   clearTimelineLibraryItemId,
+  cloneTimelineForDirectorLibrary,
   libraryPreviewAssetForItem,
   libraryDialogClassName,
   linkedTimelineLibraryItemId,
@@ -176,6 +180,8 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.metadata.title = "Scene One";
   timeline.project.metadata.tags = ["drama"];
+  const previewSection = addSection(timeline, "Image", 0);
+  previewSection.image = { asset_id: "image_001" };
   timeline.assets.push({
     asset_id: "image_001",
     type: "Image",
@@ -358,6 +364,68 @@ function testTimelineLibraryIdentityHelpers() {
   assert.equal("library_item_id" in timeline.project.metadata, false);
 }
 
+function testTimelineLibrarySaveClonePrunesUnreferencedAssets() {
+  const timeline = createDefaultVideoTimeline();
+  const imageSection = addSection(timeline, "Image", 0);
+  const videoSection = addSection(timeline, "Video", 1);
+  const audioClip = addAudioClip(timeline, 0, 1);
+  timeline.project.metadata.character_references.push({
+    id: "reference_001",
+    label: "image1",
+    image: { asset_id: "reference_image" },
+  });
+  imageSection.image = { asset_id: "section_image" };
+  imageSection.video = { asset_id: "stale_section_video_field" };
+  videoSection.video = { asset_id: "section_video" };
+  videoSection.image = { asset_id: "stale_section_image_field" };
+  audioClip.audio = { asset_id: "clip_audio" };
+  timeline.assets.push(
+    { asset_id: "section_image", type: "Image", path: "/media/section.png" },
+    { asset_id: "section_video", type: "Video", path: "/media/section.mp4" },
+    { asset_id: "clip_audio", type: "Audio", path: "/media/dialog.wav" },
+    { asset_id: "reference_image", type: "Image", path: "/media/reference.png" },
+    { asset_id: "stale_section_video_field", type: "Video", path: "/media/stale.mp4" },
+    { asset_id: "stale_section_image_field", type: "Image", path: "/media/stale.png" },
+    { asset_id: "orphan_image", type: "Image", path: "/media/orphan.png" },
+  );
+
+  const updatePayload = cloneTimelineForDirectorLibrary(timeline, "timeline_live");
+  assert.notEqual(updatePayload, timeline);
+  assert.deepEqual(
+    updatePayload.assets.map((asset) => asset.asset_id),
+    ["section_image", "section_video", "clip_audio", "reference_image"],
+  );
+  assert.equal(updatePayload.project.metadata.library_item_id, "timeline_live");
+  assert.equal(timeline.assets.length, 7);
+  assert.equal("library_item_id" in timeline.project.metadata, false);
+
+  stampTimelineLibraryItemId(timeline, "existing_library_item");
+  const saveAsNewPayload = cloneTimelineForDirectorLibrary(timeline, "");
+  assert.equal("library_item_id" in saveAsNewPayload.project.metadata, false);
+  assert.equal(timeline.project.metadata.library_item_id, "existing_library_item");
+}
+
+function testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia() {
+  const timeline = createDefaultVideoTimeline();
+  const imageSection = addSection(timeline, "Image", 0);
+  imageSection.image = { asset_id: "visible_image" };
+  timeline.assets.push(
+    { asset_id: "orphan_image", type: "Image", path: "/media/orphan.png" },
+    { asset_id: "visible_image", type: "Image", path: "/media/visible.png", name: "visible.png" },
+  );
+
+  const item = normalizeLibraryTimelineItem({ id: "timeline_preview", timeline });
+  assert.equal(item.previewAsset.path, "/media/visible.png");
+  assert.equal(libraryPreviewAssetForItem(item).path, "/media/visible.png");
+
+  const directTimeline = createDefaultVideoTimeline();
+  const directSection = addSection(directTimeline, "Image", 0);
+  directSection.image = { file_path: "/media/direct.png", name: "direct.png" };
+  directTimeline.assets.push({ asset_id: "orphan_image", type: "Image", path: "/media/orphan.png" });
+  const directItem = normalizeLibraryTimelineItem({ id: "timeline_direct_preview", timeline: directTimeline });
+  assert.equal(directItem.previewAsset.path, "/media/direct.png");
+}
+
 function testRendererAndLibraryContractStrings() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
   const librarySource = readFileSync(new URL("../../web/timeline/library.js", import.meta.url), "utf8");
@@ -367,7 +435,8 @@ function testRendererAndLibraryContractStrings() {
     TIMELINE_REPLACE_CONFIRMATION,
     "Replace current timeline?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.",
   );
-  assert.equal(rendererSource.includes('import { showDirectorLibrary } from "./library.js";'), true);
+  assert.equal(rendererSource.includes('showDirectorLibrary,'), true);
+  assert.equal(rendererSource.includes('cloneTimelineForDirectorLibrary,'), true);
   assert.equal(rendererSource.includes('iconButton("library", "Director Library", () => this.openDirectorLibrary())'), true);
   const directorLibraryButtonIndex = rendererSource.indexOf('iconButton("library", "Director Library", () => this.openDirectorLibrary())');
   const timelineSaveButtonIndex = rendererSource.indexOf("timelineLibraryButton,", directorLibraryButtonIndex);
@@ -420,6 +489,8 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(rendererSource.includes('iconButton("library-update", "Update Director Library Character"'), true);
   assert.equal(rendererSource.includes("stampReferenceLibraryItemId(timeline, reference, itemId)"), true);
   assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`'), true);
+  assert.equal(librarySource.includes("function collectTimelineAssetReferences(timeline)"), true);
+  assert.equal(librarySource.includes("cloneTimelineForDirectorLibrary(timeline, itemId)"), true);
 }
 
 await testLibraryTimelineReplacementSyncsWidgetsAndUndo();
@@ -428,6 +499,8 @@ testLibraryItemNormalizationAndPrivacyHelpers();
 testCharacterLibraryPreviewUsesImageSourceMetadata();
 testPrivateCharacterPreviewHydratesImageShell();
 testTimelineLibraryIdentityHelpers();
+testTimelineLibrarySaveClonePrunesUnreferencedAssets();
+testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia();
 testRendererAndLibraryContractStrings();
 
 console.log("phase18 director library tests passed");
