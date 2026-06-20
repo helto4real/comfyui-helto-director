@@ -429,6 +429,7 @@ function testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia() {
 function testRendererAndLibraryContractStrings() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
   const librarySource = readFileSync(new URL("../../web/timeline/library.js", import.meta.url), "utf8");
+  const mediaPreviewSource = readFileSync(new URL("../../web/timeline/media_preview.js", import.meta.url), "utf8");
 
   assert.equal(ROUTE_PREFIX, "/helto_director/library");
   assert.equal(
@@ -461,6 +462,11 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes('panel.append(header, controls, tabs, body, status, actions);'), true);
   assert.equal(librarySource.includes('renderTimelineMediaStrip(documentRef, item, privacyMode)'), true);
   assert.equal(librarySource.includes('renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context)'), true);
+  assert.equal(librarySource.includes('import { showMediaPreview } from "./media_preview.js";'), true);
+  assert.equal(librarySource.includes("function openLibraryMediaPreview(documentRef, asset, caption)"), true);
+  assert.equal(librarySource.includes("return showMediaPreview(documentRef, {"), true);
+  assert.equal(librarySource.includes("windowOpen(documentRef"), false);
+  assert.equal(mediaPreviewSource.includes("z-index: 10050"), true);
   assert.equal(librarySource.includes('htd-library-filter-toggle'), true);
   assert.equal(librarySource.includes('htd-library-inspector-actions'), true);
   assert.equal(librarySource.includes('timelinePreviewAssets(item).slice(0, 3)'), true);

@@ -150,7 +150,7 @@ function installMediaPreviewStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-    .pr-image-large-preview { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; }
+    .pr-image-large-preview { position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; }
     .pr-image-large-preview-panel { position: relative; max-width: calc(100vw - 64px); max-height: calc(100vh - 64px); background: #111; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
     .pr-image-large-preview-panel img, .pr-image-large-preview-panel video { max-width: 100%; max-height: calc(100vh - 132px); object-fit: contain; background: #050505; }
     .pr-image-large-preview-panel video { min-width: min(720px, calc(100vw - 96px)); }

@@ -17,6 +17,7 @@ import {
   mediaViewUrl,
   thumbnailUrl,
 } from "./media_cache.js";
+import { showMediaPreview } from "./media_preview.js";
 
 export const ROUTE_PREFIX = "/helto_director/library";
 export const TIMELINE_REPLACE_CONFIRMATION = "Replace current timeline?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.";
@@ -744,8 +745,7 @@ function renderAssetThumb(documentRef, asset, title, privacyMode) {
     thumb.append(img);
     thumb.addEventListener("click", (event) => {
       event.stopPropagation();
-      const url = mediaViewUrl(asset);
-      if (url) windowOpen(documentRef, url);
+      openLibraryMediaPreview(documentRef, asset, title);
     });
   }
   return thumb;
@@ -1212,8 +1212,7 @@ function renderPreview(documentRef, item, privacyMode, className) {
     preview.append(img);
     preview.addEventListener("click", (event) => {
       event.stopPropagation();
-      const url = mediaViewUrl(asset);
-      if (url) windowOpen(documentRef, url);
+      openLibraryMediaPreview(documentRef, asset, item.title);
     });
   } else {
     preview.append(iconSvg(documentRef, item.kind === TAB_TIMELINES ? "timeline" : "character"));
@@ -1679,9 +1678,14 @@ function iconSvg(documentRef, name) {
   return span;
 }
 
-function windowOpen(documentRef, url) {
-  const win = documentRef.defaultView ?? globalThis.window;
-  win?.open?.(url, "_blank", "noopener");
+function openLibraryMediaPreview(documentRef, asset, caption) {
+  const url = mediaViewUrl(asset);
+  if (!url) return null;
+  return showMediaPreview(documentRef, {
+    type: asset?.type,
+    url,
+    caption: caption || asset?.name || asset?.path,
+  });
 }
 
 function el(documentRef, tag, className) {
