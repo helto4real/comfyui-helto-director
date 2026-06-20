@@ -117,6 +117,19 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
   assert.equal(pickerSource.includes("showLargePreview"), false);
   assert.equal(pickerSource.includes("if (!privacyMode || overlay.querySelector(\".pr-image-browser-panel\")?.matches(\":hover\"))"), true);
   assert.equal(pickerSource.includes("selectedItem = { ...item, folder_alias: folderSelect.value };"), true);
+  assert.equal(pickerSource.includes("promptInDocument"), false);
+  assert.equal(pickerSource.includes("function showFolderManager"), true);
+  assert.equal(pickerSource.includes("folder.alias === \"input\""), true);
+  assert.equal(pickerSource.includes("folder-alias"), false);
+  assert.equal(pickerSource.includes("ADD FOLDER PATH"), true);
+  assert.equal(pickerSource.includes("ACTIVE FOLDERS"), true);
+  assert.equal(pickerSource.includes("body: JSON.stringify({ path })"), true);
+  assert.equal(pickerSource.includes("folderDisplayName(folder)"), true);
+  assert.equal(pickerSource.includes("pr-folder-item-path"), true);
+  assert.equal(pickerSource.includes("folderCountLabel"), false);
+  assert.equal(pickerSource.includes("<strong title="), false);
+  assert.equal((pickerSource.match(/showFolderManager\(/g) ?? []).length, 3);
+  assert.equal((pickerSource.match(/folder-manage/g) ?? []).length >= 4, true);
 }
 
 testImagePickerSelectionCreatesSectionAndAsset();

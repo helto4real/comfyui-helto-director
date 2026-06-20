@@ -17,6 +17,8 @@ const COLUMN_MAX = 8;
 
 const PLAY_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>`;
 const PAUSE_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7z"/><path d="M13 5h4v14h-4z"/></svg>`;
+const FOLDER_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
+const MANAGE_FOLDERS_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 13h6"/><path d="M15 10v6"/></svg>`;
 
 
 export async function showMediaPicker(options) {
@@ -59,8 +61,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
             <div class="pr-image-sort-menu" role="menu"></div>
           </div>
           <button class="scope pr-image-icon-btn" type="button" title="Recursive folder view" aria-label="Recursive folder view"></button>
-          <button class="folder-add pr-image-icon-btn" type="button" title="Add configured ${mediaType} folder" aria-label="Add configured ${mediaType} folder">+</button>
-          <button class="folder-remove pr-image-icon-btn" type="button" title="Remove configured ${mediaType} folder" aria-label="Remove configured ${mediaType} folder">-</button>
+          <button class="folder-manage pr-image-icon-btn" type="button" title="Manage configured ${mediaType} folders" aria-label="Manage configured ${mediaType} folders">${MANAGE_FOLDERS_ICON}</button>
           <label class="pr-image-columns-control" title="Thumbnail columns per row">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
             <input class="columns" type="range" min="${COLUMN_MIN}" max="${COLUMN_MAX}" step="1" value="${COLUMN_DEFAULT}">
@@ -81,8 +82,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     const sortButtonLabel = sortButton.querySelector("span");
     const sortMenu = overlay.querySelector(".pr-image-sort-menu");
     const scopeButton = overlay.querySelector(".scope");
-    const folderAddButton = overlay.querySelector(".folder-add");
-    const folderRemoveButton = overlay.querySelector(".folder-remove");
+    const folderManageButton = overlay.querySelector(".folder-manage");
     const columnsInput = overlay.querySelector(".columns");
     const columnsValue = overlay.querySelector(".columns-value");
     const grid = overlay.querySelector(".pr-image-browser-grid");
@@ -192,7 +192,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     const loadFolders = async (preferredAlias = null) => {
       const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`);
       folderSelect.innerHTML = data.folders.map((folder) => (
-        `<option value="${escapeHtml(folder.alias)}">${escapeHtml(folder.alias)}${folder.exists ? "" : " (missing)"}</option>`
+        `<option value="${escapeHtml(folder.alias)}" title="${escapeHtml(folder.path || folder.alias)}">${escapeHtml(folderDisplayName(folder))}${folder.exists ? "" : " (missing)"}</option>`
       )).join("");
       const propertyName = `helto_director_last_${mediaType}_folder_alias`;
       const lastAlias = preferredAlias || node?.properties?.[propertyName];
@@ -221,36 +221,17 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
       syncScopeButton();
       await loadItems();
     });
-    folderAddButton.addEventListener("click", async () => {
+    folderManageButton.addEventListener("click", async () => {
       try {
-        const alias = promptInDocument(documentRef, "Folder alias");
-        if (!alias) return;
-        const path = promptInDocument(documentRef, "Folder path");
-        if (!path) return;
-        await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ alias, path }),
+        const preferredAlias = await showFolderManager({
+          documentRef,
+          mediaType,
+          currentAlias: folderSelect.value,
         });
-        await loadFolders(alias);
-        await loadItems();
-      } catch (error) {
-        alertInDocument(documentRef, error.message);
-      }
-    });
-    folderRemoveButton.addEventListener("click", async () => {
-      try {
-        const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`);
-        const removable = data.folders.filter((folder) => folder.alias !== "input");
-        if (!removable.length) {
-          alertInDocument(documentRef, "No custom folders to remove.");
-          return;
+        if (preferredAlias) {
+          await loadFolders(preferredAlias);
+          await loadItems();
         }
-        const alias = promptInDocument(documentRef, `Folder alias to remove:\n${removable.map((folder) => folder.alias).join("\n")}`);
-        if (!alias) return;
-        await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders?alias=${encodeURIComponent(alias)}`, { method: "DELETE" });
-        await loadFolders("input");
-        await loadItems();
       } catch (error) {
         alertInDocument(documentRef, error.message);
       }
@@ -310,12 +291,11 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
     overlay.innerHTML = `
       <div class="pr-image-browser-panel">
         <h3>Add Timeline Audio</h3>
-        <div class="pr-image-browser-controls" style="grid-template-columns: 1fr minmax(150px, 1fr) auto auto auto;">
+        <div class="pr-image-browser-controls" style="grid-template-columns: 1fr minmax(150px, 1fr) auto auto;">
           <select class="folder" title="Choose configured audio folder"></select>
           <input class="search" type="search" placeholder="Search audio..." title="Search loaded audio filenames and relative paths">
           <button class="scope pr-image-icon-btn" type="button" title="Recursive folder view" aria-label="Recursive folder view"></button>
-          <button class="folder-add pr-image-icon-btn" type="button" title="Add configured audio folder" aria-label="Add configured audio folder">+</button>
-          <button class="folder-remove pr-image-icon-btn" type="button" title="Remove configured audio folder" aria-label="Remove configured audio folder">-</button>
+          <button class="folder-manage pr-image-icon-btn" type="button" title="Manage configured audio folders" aria-label="Manage configured audio folders">${MANAGE_FOLDERS_ICON}</button>
         </div>
         <span class="pr-image-browser-meta"></span>
         <div class="pr-audio-browser-list"></div>
@@ -328,8 +308,7 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
     const folderSelect = overlay.querySelector(".folder");
     const searchInput = overlay.querySelector(".search");
     const scopeButton = overlay.querySelector(".scope");
-    const folderAddButton = overlay.querySelector(".folder-add");
-    const folderRemoveButton = overlay.querySelector(".folder-remove");
+    const folderManageButton = overlay.querySelector(".folder-manage");
     const list = overlay.querySelector(".pr-audio-browser-list");
     const meta = overlay.querySelector(".pr-image-browser-meta");
     const previewAudio = new Audio();
@@ -449,7 +428,7 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
     const loadFolders = async (preferredAlias = null) => {
       const data = await fetchJson(`${ROUTE_PREFIX}/audio/folders`);
       folderSelect.innerHTML = data.folders.map((folder) => (
-        `<option value="${escapeHtml(folder.alias)}">${escapeHtml(folder.alias)}${folder.exists ? "" : " (missing)"}</option>`
+        `<option value="${escapeHtml(folder.alias)}" title="${escapeHtml(folder.path || folder.alias)}">${escapeHtml(folderDisplayName(folder))}${folder.exists ? "" : " (missing)"}</option>`
       )).join("");
       const lastAlias = preferredAlias || node?.properties?.helto_director_last_audio_folder_alias;
       if (lastAlias && data.folders.some((folder) => folder.alias === lastAlias)) {
@@ -487,36 +466,17 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
       syncScopeButton();
       await loadAudios();
     });
-    folderAddButton.addEventListener("click", async () => {
+    folderManageButton.addEventListener("click", async () => {
       try {
-        const alias = promptInDocument(documentRef, "Folder alias");
-        if (!alias) return;
-        const path = promptInDocument(documentRef, "Folder path");
-        if (!path) return;
-        await fetchJson(`${ROUTE_PREFIX}/audio/folders`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ alias, path }),
+        const preferredAlias = await showFolderManager({
+          documentRef,
+          mediaType: "audio",
+          currentAlias: folderSelect.value,
         });
-        await loadFolders(alias);
-        await loadAudios();
-      } catch (error) {
-        alertInDocument(documentRef, error.message);
-      }
-    });
-    folderRemoveButton.addEventListener("click", async () => {
-      try {
-        const data = await fetchJson(`${ROUTE_PREFIX}/audio/folders`);
-        const removable = data.folders.filter((folder) => folder.alias !== "input");
-        if (!removable.length) {
-          alertInDocument(documentRef, "No custom folders to remove.");
-          return;
+        if (preferredAlias) {
+          await loadFolders(preferredAlias);
+          await loadAudios();
         }
-        const alias = promptInDocument(documentRef, `Folder alias to remove:\n${removable.map((folder) => folder.alias).join("\n")}`);
-        if (!alias) return;
-        await fetchJson(`${ROUTE_PREFIX}/audio/folders?alias=${encodeURIComponent(alias)}`, { method: "DELETE" });
-        await loadFolders("input");
-        await loadAudios();
       } catch (error) {
         alertInDocument(documentRef, error.message);
       }
@@ -553,6 +513,145 @@ async function fetchJson(url, options) {
   }
   if (!response.ok || data.error) throw new Error(data.error || response.statusText);
   return data;
+}
+
+function showFolderManager({ documentRef, mediaType, currentAlias = "input" }) {
+  return new Promise((resolve) => {
+    const overlay = documentRef.createElement("div");
+    overlay.className = "pr-folder-manager-dialog";
+    overlay.innerHTML = `
+      <div class="pr-folder-manager-panel">
+        <div class="pr-folder-manager-header">
+          <h3>Manage Folders</h3>
+          <button class="pr-folder-manager-close pr-image-icon-btn" type="button" title="Close folder manager" aria-label="Close folder manager">x</button>
+        </div>
+        <div class="pr-folder-manager-section">
+          <label class="pr-folder-manager-label">ADD FOLDER PATH</label>
+          <div class="pr-folder-add-grid">
+            <input class="folder-path" type="text" placeholder="/volumes/work/new_assets" title="Folder path">
+            <button class="folder-add-save pr-image-icon-btn" type="button" title="Add folder" aria-label="Add folder">+</button>
+          </div>
+        </div>
+        <div class="pr-folder-manager-section">
+          <div class="pr-folder-manager-list-header">
+            <label class="pr-folder-manager-label">ACTIVE FOLDERS</label>
+            <span class="pr-folder-manager-count-total">0 Total</span>
+          </div>
+          <div class="pr-folder-manager-list"></div>
+        </div>
+        <span class="pr-folder-manager-status"></span>
+        <div class="pr-image-browser-actions">
+          <button class="done" type="button">Done</button>
+        </div>
+      </div>`;
+
+    const panel = overlay.querySelector(".pr-folder-manager-panel");
+    const pathInput = overlay.querySelector(".folder-path");
+    const addButton = overlay.querySelector(".folder-add-save");
+    const list = overlay.querySelector(".pr-folder-manager-list");
+    const folderCount = overlay.querySelector(".pr-folder-manager-count-total");
+    const status = overlay.querySelector(".pr-folder-manager-status");
+
+    let changed = false;
+    let preferredAlias = currentAlias || "input";
+
+    const close = () => {
+      overlay.remove();
+      resolve(changed ? preferredAlias : null);
+    };
+
+    const setStatus = (message, isError = false) => {
+      status.textContent = message || "";
+      status.classList.toggle("is-error", isError);
+    };
+
+    const loadFolders = async () => {
+      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`);
+      renderFolders(data.folders ?? []);
+    };
+
+    const renderFolders = (folders) => {
+      list.innerHTML = "";
+      folderCount.textContent = `${folders.length} Total`;
+      if (!folders.length) {
+        list.innerHTML = `<div class="pr-folder-manager-empty">No folders configured.</div>`;
+        return;
+      }
+
+      for (const folder of folders) {
+        const isDefault = folder.alias === "input";
+        const folderPath = folder.path || folder.alias;
+        const item = documentRef.createElement("div");
+        item.className = `pr-folder-manager-item${folder.exists ? "" : " is-missing"}`;
+        item.innerHTML = `
+          <span class="pr-folder-item-icon">${FOLDER_ICON}</span>
+          <span class="pr-folder-item-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</span>
+          <button class="folder-remove-inline pr-image-icon-btn" type="button" ${isDefault ? "disabled" : ""} title="${isDefault ? "Default input folder cannot be removed" : `Remove ${escapeHtml(folderPath)}`}" aria-label="${isDefault ? "Default input folder cannot be removed" : `Remove ${escapeHtml(folderPath)}`}">x</button>`;
+
+        const removeButton = item.querySelector(".folder-remove-inline");
+        removeButton.addEventListener("click", async () => {
+          if (isDefault) return;
+          try {
+            setStatus(`Removing ${folder.alias}...`);
+            await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders?alias=${encodeURIComponent(folder.alias)}`, { method: "DELETE" });
+            changed = true;
+            if (preferredAlias === folder.alias) preferredAlias = "input";
+            setStatus(`Removed ${folder.alias}.`);
+            await loadFolders();
+          } catch (error) {
+            setStatus(error.message, true);
+          }
+        });
+        list.append(item);
+      }
+    };
+
+    const addFolder = async () => {
+      const path = pathInput.value.trim();
+      if (!path) {
+        setStatus("Folder path is required.", true);
+        return;
+      }
+      try {
+        addButton.disabled = true;
+        setStatus(`Adding ${folderNameFromPath(path)}...`);
+        const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        changed = true;
+        const addedFolder = (data.folders ?? []).find((folder) => normalizePathForCompare(folder.path) === normalizePathForCompare(path));
+        preferredAlias = addedFolder?.alias || preferredAlias;
+        pathInput.value = "";
+        setStatus(`Added ${folderNameFromPath(path)}.`);
+        renderFolders(data.folders ?? []);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        addButton.disabled = false;
+      }
+    };
+
+    addButton.addEventListener("click", addFolder);
+    pathInput.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addFolder();
+      }
+    });
+    overlay.querySelector(".done").addEventListener("click", close);
+    overlay.querySelector(".pr-folder-manager-close").addEventListener("click", close);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+    panel.addEventListener("click", (event) => event.stopPropagation());
+
+    documentRef.body.append(overlay);
+    pathInput.focus();
+    loadFolders().catch((error) => setStatus(error.message, true));
+  });
 }
 
 function compareBySortMode(a, b, sortMode) {
@@ -628,12 +727,21 @@ function formatDuration(seconds) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-function promptInDocument(documentRef, message) {
-  return documentRef.defaultView?.prompt?.(message) ?? globalThis.prompt?.(message);
-}
-
 function alertInDocument(documentRef, message) {
   (documentRef.defaultView?.alert ?? globalThis.alert)?.(message);
+}
+
+function folderDisplayName(folder) {
+  return folder.display_name || folderNameFromPath(folder.path) || folder.alias || "folder";
+}
+
+function folderNameFromPath(path) {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.split("/").filter(Boolean).pop() || normalized || "folder";
+}
+
+function normalizePathForCompare(path) {
+  return String(path || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 function escapeHtml(value) {
@@ -654,7 +762,7 @@ function installMediaPickerStyles(documentRef) {
     .pr-image-browser-dialog { position: fixed; inset: 0; z-index: 10001; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; color: #ddd; font: 12px Arial, sans-serif; }
     .pr-image-browser-panel { width: 720px; max-width: 92vw; max-height: 86vh; overflow: auto; background: #222; border: 1px solid #555; border-radius: 6px; box-shadow: 0 12px 44px rgba(0,0,0,0.55); padding: 14px; box-sizing: border-box; }
     .pr-image-browser-panel h3 { margin: 0 0 10px; font-size: 15px; color: #f1f1f1; }
-    .pr-image-browser-controls { display: grid; grid-template-columns: 1fr minmax(150px, 1fr) minmax(108px, 130px) auto auto auto minmax(130px, 180px); gap: 8px; align-items: center; margin-bottom: 8px; }
+    .pr-image-browser-controls { display: grid; grid-template-columns: 1fr minmax(150px, 1fr) minmax(108px, 130px) auto auto minmax(130px, 180px); gap: 8px; align-items: center; margin-bottom: 8px; }
     .pr-image-browser-controls select, .pr-image-browser-controls input { min-width: 0; background: #151515; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 6px; box-sizing: border-box; }
     .pr-image-browser-controls button, .pr-image-browser-actions button { background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
     .pr-image-browser-controls button:hover, .pr-image-browser-actions button:hover { background: #444; }
@@ -694,6 +802,33 @@ function installMediaPickerStyles(documentRef) {
     .pr-image-large-preview-panel img { max-width: 100%; max-height: calc(100vh - 132px); object-fit: contain; }
     .pr-image-large-preview-close { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #555; background: #1e1e1e; color: #eee; cursor: pointer; }
     .pr-image-large-preview-caption { color: #ddd; font-size: 12px; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pr-folder-manager-dialog { position: fixed; inset: 0; z-index: 10003; background: rgba(0,0,0,0.56); display: flex; align-items: center; justify-content: center; color: #ddd; font: 12px Arial, sans-serif; }
+    .pr-folder-manager-panel { width: 560px; max-width: 92vw; max-height: 82vh; overflow: auto; background: #222; border: 1px solid #555; border-radius: 6px; box-shadow: 0 12px 44px rgba(0,0,0,0.55); padding: 14px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; }
+    .pr-folder-manager-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .pr-folder-manager-header h3 { margin: 0; font-size: 15px; color: #f1f1f1; }
+    .pr-folder-manager-section { display: flex; flex-direction: column; gap: 6px; }
+    .pr-folder-manager-label { color: #aaa; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+    .pr-folder-manager-list-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .pr-folder-manager-count-total { color: #aaa; font-size: 11px; }
+    .pr-folder-add-grid { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 8px; align-items: center; }
+    .pr-folder-add-grid input { min-width: 0; background: #151515; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 6px; box-sizing: border-box; }
+    .pr-folder-add-grid button { background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px; cursor: pointer; }
+    .pr-folder-add-grid button:hover { background: #444; }
+    .pr-folder-add-grid button:disabled { opacity: 0.55; cursor: wait; }
+    .pr-folder-manager-status { min-height: 16px; color: #aaa; overflow-wrap: anywhere; }
+    .pr-folder-manager-status.is-error { color: #ff9a9a; }
+    .pr-folder-manager-list { display: flex; flex-direction: column; gap: 6px; }
+    .pr-folder-manager-empty { color: #aaa; border: 1px solid #333; border-radius: 5px; padding: 10px; background: #181818; }
+    .pr-folder-manager-item { display: grid; grid-template-columns: 18px minmax(0, 1fr) 32px; gap: 8px; align-items: center; border: 1px solid #3c3c3c; border-radius: 5px; background: #181818; padding: 7px 9px; }
+    .pr-folder-manager-item.is-missing { border-color: #6b5440; }
+    .pr-folder-item-icon { width: 18px; height: 18px; color: #777; display: inline-flex; align-items: center; justify-content: center; }
+    .pr-folder-item-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .pr-folder-item-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aaa; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+    .folder-remove-inline:disabled { opacity: 0.4; cursor: not-allowed; }
+    @media (max-width: 620px) {
+      .pr-folder-add-grid { grid-template-columns: 1fr; }
+      .pr-folder-manager-item { grid-template-columns: 18px minmax(0, 1fr) 32px; }
+    }
   `;
   documentRef.head.append(style);
 }

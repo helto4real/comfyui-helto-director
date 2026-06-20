@@ -24,6 +24,7 @@ export class TimelineStateController {
     this.timeline = loadTimelineState(node, { deferEncrypted: true });
     this.pendingDebounce = null;
     this.gestureStartState = null;
+    this.timelineKeyboardScope = null;
     this.destroyed = false;
     this.privacyError = "";
     this.decryptingPrivacy = false;
@@ -42,6 +43,7 @@ export class TimelineStateController {
   destroy() {
     this.flushDebouncedCommit();
     this.destroyed = true;
+    this.timelineKeyboardScope = null;
     this.window?.removeEventListener?.("keydown", this._onKeyDown, true);
     this.window?.removeEventListener?.("mouseup", this._onMouseUp, true);
     this.window?.removeEventListener?.("pointerup", this._onMouseUp, true);
@@ -196,8 +198,15 @@ export class TimelineStateController {
     return true;
   }
 
+  setTimelineKeyboardScope(element) {
+    this.timelineKeyboardScope = element ?? null;
+  }
+
   handleKeyDown(event) {
-    if (isTextInputEvent(event) || !isNodeActive(this.node, this.app)) {
+    if (isInteractiveKeyTarget(event)) {
+      return;
+    }
+    if (!isNodeActive(this.node, this.app) && !isTimelineItemShortcutScope(this.timelineKeyboardScope, event)) {
       return;
     }
     let didChange = false;
@@ -236,6 +245,7 @@ export function mountTimelineState(node, app, options = {}) {
   node.undoTimelineChange = () => controller.undoTimelineChange();
   node.redoTimelineChange = () => controller.redoTimelineChange();
   node.deleteSelectedTimelineItem = () => controller.deleteSelectedTimelineItem();
+  node.setTimelineKeyboardScope = (element) => controller.setTimelineKeyboardScope(element);
   return controller;
 }
 
@@ -328,10 +338,38 @@ function isRedoEvent(event) {
   return (event.ctrlKey || event.metaKey) && (key === "y" || (key === "z" && event.shiftKey));
 }
 
-function isTextInputEvent(event) {
-  const target = event.target;
+function isInteractiveKeyTarget(event) {
+  return eventTargets(event).some((target) => isInteractiveElement(target));
+}
+
+function isInteractiveElement(target) {
   const tagName = String(target?.tagName ?? "").toLowerCase();
-  return Boolean(target?.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select");
+  if (target?.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select" || tagName === "button") {
+    return true;
+  }
+  return Boolean(target?.closest?.(
+    "input, textarea, select, button, [contenteditable='true'], [role='button'], [role='menuitem'], .htd-menu, .htd-context-menu, .htd-settings-overlay, .htd-reference-overlay, .pr-image-browser-dialog, .pr-image-large-preview",
+  ));
+}
+
+function isTimelineItemShortcutScope(scope, event) {
+  if (!scope) return false;
+  return eventTargets(event).some((target) => isTimelineItemTarget(scope, target));
+}
+
+function isTimelineItemTarget(scope, target) {
+  if (!target) return false;
+  const item = target.matches?.(".htd-item") ? target : target.closest?.(".htd-item");
+  return Boolean(item && (scope === item || scope.contains?.(item)));
+}
+
+function eventTargets(event) {
+  const targets = [];
+  if (event?.target) targets.push(event.target);
+  const documentRef = event?.target?.ownerDocument ?? event?.currentTarget?.document ?? globalThis.document;
+  const activeElement = documentRef?.activeElement;
+  if (activeElement && !targets.includes(activeElement)) targets.push(activeElement);
+  return targets;
 }
 
 function isNodeActive(node, app) {

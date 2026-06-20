@@ -142,11 +142,13 @@ export class TimelineRenderer {
     installStyles(container.ownerDocument ?? globalThis.document);
     this.container.addEventListener?.("pointerenter", this.onPrivacyPointerEnter);
     this.container.addEventListener?.("pointerleave", this.onPrivacyPointerLeave);
+    this.controller.setTimelineKeyboardScope?.(this.container);
     this.render(controller.timeline);
     this.startResizeObserver();
   }
 
   destroy() {
+    this.controller.setTimelineKeyboardScope?.(null);
     this.closeContextMenu({ rerender: false });
     this.cancelViewportRemeasure();
     this.stopResizeObserver();
@@ -376,6 +378,8 @@ export class TimelineRenderer {
 
   renderSection(timeline, section) {
     const item = el("div", `htd-item htd-section htd-${section.type.toLowerCase()}`);
+    item.tabIndex = -1;
+    item.dataset.itemId = section.item_id;
     if (timeline.ui_state.selected_item_id === section.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
     const itemWidth = Math.max(12, durationToPixels(section.end_time - section.start_time, timeline, this.viewportWidth));
@@ -390,6 +394,7 @@ export class TimelineRenderer {
     labelElement.textContent = labelText;
     item.append(labelElement);
     item.title = labelText;
+    item.setAttribute("aria-label", labelText || `${section.type} section`);
     item.addEventListener("pointerdown", (event) => this.startSectionDrag(event, section, "move"));
     item.addEventListener("contextmenu", (event) => this.showItemContextMenu(event, section.item_id, section.type));
     if (section.type === ASSET_TYPE_IMAGE || section.type === ASSET_TYPE_VIDEO) {
@@ -426,6 +431,8 @@ export class TimelineRenderer {
 
   renderAudioClip(timeline, clip) {
     const item = el("div", "htd-item htd-audio-clip");
+    item.tabIndex = -1;
+    item.dataset.itemId = clip.item_id;
     if (timeline.ui_state.selected_item_id === clip.item_id) item.classList.add("is-selected");
     item.style.left = `${secondsToPixels(clip.start_time, timeline, this.viewportWidth)}px`;
     item.style.top = `${Number(clip.lane ?? 0) * AUDIO_LANE_HEIGHT + 4}px`;
@@ -437,6 +444,7 @@ export class TimelineRenderer {
     if (shouldShowWaveform(timeline, this.privacyRevealActive)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));
     item.append(clipLabel);
     item.title = "Audio";
+    item.setAttribute("aria-label", clip.name || mediaLabel(timeline, clip.audio, "Audio"));
     item.addEventListener("pointerdown", (event) => this.startAudioDrag(event, clip, "audio-move"));
     item.addEventListener("contextmenu", (event) => this.showItemContextMenu(event, clip.item_id, "Audio Clip"));
 
@@ -1150,6 +1158,7 @@ export class TimelineRenderer {
     const target = event.currentTarget.closest(".htd-item");
     target?.setPointerCapture?.(event.pointerId);
     this.commitMutation((timeline) => selectItem(timeline, dragState.itemId), "select", { pushUndo: false, rerender: false });
+    this.focusTimelineItem(dragState.itemId, target);
     this.controller.beginTimelineGesture();
     const moveTarget = target?.ownerDocument ?? this.container.ownerDocument ?? globalThis.document;
     this.drag = {
@@ -1217,6 +1226,12 @@ export class TimelineRenderer {
     this.controller.updateTimeline(mutator, reason, options);
   }
 
+  focusTimelineItem(itemId, fallbackTarget = null) {
+    const target = fallbackTarget ?? Array.from(this.container.querySelectorAll?.(".htd-item") ?? [])
+      .find((item) => item.dataset?.itemId === itemId);
+    target?.focus?.({ preventScroll: true });
+  }
+
   showItemContextMenu(event, itemId, itemType) {
     event.preventDefault();
     event.stopPropagation();
@@ -1224,6 +1239,7 @@ export class TimelineRenderer {
     this.openMenu = null;
     this.setPrivacyRevealActive(true);
     this.commitMutation((timeline) => selectItem(timeline, itemId), "select", { pushUndo: false });
+    this.focusTimelineItem(itemId);
 
     const documentRef = this.container.ownerDocument ?? globalThis.document;
     const menu = this.renderItemContextMenu(itemId, itemType, event.clientX, event.clientY, documentRef);

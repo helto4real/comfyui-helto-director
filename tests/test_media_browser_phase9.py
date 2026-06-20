@@ -61,6 +61,16 @@ def test_media_browser_folder_config_defaults_adds_removes_and_rejects_invalid(t
         media_browser.remove_folder("image", "custom")
         assert [folder.alias for folder in media_browser.load_folders("image")] == ["input"]
 
+        media_browser.add_folder("image", "", str(custom))
+        folders = media_browser.load_folders("image")
+        assert folders[-1].alias == "custom"
+        payload = media_browser.folder_payload("image")
+        assert payload[-1]["display_name"] == "custom"
+        assert payload[-1]["path"] == str(custom)
+        with pytest.raises(ValueError):
+            media_browser.add_folder("image", "", str(custom))
+        media_browser.remove_folder("image", "custom")
+
         with pytest.raises(ValueError):
             media_browser.add_folder("image", "../bad", str(custom))
     finally:

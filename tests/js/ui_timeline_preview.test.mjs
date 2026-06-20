@@ -133,8 +133,16 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes(".htd-range-control { width: 100%;"), true);
   assert.equal(rendererSource.includes(".htd-viewport { width: 100%; overflow: hidden; box-sizing: border-box;"), true);
   assert.equal(rendererSource.includes(".htd-inspector { width: 100%;"), true);
+  assert.equal(rendererSource.includes("this.controller.setTimelineKeyboardScope?.(this.container)"), true);
+  assert.equal(rendererSource.includes("this.controller.setTimelineKeyboardScope?.(null)"), true);
+  assert.equal(rendererSource.includes("item.tabIndex = -1"), true);
+  assert.equal(rendererSource.includes("item.dataset.itemId = section.item_id"), true);
+  assert.equal(rendererSource.includes("item.dataset.itemId = clip.item_id"), true);
   assert.equal(rendererSource.includes("startItemDrag(event"), true);
   assert.equal(rendererSource.includes("selectItem(timeline, dragState.itemId)"), true);
+  assert.equal(rendererSource.includes("this.focusTimelineItem(dragState.itemId, target)"), true);
+  assert.equal(rendererSource.includes("focusTimelineItem(itemId"), true);
+  assert.equal(rendererSource.includes("target?.focus?.({ preventScroll: true })"), true);
   assert.equal(rendererSource.includes("rerender: false"), true);
   assert.equal(rendererSource.includes("getPixelsPerSecond(timeline, this.viewportWidth)"), true);
   assert.equal(rendererSource.includes("moveTarget?.addEventListener(\"pointermove\", this.onPointerMove)"), true);

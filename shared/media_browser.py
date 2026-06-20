@@ -89,6 +89,27 @@ def safe_alias(alias: str) -> str:
     return value
 
 
+def folder_display_name(path: str) -> str:
+    normalized = os.path.normpath(os.path.expanduser(str(path or "")))
+    name = Path(normalized).name
+    return name or normalized or "folder"
+
+
+def folder_alias_from_path(path: str, existing_aliases: set[str]) -> str:
+    base = re.sub(r"[^A-Za-z0-9_. -]+", "_", folder_display_name(path)).strip(" ._-") or "folder"
+    base = base[:72].strip(" ._-") or "folder"
+    alias = safe_alias(base)
+    if alias not in existing_aliases:
+        return alias
+
+    for index in range(2, 1000):
+        suffix = f" {index}"
+        candidate = safe_alias(f"{base[:80 - len(suffix)].strip(' ._-')}{suffix}")
+        if candidate not in existing_aliases:
+            return candidate
+    raise ValueError(f"Folder alias already exists: {alias}")
+
+
 def load_folders(media_type: str) -> list[MediaFolder]:
     file_path = config_file(media_type)
     default = default_folder()
@@ -142,14 +163,20 @@ def folder_by_alias(media_type: str, alias: str) -> MediaFolder:
 
 
 def add_folder(media_type: str, alias: str, path: str) -> list[MediaFolder]:
-    alias = safe_alias(alias)
     folder_path = os.path.normpath(os.path.expanduser(str(path or "")))
     if not os.path.isdir(folder_path):
         raise ValueError(f"Folder does not exist: {folder_path}")
 
     folders = load_folders(media_type)
-    if any(folder.alias == alias for folder in folders):
-        raise ValueError(f"Folder alias already exists: {alias}")
+    existing_aliases = {folder.alias for folder in folders}
+    if any(os.path.normcase(os.path.abspath(folder.path)) == os.path.normcase(os.path.abspath(folder_path)) for folder in folders):
+        raise ValueError(f"Folder already exists: {folder_path}")
+    if alias:
+        alias = safe_alias(alias)
+        if alias in existing_aliases:
+            raise ValueError(f"Folder alias already exists: {alias}")
+    else:
+        alias = folder_alias_from_path(folder_path, existing_aliases)
     folders.append(MediaFolder(alias=alias, path=folder_path, enabled=True))
     save_folders(media_type, folders)
     return folders
@@ -211,6 +238,8 @@ def folder_payload(media_type: str) -> list[dict[str, Any]]:
         folders.append(
             {
                 "alias": folder.alias,
+                "path": os.path.normpath(folder.path),
+                "display_name": folder_display_name(folder.path),
                 "enabled": folder.enabled,
                 "exists": exists,
                 count_key: len(list_media(media_type, folder.path, recursive=True)) if exists else 0,

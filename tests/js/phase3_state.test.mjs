@@ -11,11 +11,11 @@ function createWidget(name, value) {
   return { name, value, type: "string" };
 }
 
-function createNode() {
+function createNode(options = {}) {
   const dirtyCalls = [];
   return {
     id: 7,
-    selected: true,
+    selected: options.selected ?? true,
     graph: {
       setDirtyCanvas(first, second) {
         dirtyCalls.push([first, second]);
@@ -106,6 +106,48 @@ function createKeyEvent(key, target = null) {
     },
   };
   return event;
+}
+
+function createMockTarget({ tagName = "div", className = "", item = null, ownerDocument = null } = {}) {
+  const target = {
+    tagName,
+    className,
+    ownerDocument,
+    matches(selector) {
+      return selector === ".htd-item" && String(this.className).split(/\s+/).includes("htd-item");
+    },
+    closest(selector) {
+      if (this.matches(selector)) return this;
+      if (selector === ".htd-item") return item;
+      return null;
+    },
+  };
+  return target;
+}
+
+function createTimelineKeyboardScope() {
+  const documentRef = { activeElement: null };
+  const item = createMockTarget({ className: "htd-item", ownerDocument: documentRef });
+  const scope = {
+    contains(candidate) {
+      return candidate === item;
+    },
+  };
+  documentRef.activeElement = item;
+  return { scope, item, documentRef };
+}
+
+function addSelectedTextSection(controller, prompt = "selected") {
+  controller.updateTimeline((timeline) => {
+    timeline.director_track.sections.push({
+      item_id: "section_001",
+      type: "Text",
+      start_time: 0,
+      end_time: 1,
+      prompt,
+    });
+    timeline.ui_state.selected_item_id = "section_001";
+  }, "add");
 }
 
 async function testCommitUpdatesHiddenWidgetAndMarksGraphDirty() {
@@ -253,16 +295,7 @@ async function testDeleteKeyRemovesSelectedItem() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
 
-  controller.updateTimeline((timeline) => {
-    timeline.director_track.sections.push({
-      item_id: "section_001",
-      type: "Text",
-      start_time: 0,
-      end_time: 1,
-      prompt: "delete me",
-    });
-    timeline.ui_state.selected_item_id = "section_001";
-  }, "add");
+  addSelectedTextSection(controller, "delete me");
 
   const event = createKeyEvent("Delete");
   controller.handleKeyDown(event);
@@ -273,20 +306,63 @@ async function testDeleteKeyRemovesSelectedItem() {
   assert.equal(event.propagationStopped, true);
 }
 
+async function testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused() {
+  const node = createNode({ selected: false });
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const { scope, item } = createTimelineKeyboardScope();
+  controller.setTimelineKeyboardScope(scope);
+
+  addSelectedTextSection(controller, "delete focused item");
+
+  const event = createKeyEvent("Delete", item);
+  controller.handleKeyDown(event);
+
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 0);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+}
+
+async function testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem() {
+  const node = createNode({ selected: false });
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const { scope, documentRef } = createTimelineKeyboardScope();
+  const outside = createMockTarget({ ownerDocument: documentRef });
+  documentRef.activeElement = outside;
+  controller.setTimelineKeyboardScope(scope);
+
+  addSelectedTextSection(controller, "keep outside focus");
+
+  const event = createKeyEvent("Delete", outside);
+  controller.handleKeyDown(event);
+
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 1);
+  assert.equal(event.defaultPrevented, false);
+}
+
+async function testDeleteKeyIsIgnoredOnInteractiveTimelineControls() {
+  for (const tagName of ["input", "textarea", "select", "button"]) {
+    const node = createNode({ selected: false });
+    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+    const { scope, item, documentRef } = createTimelineKeyboardScope();
+    const control = createMockTarget({ tagName, item, ownerDocument: documentRef });
+    documentRef.activeElement = control;
+    controller.setTimelineKeyboardScope(scope);
+
+    addSelectedTextSection(controller, `keep ${tagName}`);
+
+    const event = createKeyEvent("Delete", control);
+    controller.handleKeyDown(event);
+
+    assert.equal(getHiddenTimeline(node).director_track.sections.length, 1);
+    assert.equal(event.defaultPrevented, false);
+  }
+}
+
 async function testDeleteKeyIsIgnoredWhileTyping() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
 
-  controller.updateTimeline((timeline) => {
-    timeline.director_track.sections.push({
-      item_id: "section_001",
-      type: "Text",
-      start_time: 0,
-      end_time: 1,
-      prompt: "keep me",
-    });
-    timeline.ui_state.selected_item_id = "section_001";
-  }, "add");
+  addSelectedTextSection(controller, "keep me");
 
   const event = createKeyEvent("Delete", { tagName: "textarea" });
   controller.handleKeyDown(event);
@@ -300,16 +376,7 @@ async function testUndoRestoresDeleteKeyRemoval() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
 
-  controller.updateTimeline((timeline) => {
-    timeline.director_track.sections.push({
-      item_id: "section_001",
-      type: "Text",
-      start_time: 0,
-      end_time: 1,
-      prompt: "restore me",
-    });
-    timeline.ui_state.selected_item_id = "section_001";
-  }, "add");
+  addSelectedTextSection(controller, "restore me");
 
   controller.handleKeyDown(createKeyEvent("Delete"));
 
@@ -409,6 +476,9 @@ await testFlushBeforeSerializationWritesPendingPromptWithoutRerender();
 await testExtensionFlushesBeforeNodeSerialize();
 await testGestureMouseupCommitBoundary();
 await testDeleteKeyRemovesSelectedItem();
+await testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused();
+await testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem();
+await testDeleteKeyIsIgnoredOnInteractiveTimelineControls();
 await testDeleteKeyIsIgnoredWhileTyping();
 await testUndoRestoresDeleteKeyRemoval();
 await testPrivacyModeWritesEncryptedHiddenWidget();
