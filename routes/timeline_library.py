@@ -15,6 +15,7 @@ try:
         duplicate_item,
         list_items,
         patch_item,
+        preview_timeline_item,
         replace_item,
         use_item,
     )
@@ -28,6 +29,7 @@ except Exception:
         duplicate_item,
         list_items,
         patch_item,
+        preview_timeline_item,
         replace_item,
         use_item,
     )
@@ -115,6 +117,14 @@ def register_timeline_library_routes() -> bool:
     @routes.post(f"{ROUTE_PREFIX}/timelines" + "/{item_id}/use")
     async def use_timeline(request):
         return await _use_typed_item(request, TIMELINE_KIND)
+
+    @routes.post(f"{ROUTE_PREFIX}/timelines" + "/{item_id}/preview")
+    async def preview_timeline(request):
+        try:
+            preview = preview_timeline_item(request.match_info["item_id"])
+            return web.json_response({"ok": True, **preview})
+        except Exception as exc:
+            return _error_response(exc)
 
     @routes.post(f"{ROUTE_PREFIX}/characters" + "/{item_id}/use")
     async def use_character(request):

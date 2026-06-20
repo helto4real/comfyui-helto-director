@@ -18,10 +18,12 @@ import {
 import {
   ROUTE_PREFIX,
   TIMELINE_REPLACE_CONFIRMATION,
+  applyTimelinePreviewPayload,
   clearDirectorLibraryDisplay,
   libraryDialogClassName,
   normalizeLibraryCharacterItem,
   normalizeLibraryTimelineItem,
+  shouldRequestPrivateTimelinePreview,
 } from "../../web/timeline/library.js";
 
 function createWidget(name, value) {
@@ -185,6 +187,63 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   assert.equal(item.title, "Scene One");
   assert.equal(item.tags[0], "drama");
   assert.equal(item.previewAsset.path, "/tmp/scene.png");
+  const shellItem = normalizeLibraryTimelineItem({
+    id: "timeline_shell",
+    name: "Shell Timeline",
+    preview_assets: [
+      {
+        asset_id: "shell_image",
+        type: "Image",
+        source_kind: "FilePath",
+        path: "/tmp/shell.png",
+        name: "shell.png",
+        thumbnail: "must not normalize",
+      },
+      {
+        asset_id: "shell_audio",
+        type: "Audio",
+        source_kind: "FilePath",
+        path: "/tmp/shell.wav",
+        name: "shell.wav",
+      },
+    ],
+  });
+  assert.equal(shellItem.timeline, null);
+  assert.equal(shellItem.previewAsset.path, "/tmp/shell.png");
+  assert.equal(shellItem.previewAssets.length, 1);
+  assert.equal("thumbnail" in shellItem.previewAsset, false);
+  const privateShellItem = normalizeLibraryTimelineItem({
+    id: "private_shell",
+    name: "Private Shell",
+    is_private: true,
+    preview_assets: [{ type: "Image", path: "/private/secret.png" }],
+  });
+  assert.equal(privateShellItem.previewAsset, null);
+  assert.equal(privateShellItem.previewAssets.length, 0);
+  assert.equal(shouldRequestPrivateTimelinePreview(privateShellItem, true), true);
+  assert.equal(shouldRequestPrivateTimelinePreview(privateShellItem, false), false);
+  const hydratedPrivateShellItem = applyTimelinePreviewPayload(privateShellItem, {
+    item: {
+      id: "private_shell",
+      is_private: true,
+      preview_assets: [{ type: "Image", path: "/private/revealed.png" }],
+    },
+    preview_assets: [
+      {
+        asset_id: "private_image",
+        type: "Image",
+        source_kind: "FilePath",
+        path: "/private/revealed.png",
+        name: "revealed.png",
+        thumbnail: "must not normalize",
+      },
+    ],
+  });
+  assert.equal(hydratedPrivateShellItem.previewAsset.path, "/private/revealed.png");
+  assert.equal(hydratedPrivateShellItem.previewAssets.length, 1);
+  assert.equal(hydratedPrivateShellItem.previewHydrated, true);
+  assert.equal("thumbnail" in hydratedPrivateShellItem.previewAsset, false);
+  assert.equal(shouldRequestPrivateTimelinePreview(hydratedPrivateShellItem, true), false);
   assert.equal(character.title, "Hero");
   assert.equal(character.image.path, "/library/hero.png");
   assert.equal(libraryDialogClassName(true), "htd-library-dialog privacy-mode");
@@ -222,6 +281,8 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(rendererSource.includes('iconButton("library", "Director Library", () => this.openDirectorLibrary())'), true);
   assert.equal(rendererSource.includes("controller: this.controller,"), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/items`)'), true);
+  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
+  assert.equal(librarySource.includes("card.addEventListener(\"pointerenter\", revealPreview);"), true);
   assert.equal(librarySource.includes('options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace timeline from library")'), true);
   assert.equal(librarySource.includes("addCharacterLibraryItemToTimeline(timeline, item"), true);
   assert.equal(librarySource.includes("replaceTimelineCharacterReferenceFromLibraryItem(timeline, referenceId, item)"), true);

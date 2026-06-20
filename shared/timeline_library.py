@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .contracts.video_timeline import ASSET_TYPE_IMAGE, ASSET_TYPE_VIDEO
 from .privacy import decrypt_state, encrypt_state
 from .timeline.normalize import normalize_video_timeline
 from .timeline.references import normalize_character_references
@@ -23,9 +24,26 @@ CHARACTER_KIND = "character"
 TIMELINE_LIBRARY_ITEM_TYPE = "TIMELINE_LIBRARY_ITEM"
 CHARACTER_LIBRARY_ITEM_TYPE = "CHARACTER_LIBRARY_ITEM"
 ENTRY_KINDS = (TIMELINE_KIND, CHARACTER_KIND)
+PREVIEW_ASSET_LIMIT = 3
 
 _SENSITIVE_STRING_PREFIXES = ("data:", "blob:")
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+_PREVIEW_ASSET_KEYS = {
+    "asset_id",
+    "duration_seconds",
+    "file_path",
+    "frame_rate",
+    "height",
+    "id",
+    "media_type",
+    "mime_type",
+    "name",
+    "path",
+    "size_bytes",
+    "source_kind",
+    "type",
+    "width",
+}
 _BLOCKED_KEYS = {
     "base64",
     "blob",
@@ -244,6 +262,21 @@ def use_item(
     return _with_payload(entry, base_dir=base_dir)
 
 
+def preview_timeline_item(
+    item_id: str,
+    *,
+    base_dir: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    library = load_library(base_dir)
+    entry = _find_entry(library, TIMELINE_KIND, item_id)
+    payload = _unpack_payload(entry, base_dir=base_dir)
+    item = _public_item(entry)
+    preview_assets = preview_assets_for_timeline(payload)
+    if preview_assets:
+        item["preview_assets"] = copy.deepcopy(preview_assets)
+    return {"item": item, "preview_assets": preview_assets}
+
+
 def _pack_entry(
     kind: str,
     *,
@@ -294,7 +327,7 @@ def _with_payload(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] 
 
 
 def _public_item(entry: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    item = {
         "id": str(entry.get("id") or ""),
         "kind": _normalize_kind(entry.get("kind")),
         "type": str(entry.get("type") or _type_for_kind(entry.get("kind"))),
@@ -308,6 +341,11 @@ def _public_item(entry: Mapping[str, Any]) -> dict[str, Any]:
         "updated_at": str(entry.get("updated_at") or ""),
         "last_used_at": entry.get("last_used_at") if entry.get("last_used_at") else None,
     }
+    if item["kind"] == TIMELINE_KIND and not item["is_private"]:
+        preview_assets = preview_assets_for_timeline(entry.get("payload"))
+        if preview_assets:
+            item["preview_assets"] = preview_assets
+    return item
 
 
 def _unpack_payload(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
@@ -365,6 +403,64 @@ def _sanitize_embedded_media(value: Any, *, key: str = "") -> Any:
         if _is_suspicious_base64_field(key, text):
             return _REMOVED
     return value
+
+
+def preview_assets_for_timeline(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return []
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return []
+    preview_assets: list[dict[str, Any]] = []
+    for asset in assets:
+        preview_asset = _preview_asset_shell(asset)
+        if not preview_asset:
+            continue
+        preview_assets.append(preview_asset)
+        if len(preview_assets) >= PREVIEW_ASSET_LIMIT:
+            break
+    return preview_assets
+
+
+def _preview_asset_shell(asset: Any) -> dict[str, Any] | None:
+    if not isinstance(asset, Mapping):
+        return None
+    asset_type = str(asset.get("type") or "")
+    if asset_type not in {ASSET_TYPE_IMAGE, ASSET_TYPE_VIDEO}:
+        return None
+    path = _safe_preview_text(asset.get("path") or asset.get("file_path"), "path")
+    if not path:
+        return None
+    shell: dict[str, Any] = {}
+    for key, value in asset.items():
+        normalized_key = _normalize_key(key)
+        if normalized_key not in _PREVIEW_ASSET_KEYS or _is_blocked_key(normalized_key):
+            continue
+        if isinstance(value, str):
+            text = _safe_preview_text(value, normalized_key)
+            if text:
+                shell[str(key)] = text
+            continue
+        if value is None or isinstance(value, (bool, int, float)):
+            shell[str(key)] = value
+    shell["type"] = asset_type
+    shell["path"] = path
+    if not shell.get("name"):
+        shell["name"] = _basename(path)
+    return shell
+
+
+def _safe_preview_text(value: Any, key: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith(_SENSITIVE_STRING_PREFIXES):
+        return ""
+    if len(text) >= 256 and _BASE64_RE.fullmatch(text):
+        return ""
+    if _is_suspicious_base64_field(key, text):
+        return ""
+    return text
 
 
 class _Removed:
@@ -510,6 +606,10 @@ def _default_name(kind: str, payload: Mapping[str, Any]) -> str:
     if kind == TIMELINE_KIND:
         return "Untitled Timeline"
     return str(payload.get("label") or "Untitled Character")
+
+
+def _basename(path: Any) -> str:
+    return str(path or "").replace("\\", "/").rstrip("/").split("/")[-1]
 
 
 def _new_id(kind: str) -> str:

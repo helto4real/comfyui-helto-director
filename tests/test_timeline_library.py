@@ -14,6 +14,7 @@ from shared.timeline_library import (
     list_items,
     load_library,
     patch_item,
+    preview_timeline_item,
     replace_item,
     use_item,
 )
@@ -119,6 +120,57 @@ def test_timeline_summary_and_validation_are_recomputed(tmp_path):
     assert created["timeline"]["validation"]["warnings"] == []
 
 
+def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_items(tmp_path):
+    timeline = sample_timeline(prompt="preview shell")
+    timeline["assets"][0].update(
+        {
+            "thumbnail": "embedded thumb",
+            "waveform": [0.1, 0.2],
+            "preview_data": "secret",
+            "cache_key": "not shell metadata",
+            "width": 640,
+            "height": 360,
+        }
+    )
+    timeline["assets"].append(
+        {
+            "asset_id": "asset-video",
+            "type": "Video",
+            "source_kind": "FilePath",
+            "path": "/media/clip.mp4",
+            "name": "clip.mp4",
+        }
+    )
+
+    create_item("timeline", timeline, metadata={"id": "preview-shell"}, base_dir=tmp_path)
+
+    item = list_items(tmp_path)["timelines"][0]
+    assert item["preview_assets"] == [
+        {
+            "asset_id": "asset-image",
+            "height": 360,
+            "name": "ref.png",
+            "path": "/media/ref.png",
+            "source_kind": "FilePath",
+            "type": "Image",
+            "width": 640,
+        },
+        {
+            "asset_id": "asset-video",
+            "name": "clip.mp4",
+            "path": "/media/clip.mp4",
+            "source_kind": "FilePath",
+            "type": "Video",
+        },
+    ]
+    assert "payload" not in item
+    assert "timeline" not in item
+    assert "thumbnail" not in json.dumps(item)
+    assert "waveform" not in json.dumps(item)
+    assert "preview_data" not in json.dumps(item)
+    assert "cache_key" not in json.dumps(item)
+
+
 def test_embedded_media_and_cache_payloads_are_sanitized_before_persistence(tmp_path):
     timeline = sample_timeline(prompt="sanitize")
     timeline["assets"][0].update(
@@ -173,11 +225,62 @@ def test_private_timeline_encrypts_sensitive_payload_without_cleartext_leak(tmp_
     assert "secret description" not in stored_text
     assert "encrypted_payload" in stored_text
     assert "payload" not in load_library(tmp_path)["timelines"][0]
+    public_item = list_items(tmp_path)["timelines"][0]
+    assert "preview_assets" not in public_item
+    assert "/private/secret-reference.png" not in json.dumps(public_item)
     assert created["timeline"]["director_track"]["sections"][0]["prompt"] == "secret prompt"
     assert created["description"] == "secret description"
 
     used = use_item("timeline", "private-timeline", base_dir=tmp_path)
     assert used["timeline"]["assets"][0]["path"] == "/private/secret-reference.png"
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
+def test_private_timeline_preview_decrypts_without_mutating_or_leaking_items_shell(tmp_path):
+    timeline = sample_timeline(prompt="secret preview", path="/private/reveal-reference.png")
+    timeline["assets"][0].update(
+        {
+            "thumbnail": "embedded thumb",
+            "waveform": [0.1, 0.2],
+            "preview_data": "secret",
+            "width": 1024,
+            "height": 576,
+        }
+    )
+    create_item(
+        "timeline",
+        timeline,
+        metadata={"id": "private-preview", "name": "Private Preview", "private": True},
+        base_dir=tmp_path,
+    )
+
+    before = load_library(tmp_path)["timelines"][0]
+    public_item = list_items(tmp_path)["timelines"][0]
+    preview = preview_timeline_item("private-preview", base_dir=tmp_path)
+    after = load_library(tmp_path)["timelines"][0]
+
+    assert "preview_assets" not in public_item
+    assert "/private/reveal-reference.png" not in json.dumps(public_item)
+    assert "last_used_at" not in before
+    assert "last_used_at" not in after
+    assert before == after
+    assert preview["item"]["is_private"] is True
+    assert preview["item"]["preview_assets"] == preview["preview_assets"]
+    assert preview["preview_assets"] == [
+        {
+            "asset_id": "asset-image",
+            "height": 576,
+            "name": "ref.png",
+            "path": "/private/reveal-reference.png",
+            "source_kind": "FilePath",
+            "type": "Image",
+            "width": 1024,
+        }
+    ]
+    assert "thumbnail" not in json.dumps(preview)
+    assert "waveform" not in json.dumps(preview)
+    assert "preview_data" not in json.dumps(preview)
+    assert "/private/reveal-reference.png" not in json.dumps(list_items(tmp_path))
 
 
 def test_route_prefix_and_registration_shape():
@@ -189,6 +292,9 @@ def test_route_prefix_and_registration_shape():
     assert "routes.timeline_library" in source
     assert "register_timeline_library_routes()" in source
     assert '"register_timeline_library_routes"' in source
+    route_source = Path(timeline_library_routes.__file__).read_text(encoding="utf-8")
+    assert '/timelines" + "/{item_id}/preview"' in route_source
+    assert "preview_timeline_item(request.match_info" in route_source
 
 
 def sample_timeline(prompt="hello", path="/media/ref.png"):

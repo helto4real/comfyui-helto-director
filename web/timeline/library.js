@@ -111,6 +111,7 @@ export async function showDirectorLibrary(options = {}) {
     characters: [],
     selectedId: "",
   };
+  const previewRequests = new Map();
 
   const setStatus = (message) => {
     status.textContent = message || "";
@@ -138,7 +139,33 @@ export async function showDirectorLibrary(options = {}) {
     return items.find((item) => item.id === state.selectedId) ?? items[0] ?? null;
   };
 
+  const mergeTimelinePreview = (itemId, payload) => {
+    const index = state.timelines.findIndex((item) => item.id === itemId);
+    if (index < 0) return;
+    state.timelines[index] = applyTimelinePreviewPayload(state.timelines[index], payload);
+  };
+
+  const requestPrivateTimelinePreview = (item) => {
+    if (!shouldRequestPrivateTimelinePreview(item, privacyMode) || previewRequests.has(item.id)) return null;
+    const request = fetchTimelinePreview(item)
+      .then((payload) => {
+        mergeTimelinePreview(item.id, payload);
+        render();
+      })
+      .catch((error) => {
+        mergeTimelinePreview(item.id, { preview_assets: [], error });
+        console.warn("Helto Director private timeline preview failed", error);
+      })
+      .finally(() => {
+        previewRequests.delete(item.id);
+      });
+    previewRequests.set(item.id, request);
+    return request;
+  };
+
   const render = () => {
+    const currentSelected = selectedItem();
+    requestPrivateTimelinePreview(currentSelected);
     saveButton.textContent = state.tab === TAB_CHARACTERS ? "Save Character" : "Save Current";
     saveButton.prepend(iconSvg(documentRef, "plus"));
     saveButton.title = state.tab === TAB_CHARACTERS ? "Save Current Character References" : "Save Current Timeline";
@@ -170,14 +197,16 @@ export async function showDirectorLibrary(options = {}) {
     });
     renderGrid(documentRef, grid, {
       items: visibleItems(),
-      selected: selectedItem(),
+      selected: currentSelected,
       tab: state.tab,
       timeline,
       privacyMode,
       select: (item) => {
         state.selectedId = item.id;
+        requestPrivateTimelinePreview(item);
         render();
       },
+      reveal: requestPrivateTimelinePreview,
       context: {
         timeline,
         documentRef,
@@ -187,7 +216,7 @@ export async function showDirectorLibrary(options = {}) {
         refresh: refreshLibrary,
       },
     });
-    renderDetails(documentRef, details, selectedItem(), state.tab, timeline, privacyMode, {
+    renderDetails(documentRef, details, currentSelected, state.tab, timeline, privacyMode, {
       timeline,
       documentRef,
       setStatus,
@@ -196,7 +225,7 @@ export async function showDirectorLibrary(options = {}) {
       refresh: refreshLibrary,
     });
     renderActions(documentRef, actions, {
-      item: selectedItem(),
+      item: currentSelected,
       tab: state.tab,
       timeline,
       documentRef,
@@ -286,6 +315,9 @@ export function normalizeLibraryTimelineItem(item) {
   const hasSnapshot = Boolean(item?.timeline ?? item?.snapshot ?? item?.video_timeline ?? item?.payload);
   const snapshot = hasSnapshot ? normalizeVideoTimeline(item?.timeline ?? item?.snapshot ?? item?.video_timeline ?? item?.payload) : null;
   const summary = item?.summary && typeof item.summary === "object" && !Array.isArray(item.summary) ? item.summary : {};
+  const isPrivate = Boolean(item?.is_private ?? item?.private);
+  const previewAssets = isPrivate ? [] : normalizePreviewAssets(item?.preview_assets ?? item?.previewAssets);
+  const previewAsset = snapshot ? firstTimelinePreviewAsset(snapshot) : previewAssets[0] ?? null;
   return {
     id: String(item?.id ?? item?.library_id ?? stableHash(JSON.stringify(snapshot))),
     kind: TAB_TIMELINES,
@@ -294,11 +326,34 @@ export function normalizeLibraryTimelineItem(item) {
     tags: normalizeTags(item?.tags ?? snapshot?.project?.metadata?.tags),
     updatedAt: timestampValue(item?.updated_at ?? item?.mtime ?? item?.created_at),
     summary,
-    isPrivate: Boolean(item?.is_private ?? item?.private),
+    isPrivate,
     timeline: snapshot,
-    previewAsset: snapshot ? firstTimelinePreviewAsset(snapshot) : null,
+    previewAssets,
+    previewAsset,
+    previewHydrated: Boolean(snapshot || previewAsset || previewAssets.length || !isPrivate),
     source: item,
   };
+}
+
+export function applyTimelinePreviewPayload(item, payload) {
+  const previewAssets = normalizePreviewAssets(payload?.preview_assets ?? payload?.previewAssets ?? payload?.item?.preview_assets ?? payload?.item?.previewAssets);
+  const routeItem = payload?.item && typeof payload.item === "object" && !Array.isArray(payload.item) ? payload.item : null;
+  return {
+    ...item,
+    previewAssets,
+    previewAsset: previewAssets[0] ?? item?.previewAsset ?? null,
+    previewHydrated: true,
+    source: routeItem ? { ...(item?.source ?? {}), ...routeItem } : item?.source,
+  };
+}
+
+export function shouldRequestPrivateTimelinePreview(item, privacyMode) {
+  return Boolean(
+    privacyMode &&
+    item?.kind === TAB_TIMELINES &&
+    item?.isPrivate &&
+    !item.previewHydrated,
+  );
 }
 
 export function normalizeLibraryCharacterItem(item) {
@@ -350,7 +405,7 @@ function renderSidebar(documentRef, sidebar, context) {
 }
 
 function renderGrid(documentRef, grid, options) {
-  const { items, selected, tab, timeline, privacyMode, select, context } = options;
+  const { items, selected, tab, timeline, privacyMode, select, reveal, context } = options;
   grid.replaceChildren();
   if (!items.length) {
     const empty = el(documentRef, "div", "htd-library-empty");
@@ -370,10 +425,17 @@ function renderGrid(documentRef, grid, options) {
     } else {
       card.append(renderCharacterCardContent(documentRef, item, timeline, privacyMode, context));
     }
-    card.addEventListener("click", () => select(item));
+    const revealPreview = () => reveal?.(item);
+    card.addEventListener("pointerenter", revealPreview);
+    card.addEventListener("focus", revealPreview);
+    card.addEventListener("click", () => {
+      revealPreview();
+      select(item);
+    });
     card.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
+      revealPreview();
       select(item);
     });
     grid.append(card);
@@ -687,6 +749,7 @@ function timelinePreviewAssets(item) {
     (asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && asset.path
   ));
   if (assets.length) return assets;
+  if (Array.isArray(item.previewAssets) && item.previewAssets.length) return item.previewAssets;
   return item.previewAsset ? [item.previewAsset] : [];
 }
 
@@ -1052,6 +1115,10 @@ async function fetchTimelineForUse(item) {
   };
 }
 
+async function fetchTimelinePreview(item) {
+  return fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
+}
+
 async function fetchCharacterForUse(item) {
   if (item?.source?.image?.path) return { ...item, character: item.source };
   const data = await fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/use`, { method: "POST" });
@@ -1137,6 +1204,56 @@ function firstTimelinePreviewAsset(timeline) {
     (asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) &&
     asset.path
   )) ?? null;
+}
+
+function normalizePreviewAssets(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((asset) => normalizePreviewAsset(asset))
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function normalizePreviewAsset(asset) {
+  if (!asset || typeof asset !== "object" || Array.isArray(asset)) return null;
+  if (asset.type !== ASSET_TYPE_IMAGE && asset.type !== ASSET_TYPE_VIDEO) return null;
+  const path = safePreviewText(asset.path ?? asset.file_path);
+  if (!path) return null;
+  const normalized = {};
+  for (const key of [
+    "asset_id",
+    "duration_seconds",
+    "file_path",
+    "frame_rate",
+    "height",
+    "id",
+    "media_type",
+    "mime_type",
+    "name",
+    "path",
+    "size_bytes",
+    "source_kind",
+    "type",
+    "width",
+  ]) {
+    const value = asset[key];
+    if (typeof value === "string") {
+      const text = safePreviewText(value);
+      if (text) normalized[key] = text;
+    } else if (value == null || typeof value === "boolean" || typeof value === "number") {
+      normalized[key] = value;
+    }
+  }
+  normalized.type = asset.type;
+  normalized.path = path;
+  return normalized;
+}
+
+function safePreviewText(value) {
+  const text = String(value ?? "").trim();
+  if (!text || text.startsWith("data:") || text.startsWith("blob:")) return "";
+  if (text.length >= 256 && /^[A-Za-z0-9+/]+={0,2}$/.test(text)) return "";
+  return text;
 }
 
 function normalizeTags(value) {
