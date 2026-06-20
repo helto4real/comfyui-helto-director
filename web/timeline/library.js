@@ -24,8 +24,8 @@ export const TIMELINE_REPLACE_CONFIRMATION = "Replace current timeline?\n\nThis 
 const TAB_TIMELINES = "timelines";
 const TAB_CHARACTERS = "characters";
 const SORT_OPTIONS = [
-  { value: "newest", label: "Newest" },
-  { value: "oldest", label: "Oldest" },
+  { value: "newest", label: "Recently Updated" },
+  { value: "oldest", label: "Oldest First" },
   { value: "name-asc", label: "Name A-Z" },
   { value: "name-desc", label: "Name Z-A" },
 ];
@@ -47,7 +47,25 @@ export async function showDirectorLibrary(options = {}) {
   const header = el(documentRef, "div", "htd-library-header");
   const title = el(documentRef, "div", "htd-library-title");
   title.textContent = "Director Library";
-  const headerActions = el(documentRef, "div", "htd-library-header-actions");
+  const closeButton = iconButton(documentRef, "close", "Close Director Library", () => finish());
+  header.append(title, closeButton);
+
+  const controls = el(documentRef, "div", "htd-library-controls");
+  const searchWrap = el(documentRef, "label", "htd-library-search-wrap");
+  searchWrap.append(iconSvg(documentRef, "search"));
+  const search = el(documentRef, "input", "htd-library-search");
+  search.type = "search";
+  search.placeholder = "Search timelines...";
+  search.title = "Search library";
+  searchWrap.append(search);
+  const sort = el(documentRef, "select", "htd-library-sort");
+  sort.title = "Sort Library";
+  for (const option of SORT_OPTIONS) {
+    const entry = documentRef.createElement("option");
+    entry.value = option.value;
+    entry.textContent = option.label;
+    sort.append(entry);
+  }
   const saveButton = textButton(documentRef, "Save Current", "Save Current Timeline", async () => {
     if (state.tab === TAB_CHARACTERS) {
       await saveCurrentCharacters({ timeline, documentRef, setStatus, privacyMode });
@@ -62,28 +80,14 @@ export async function showDirectorLibrary(options = {}) {
     }
     await refreshLibrary();
   });
-  const closeButton = iconButton(documentRef, "close", "Close Director Library", () => finish());
-  headerActions.append(saveButton, closeButton);
-  header.append(title, headerActions);
+  saveButton.classList.add("htd-library-primary");
+  saveButton.prepend(iconSvg(documentRef, "plus"));
+  controls.append(searchWrap, sort, saveButton);
 
-  const controls = el(documentRef, "div", "htd-library-controls");
-  const search = el(documentRef, "input", "htd-library-search");
-  search.type = "search";
-  search.placeholder = "Search library...";
-  search.title = "Search library";
-  const sort = el(documentRef, "select", "htd-library-sort");
-  sort.title = "Sort Library";
-  for (const option of SORT_OPTIONS) {
-    const entry = documentRef.createElement("option");
-    entry.value = option.value;
-    entry.textContent = option.label;
-    sort.append(entry);
-  }
   const tabs = el(documentRef, "div", "htd-library-tabs");
   const timelinesTab = tabButton(documentRef, "Timelines", true);
   const charactersTab = tabButton(documentRef, "Characters", false);
   tabs.append(timelinesTab, charactersTab);
-  controls.append(search, sort, tabs);
 
   const body = el(documentRef, "div", "htd-library-body");
   const sidebar = el(documentRef, "div", "htd-library-sidebar");
@@ -93,7 +97,7 @@ export async function showDirectorLibrary(options = {}) {
 
   const status = el(documentRef, "div", "htd-library-status");
   const actions = el(documentRef, "div", "htd-library-actions");
-  panel.append(header, controls, body, status, actions);
+  panel.append(header, controls, tabs, body, status, actions);
   overlay.append(panel);
   documentRef.body.append(overlay);
 
@@ -102,6 +106,7 @@ export async function showDirectorLibrary(options = {}) {
     search: "",
     sort: "newest",
     tag: "",
+    filters: {},
     timelines: [],
     characters: [],
     selectedId: "",
@@ -117,7 +122,14 @@ export async function showDirectorLibrary(options = {}) {
   };
 
   const visibleItems = () => sortedLibraryItems(
-    filterLibraryItems(state.tab === TAB_TIMELINES ? state.timelines : state.characters, state.search, state.tag),
+    filterLibraryItems(
+      state.tab === TAB_TIMELINES ? state.timelines : state.characters,
+      state.search,
+      state.tag,
+      state.filters,
+      state.tab,
+      timeline,
+    ),
     state.sort,
   );
 
@@ -128,24 +140,61 @@ export async function showDirectorLibrary(options = {}) {
 
   const render = () => {
     saveButton.textContent = state.tab === TAB_CHARACTERS ? "Save Character" : "Save Current";
+    saveButton.prepend(iconSvg(documentRef, "plus"));
     saveButton.title = state.tab === TAB_CHARACTERS ? "Save Current Character References" : "Save Current Timeline";
     saveButton.setAttribute("aria-label", saveButton.title);
     timelinesTab.classList.toggle("is-active", state.tab === TAB_TIMELINES);
     charactersTab.classList.toggle("is-active", state.tab === TAB_CHARACTERS);
     timelinesTab.setAttribute("aria-selected", state.tab === TAB_TIMELINES ? "true" : "false");
     charactersTab.setAttribute("aria-selected", state.tab === TAB_CHARACTERS ? "true" : "false");
+    search.placeholder = state.tab === TAB_CHARACTERS ? "Search characters..." : "Search timelines...";
     search.value = state.search;
     sort.value = state.sort;
-    renderSidebar(documentRef, sidebar, visibleTags(state.tab === TAB_TIMELINES ? state.timelines : state.characters), state.tag, (tag) => {
-      state.tag = tag;
-      state.selectedId = "";
-      render();
+    renderSidebar(documentRef, sidebar, {
+      tab: state.tab,
+      items: state.tab === TAB_TIMELINES ? state.timelines : state.characters,
+      tags: visibleTags(state.tab === TAB_TIMELINES ? state.timelines : state.characters),
+      activeTag: state.tag,
+      filters: state.filters,
+      timeline,
+      onSelectTag: (tag) => {
+        state.tag = tag;
+        state.selectedId = "";
+        render();
+      },
+      onToggleFilter: (key) => {
+        state.filters = { ...state.filters, [key]: !state.filters[key] };
+        state.selectedId = "";
+        render();
+      },
     });
-    renderGrid(documentRef, grid, visibleItems(), selectedItem(), privacyMode, (item) => {
-      state.selectedId = item.id;
-      render();
+    renderGrid(documentRef, grid, {
+      items: visibleItems(),
+      selected: selectedItem(),
+      tab: state.tab,
+      timeline,
+      privacyMode,
+      select: (item) => {
+        state.selectedId = item.id;
+        render();
+      },
+      context: {
+        timeline,
+        documentRef,
+        setStatus,
+        callbacks: options,
+        close: finish,
+        refresh: refreshLibrary,
+      },
     });
-    renderDetails(documentRef, details, selectedItem(), state.tab, timeline, privacyMode);
+    renderDetails(documentRef, details, selectedItem(), state.tab, timeline, privacyMode, {
+      timeline,
+      documentRef,
+      setStatus,
+      callbacks: options,
+      close: finish,
+      refresh: refreshLibrary,
+    });
     renderActions(documentRef, actions, {
       item: selectedItem(),
       tab: state.tab,
@@ -161,12 +210,14 @@ export async function showDirectorLibrary(options = {}) {
   timelinesTab.addEventListener("click", () => {
     state.tab = TAB_TIMELINES;
     state.tag = "";
+    state.filters = {};
     state.selectedId = "";
     render();
   });
   charactersTab.addEventListener("click", () => {
     state.tab = TAB_CHARACTERS;
     state.tag = "";
+    state.filters = {};
     state.selectedId = "";
     render();
   });
@@ -224,7 +275,7 @@ export function libraryDialogClassName(privacyMode = false) {
 
 export function clearDirectorLibraryDisplay(root) {
   if (!root) return false;
-  for (const element of root.querySelectorAll?.(".htd-library-preview img, .htd-library-description, .htd-library-detail-description") ?? []) {
+  for (const element of root.querySelectorAll?.(".htd-library-preview img, .htd-library-strip-thumb img, .htd-library-description, .htd-library-detail-description") ?? []) {
     if ("src" in element && element.tagName?.toLowerCase?.() === "img") element.removeAttribute("src");
     element.textContent = "";
   }
@@ -268,18 +319,38 @@ export function normalizeLibraryCharacterItem(item) {
   };
 }
 
-function renderSidebar(documentRef, sidebar, tags, activeTag, onSelect) {
+function renderSidebar(documentRef, sidebar, context) {
+  const { tab, items, tags, activeTag, filters, timeline, onSelectTag, onToggleFilter } = context;
   sidebar.replaceChildren();
-  const title = el(documentRef, "div", "htd-library-sidebar-title");
-  title.textContent = "Filters";
-  const all = filterButton(documentRef, "All", activeTag === "", () => onSelect(""));
-  sidebar.append(title, all);
-  for (const tag of tags) {
-    sidebar.append(filterButton(documentRef, tag, activeTag === tag, () => onSelect(tag)));
+  const filterTitle = el(documentRef, "div", "htd-library-sidebar-title");
+  filterTitle.textContent = "Filters";
+  sidebar.append(filterTitle);
+  for (const filter of libraryFilters(tab, items, timeline)) {
+    sidebar.append(toggleFilterButton(documentRef, filter, Boolean(filters[filter.key]), () => onToggleFilter(filter.key)));
   }
+  const tagsHeader = el(documentRef, "div", "htd-library-sidebar-section");
+  const tagsTitle = el(documentRef, "div", "htd-library-sidebar-title");
+  tagsTitle.textContent = "Tags";
+  tagsHeader.append(tagsTitle, iconSvg(documentRef, "chevron"));
+  const all = tagFilterButton(documentRef, "All", items.length, activeTag === "", () => onSelectTag(""));
+  sidebar.append(tagsHeader, all);
+  for (const tag of tags) {
+    sidebar.append(tagFilterButton(
+      documentRef,
+      tag,
+      items.filter((item) => item.tags.includes(tag)).length,
+      activeTag === tag,
+      () => onSelectTag(tag),
+    ));
+  }
+  const manage = textButton(documentRef, "Manage Tags", "Manage Tags", () => {});
+  manage.classList.add("htd-library-manage-tags");
+  manage.prepend(iconSvg(documentRef, "settings"));
+  sidebar.append(manage);
 }
 
-function renderGrid(documentRef, grid, items, selected, privacyMode, onSelect) {
+function renderGrid(documentRef, grid, options) {
+  const { items, selected, tab, timeline, privacyMode, select, context } = options;
   grid.replaceChildren();
   if (!items.length) {
     const empty = el(documentRef, "div", "htd-library-empty");
@@ -288,26 +359,31 @@ function renderGrid(documentRef, grid, items, selected, privacyMode, onSelect) {
     return;
   }
   for (const item of items) {
-    const card = el(documentRef, "button", `htd-library-card${selected?.id === item.id ? " is-selected" : ""}`);
-    card.type = "button";
+    const card = el(documentRef, "article", `htd-library-card htd-library-${tab}-card${selected?.id === item.id ? " is-selected" : ""}`);
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
     card.title = item.title;
-    card.append(renderPreview(documentRef, item, privacyMode, "htd-library-card-preview"));
-    const meta = el(documentRef, "div", "htd-library-card-meta");
-    const name = el(documentRef, "div", "htd-library-card-title");
-    name.textContent = item.title;
-    const description = el(documentRef, "div", "htd-library-description");
-    description.textContent = item.description;
-    meta.append(name, description, renderTags(documentRef, item.tags));
-    card.append(meta);
-    card.addEventListener("click", () => onSelect(item));
+    card.setAttribute("aria-label", item.title);
+    card.append(selectionBadge(documentRef, selected?.id === item.id));
+    if (tab === TAB_TIMELINES) {
+      card.append(renderTimelineCardContent(documentRef, item, privacyMode, context));
+    } else {
+      card.append(renderCharacterCardContent(documentRef, item, timeline, privacyMode, context));
+    }
+    card.addEventListener("click", () => select(item));
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      select(item);
+    });
     grid.append(card);
   }
 }
 
-function renderDetails(documentRef, details, item, tab, timeline, privacyMode) {
+function renderDetails(documentRef, details, item, tab, timeline, privacyMode, context = {}) {
   details.replaceChildren();
   const title = el(documentRef, "div", "htd-library-details-title");
-  title.textContent = "Preview";
+  title.textContent = tab === TAB_CHARACTERS ? "Character Preview" : "Preview";
   details.append(title);
   if (!item) {
     const empty = el(documentRef, "div", "htd-library-empty");
@@ -315,42 +391,191 @@ function renderDetails(documentRef, details, item, tab, timeline, privacyMode) {
     details.append(empty);
     return;
   }
+  if (tab === TAB_CHARACTERS) {
+    renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context);
+  } else {
+    renderTimelineDetails(documentRef, details, item, privacyMode);
+  }
+}
+
+function renderTimelineCardContent(documentRef, item, privacyMode, context) {
+  const fragment = documentRef.createDocumentFragment();
+  fragment.append(renderTimelineMediaStrip(documentRef, item, privacyMode));
+  const title = el(documentRef, "div", "htd-library-card-title");
+  title.textContent = item.title;
+  const meta = el(documentRef, "div", "htd-library-card-meta-line");
+  meta.textContent = timelineMetaLine(item);
+  const counts = el(documentRef, "div", "htd-library-card-counts");
+  counts.textContent = timelineCountsLine(item);
+  const status = statusPill(documentRef, timelineStatus(item));
+  const actionRow = el(documentRef, "div", "htd-library-card-actions");
+  actionRow.append(
+    quickButton(documentRef, "Load", "Load Saved Timeline", async () => {
+      const confirmFn = context.documentRef.defaultView?.confirm ?? globalThis.confirm;
+      if (confirmFn && !confirmFn(TIMELINE_REPLACE_CONFIRMATION)) return;
+      const full = await fetchTimelineForUse(item);
+      replaceTimelineFromLibrary(context.callbacks, deepClone(full.timeline), full);
+      context.close?.();
+    }, "primary"),
+    quickButton(documentRef, "Overwrite", "Overwrite Saved Timeline", async () => {
+      await updateTimelineLibraryItem(item.id, context.timeline);
+      context.setStatus?.("Overwrote saved timeline.");
+      await context.refresh?.();
+    }),
+    quickButton(documentRef, "...", "More Timeline Actions", () => context.setStatus?.("More timeline actions are available in the bottom bar."), "icon"),
+  );
+  fragment.append(title, meta, counts, status, actionRow);
+  return fragment;
+}
+
+function renderCharacterCardContent(documentRef, item, timeline, privacyMode, context) {
+  const fragment = documentRef.createDocumentFragment();
+  fragment.append(renderPreview(documentRef, item, privacyMode, "htd-library-card-preview"));
+  const title = el(documentRef, "div", "htd-library-card-title");
+  title.textContent = item.title;
+  const description = el(documentRef, "div", "htd-library-description");
+  description.textContent = item.description;
+  const loaded = findLoadedCharacterReferenceForLibraryItem(timeline, item.source);
+  const defaultRow = el(documentRef, "div", "htd-library-character-defaults");
+  defaultRow.textContent = characterDefaultsLine(item);
+  const actionRow = el(documentRef, "div", "htd-library-card-actions");
+  actionRow.append(
+    quickButton(documentRef, "Add to Timeline", "Add Character to Timeline", async () => {
+      const full = await fetchCharacterForUse(item);
+      const reference = addCharacterFromLibrary(context.callbacks, full.character, item, false);
+      if (reference) context.setStatus?.(`Added ${formatCharacterReferenceTag(reference)}.`);
+    }, "primary"),
+    quickButton(documentRef, "Replace", "Replace Character Reference", async () => {
+      const references = getCharacterReferences(context.timeline);
+      if (!references.length) return context.setStatus?.("No loaded character reference to replace.");
+      const full = await fetchCharacterForUse(item);
+      const reference = replaceCharacterFromLibrary(context.callbacks, references[0].id, full.character, item);
+      if (reference) context.setStatus?.(`Replaced ${formatCharacterReferenceTag(reference)}.`);
+    }),
+    quickButton(documentRef, "...", "More Character Actions", () => context.setStatus?.("More character actions are available in the bottom bar."), "icon"),
+  );
+  fragment.append(title, description, renderTags(documentRef, item.tags), defaultRow);
+  if (loaded) fragment.append(statusPill(documentRef, { label: "Loaded", tone: "loaded" }));
+  fragment.append(actionRow);
+  return fragment;
+}
+
+function renderTimelineDetails(documentRef, details, item, privacyMode) {
+  const name = el(documentRef, "div", "htd-library-detail-name");
+  name.textContent = item.title;
+  const meta = el(documentRef, "div", "htd-library-detail-meta");
+  meta.textContent = timelineMetaLine(item);
+  details.append(name, meta, renderPreview(documentRef, item, privacyMode, "htd-library-detail-preview"));
+  details.append(renderTimelineSegmentBar(documentRef, item));
+  details.append(renderInfoSection(documentRef, "Summary", summaryRows(item)));
+  details.append(renderInfoSection(documentRef, "Sections", sectionRows(item)));
+  details.append(renderInfoSection(documentRef, "Characters", characterRows(item)));
+  details.append(renderInfoSection(documentRef, "Media Health", mediaHealthRows(item)));
+}
+
+function renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context) {
   details.append(renderPreview(documentRef, item, privacyMode, "htd-library-detail-preview"));
+  const existing = findLoadedCharacterReferenceForLibraryItem(timeline, item.source);
+  if (existing) {
+    const loaded = el(documentRef, "div", "htd-library-loaded");
+    loaded.append(iconSvg(documentRef, "check"), documentRef.createTextNode(`Already loaded as ${formatCharacterReferenceTag(existing)}`));
+    details.append(loaded);
+  }
   const name = el(documentRef, "div", "htd-library-detail-name");
   name.textContent = item.title;
   const description = el(documentRef, "div", "htd-library-detail-description");
   description.textContent = item.description;
-  details.append(name, description, renderTags(documentRef, item.tags));
-  details.append(renderSummary(documentRef, item));
-  if (tab === TAB_CHARACTERS) {
-    const existing = findLoadedCharacterReferenceForLibraryItem(timeline, item.source);
-    if (existing) {
-      const loaded = el(documentRef, "div", "htd-library-loaded");
-      loaded.textContent = `Already loaded as ${formatCharacterReferenceTag(existing)}`;
-      details.append(loaded);
-    }
-  }
+  details.append(name, description);
+  details.append(renderInfoSection(documentRef, "Details", characterRowsForDetails(item, existing)));
+  const stack = el(documentRef, "div", "htd-library-inspector-actions");
+  stack.append(
+    quickButton(documentRef, "Add to Timeline", "Add Character to Timeline", async () => {
+      const full = await fetchCharacterForUse(item);
+      const reference = addCharacterFromLibrary(context.callbacks, full.character, item, false);
+      if (reference) context.setStatus?.(`Added ${formatCharacterReferenceTag(reference)}.`);
+    }, "primary"),
+    quickButton(documentRef, "Add + Insert Tag", "Add and Insert Reference Tag", async () => {
+      const full = await fetchCharacterForUse(item);
+      const reference = addCharacterFromLibrary(context.callbacks, full.character, item, true);
+      if (reference) context.setStatus?.(`Inserted ${formatCharacterReferenceTag(reference)}.`);
+    }),
+    quickButton(documentRef, "Copy Tag", "Copy Reference Tag", async () => {
+      const tag = tagForCharacterItem(timeline, item.source);
+      await copyTextWithPromptFallback(documentRef, tag, "Character reference tag");
+      context.setStatus?.(`Copied ${tag}.`);
+    }),
+  );
+  details.append(stack);
 }
 
-function renderSummary(documentRef, item) {
-  const summary = item?.summary && typeof item.summary === "object" && !Array.isArray(item.summary) ? item.summary : {};
+function renderTimelineMediaStrip(documentRef, item, privacyMode) {
+  const strip = el(documentRef, "div", "htd-library-media-strip");
+  const assets = timelinePreviewAssets(item).slice(0, 3);
+  if (!assets.length) {
+    const empty = el(documentRef, "div", "htd-library-strip-empty");
+    empty.append(iconSvg(documentRef, "timeline"));
+    strip.append(empty);
+    return strip;
+  }
+  for (const asset of assets) {
+    strip.append(renderAssetThumb(documentRef, asset, item.title, privacyMode));
+  }
+  strip.append(renderTimelineSegmentBar(documentRef, item, true));
+  return strip;
+}
+
+function renderAssetThumb(documentRef, asset, title, privacyMode) {
+  const thumb = el(documentRef, "button", "htd-library-strip-thumb");
+  thumb.type = "button";
+  thumb.title = "Open Preview";
+  if (asset?.path) {
+    const img = documentRef.createElement("img");
+    img.alt = title;
+    img.src = thumbnailUrl(asset, 220, privacyMode);
+    thumb.append(img);
+    thumb.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const url = mediaViewUrl(asset);
+      if (url) windowOpen(documentRef, url);
+    });
+  }
+  return thumb;
+}
+
+function renderTimelineSegmentBar(documentRef, item, compact = false) {
+  const wrap = el(documentRef, "div", compact ? "htd-library-segment-bar is-compact" : "htd-library-segment-preview");
+  const bar = el(documentRef, "div", "htd-library-segment-bar-track");
+  const sections = timelineSections(item);
+  if (!sections.length) {
+    const segment = el(documentRef, "span", "htd-library-segment is-empty");
+    segment.style.flexGrow = "1";
+    bar.append(segment);
+  } else {
+    for (const section of sections.slice(0, 8)) {
+      const segment = el(documentRef, "span", `htd-library-segment is-${String(section.type || "text").toLowerCase()}`);
+      const duration = Math.max(0.1, Number(section.end_time) - Number(section.start_time));
+      segment.style.flexGrow = String(Number.isFinite(duration) ? duration : 1);
+      bar.append(segment);
+    }
+  }
+  wrap.append(bar);
+  if (!compact) {
+    const time = el(documentRef, "div", "htd-library-segment-times");
+    time.append(span(documentRef, "0s"), span(documentRef, formatSeconds(timelineDuration(item))));
+    wrap.append(time);
+  }
+  return wrap;
+}
+
+function renderInfoSection(documentRef, title, rows) {
+  const section = el(documentRef, "section", "htd-library-info-section");
+  const header = el(documentRef, "div", "htd-library-info-title");
+  header.textContent = title;
+  section.append(header);
   const list = el(documentRef, "div", "htd-library-summary");
-  const rows = item.kind === TAB_TIMELINES
-    ? [
-        ["Duration", formatSeconds(summary.duration_seconds)],
-        ["Frame Rate", formatNumber(summary.frame_rate)],
-        ["Aspect", summary.aspect_ratio],
-        ["Sections", summary.section_count],
-        ["References", summary.character_reference_count ?? summary.character_count],
-      ]
-    : [
-        ["Default Tag", summary.label],
-        ["Strength", formatNumber(summary.strength)],
-        ["Image", summary.has_image ? "OK" : "Missing"],
-      ];
-  for (const [label, value] of rows) {
+  for (const [label, value, tone] of rows) {
     if (value == null || value === "") continue;
-    const row = el(documentRef, "div", "htd-library-summary-row");
+    const row = el(documentRef, "div", `htd-library-summary-row${tone ? ` is-${tone}` : ""}`);
     const labelEl = el(documentRef, "span", "htd-library-summary-label");
     labelEl.textContent = label;
     const valueEl = el(documentRef, "span", "htd-library-summary-value");
@@ -358,7 +583,234 @@ function renderSummary(documentRef, item) {
     row.append(labelEl, valueEl);
     list.append(row);
   }
-  return list;
+  if (!list.children.length) {
+    const empty = el(documentRef, "div", "htd-library-muted");
+    empty.textContent = "No details.";
+    list.append(empty);
+  }
+  section.append(list);
+  return section;
+}
+
+function selectionBadge(documentRef, selected) {
+  const badge = el(documentRef, "span", "htd-library-selected-badge");
+  badge.append(iconSvg(documentRef, selected ? "check" : "blank"));
+  return badge;
+}
+
+function statusPill(documentRef, status) {
+  const pill = el(documentRef, "span", `htd-library-status-pill is-${status.tone}`);
+  pill.textContent = status.label;
+  return pill;
+}
+
+function quickButton(documentRef, text, title, onClick, variant = "") {
+  const button = textButton(documentRef, text, title, async (event) => {
+    event?.stopPropagation?.();
+    await onClick?.(event);
+  });
+  button.classList.add("htd-library-quick-action");
+  if (variant) button.classList.add(`is-${variant}`);
+  button.addEventListener("keydown", (event) => event.stopPropagation?.());
+  return button;
+}
+
+function toggleFilterButton(documentRef, filter, active, onClick) {
+  const control = textButton(documentRef, "", filter.label, onClick);
+  control.classList.add("htd-library-filter-toggle");
+  control.classList.toggle("is-active", active);
+  control.append(iconSvg(documentRef, filter.icon), span(documentRef, filter.label), toggleDot(documentRef), countBadge(documentRef, filter.count));
+  return control;
+}
+
+function tagFilterButton(documentRef, label, count, active, onClick) {
+  const control = textButton(documentRef, "", label, onClick);
+  control.classList.add("htd-library-tag-filter");
+  control.classList.toggle("is-active", active);
+  control.append(span(documentRef, label), countBadge(documentRef, count));
+  return control;
+}
+
+function countBadge(documentRef, value) {
+  const badge = el(documentRef, "span", "htd-library-count");
+  badge.textContent = String(value ?? 0);
+  return badge;
+}
+
+function toggleDot(documentRef) {
+  return el(documentRef, "span", "htd-library-toggle-dot");
+}
+
+function span(documentRef, text, className = "") {
+  const element = el(documentRef, "span", className);
+  element.textContent = text;
+  return element;
+}
+
+function libraryFilters(tab, items, timeline) {
+  const definitions = tab === TAB_TIMELINES
+    ? [
+        { key: "hasReferences", label: "Has References", icon: "image" },
+        { key: "hasAudio", label: "Has Audio", icon: "music" },
+        { key: "missingMedia", label: "Missing Media", icon: "warning" },
+        { key: "private", label: "Private", icon: "lock" },
+      ]
+    : [
+        { key: "loaded", label: "Loaded in Timeline", icon: "timeline" },
+        { key: "missingFile", label: "Missing File", icon: "warning" },
+        { key: "hasTags", label: "Has Tags", icon: "tag" },
+        { key: "private", label: "Private", icon: "lock" },
+      ];
+  return definitions.map((filter) => ({
+    ...filter,
+    count: items.filter((item) => filterMatches(item, filter.key, tab, timeline)).length,
+  }));
+}
+
+function filterMatches(item, key, tab, timeline) {
+  if (tab === TAB_TIMELINES) {
+    if (key === "hasReferences") return timelineReferenceCount(item) > 0;
+    if (key === "hasAudio") return timelineAudioCount(item) > 0;
+    if (key === "missingMedia") return timelineHasMissingMedia(item);
+    if (key === "private") return item.isPrivate;
+    return true;
+  }
+  if (key === "loaded") return Boolean(findLoadedCharacterReferenceForLibraryItem(timeline, item.source));
+  if (key === "missingFile") return !item.image?.path || item.summary?.has_image === false;
+  if (key === "hasTags") return item.tags.length > 0;
+  if (key === "private") return item.isPrivate;
+  return true;
+}
+
+function timelinePreviewAssets(item) {
+  const assets = (item.timeline?.assets ?? []).filter((asset) => (
+    (asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && asset.path
+  ));
+  if (assets.length) return assets;
+  return item.previewAsset ? [item.previewAsset] : [];
+}
+
+function timelineSections(item) {
+  return Array.isArray(item.timeline?.director_track?.sections) ? item.timeline.director_track.sections : [];
+}
+
+function timelineDuration(item) {
+  return item.summary?.duration_seconds ?? item.timeline?.project?.duration_seconds ?? 0;
+}
+
+function timelineFrameRate(item) {
+  return item.summary?.frame_rate ?? item.timeline?.project?.frame_rate ?? null;
+}
+
+function timelineAspect(item) {
+  return item.summary?.aspect_ratio ?? item.timeline?.project?.aspect_ratio ?? "";
+}
+
+function timelineSectionCount(item) {
+  return item.summary?.section_count ?? timelineSections(item).length;
+}
+
+function timelineReferenceCount(item) {
+  return item.summary?.character_reference_count ?? item.summary?.character_count ?? getCharacterReferences(item.timeline).length;
+}
+
+function timelineAudioCount(item) {
+  return item.summary?.audio_count ?? item.summary?.audio_track_count ?? item.timeline?.audio_tracks?.length ?? 0;
+}
+
+function timelineHasMissingMedia(item) {
+  if (Number(item.summary?.missing_media_count) > 0 || item.summary?.has_missing_media === true) return true;
+  return (item.timeline?.assets ?? []).some((asset) => asset.missing || asset.status === "missing" || asset.exists === false);
+}
+
+function timelineStatus(item) {
+  if (timelineHasMissingMedia(item)) return { label: "Missing Media", tone: "warning" };
+  if (item.isPrivate) return { label: "Private", tone: "private" };
+  return { label: "OK", tone: "ok" };
+}
+
+function timelineMetaLine(item) {
+  return [formatSeconds(timelineDuration(item)), timelineFrameRate(item) ? `${formatNumber(timelineFrameRate(item))} fps` : "", timelineAspect(item)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function timelineCountsLine(item) {
+  return [
+    `${timelineSectionCount(item)} sections`,
+    `${timelineReferenceCount(item)} refs`,
+    `${timelineAudioCount(item)} audio`,
+  ].join(" · ");
+}
+
+function characterDefaultsLine(item) {
+  const strength = item.summary?.strength ?? item.source?.strength;
+  const age = ageText(item.updatedAt);
+  return [`Default: ${formatNumber(strength) || "0.90"}`, age].filter(Boolean).join(" · ");
+}
+
+function summaryRows(item) {
+  return [
+    ["Duration", formatSeconds(timelineDuration(item))],
+    ["Frame Rate", timelineFrameRate(item) ? `${formatNumber(timelineFrameRate(item))} fps` : ""],
+    ["Aspect", timelineAspect(item)],
+    ["Status", timelineStatus(item).label, timelineStatus(item).tone],
+  ];
+}
+
+function sectionRows(item) {
+  const sections = timelineSections(item);
+  if (!sections.length) return [["Sections", timelineSectionCount(item)]];
+  return sections.slice(0, 4).map((section, index) => [
+    section.type || `Section ${index + 1}`,
+    `${formatSeconds(section.start_time)}-${formatSeconds(section.end_time)}${section.prompt ? `: ${truncateText(section.prompt, 42)}` : ""}`,
+  ]);
+}
+
+function characterRows(item) {
+  const references = getCharacterReferences(item.timeline);
+  if (!references.length) return [["References", timelineReferenceCount(item)]];
+  return references.slice(0, 4).map((reference) => [
+    formatCharacterReferenceTag(reference),
+    reference.description || reference.image?.name || "Character reference",
+  ]);
+}
+
+function mediaHealthRows(item) {
+  const assets = item.timeline?.assets ?? [];
+  if (!assets.length) return [["Media", timelineHasMissingMedia(item) ? "Missing" : "OK", timelineStatus(item).tone]];
+  return assets.slice(0, 5).map((asset) => [
+    asset.name || asset.path || "Media",
+    asset.missing || asset.status === "missing" || asset.exists === false ? "Missing" : "OK",
+    asset.missing || asset.status === "missing" || asset.exists === false ? "warning" : "ok",
+  ]);
+}
+
+function characterRowsForDetails(item, existing) {
+  return [
+    ["Default Tag", item.summary?.label || (existing ? formatCharacterReferenceTag(existing) : "@image1:character")],
+    ["Default Strength", formatNumber(item.summary?.strength ?? item.source?.strength) || "0.90"],
+    ["Usage", existing ? `Loaded as ${formatCharacterReferenceTag(existing)}` : "Not loaded in current timeline"],
+    ["Tags", item.tags.join(", ")],
+  ];
+}
+
+function ageText(timestamp) {
+  const then = Number(timestamp);
+  if (!Number.isFinite(then) || then <= 0) return "";
+  const seconds = Math.max(1, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function truncateText(value, length) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > length ? `${text.slice(0, Math.max(0, length - 1))}...` : text;
 }
 
 function renderActions(documentRef, actions, context) {
@@ -654,11 +1106,14 @@ async function fetchLibraryJson(url, options) {
   return data;
 }
 
-function filterLibraryItems(items, query, tag) {
+function filterLibraryItems(items, query, tag, filters = {}, tab = TAB_TIMELINES, timeline = null) {
   const needle = String(query ?? "").trim().toLowerCase();
   return items.filter((item) => {
     const matchesTag = !tag || item.tags.includes(tag);
     if (!matchesTag) return false;
+    for (const [key, active] of Object.entries(filters)) {
+      if (active && !filterMatches(item, key, tab, timeline)) return false;
+    }
     if (!needle) return true;
     return [item.title, item.description, ...item.tags].some((value) => String(value).toLowerCase().includes(needle));
   });
@@ -757,13 +1212,6 @@ function tabButton(documentRef, label, active) {
   return control;
 }
 
-function filterButton(documentRef, label, active, onClick) {
-  const control = textButton(documentRef, label, label, onClick);
-  control.classList.add("htd-library-filter");
-  control.classList.toggle("is-active", active);
-  return control;
-}
-
 function textButton(documentRef, text, title, onClick) {
   const control = el(documentRef, "button", "htd-library-button");
   control.type = "button";
@@ -813,6 +1261,18 @@ const ICONS = {
   timeline: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   character: `<svg viewBox="0 0 24 24"><path d="M7 19a5 5 0 0 1 10 0"/><circle cx="12" cy="9" r="3"/><path d="M4 5h4M16 5h4M4 5v4M20 5v4"/></svg>`,
   close: `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  search: `<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>`,
+  plus: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>`,
+  chevron: `<svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24"><path d="M12 8v8M8 12h8"/><circle cx="12" cy="12" r="9"/></svg>`,
+  image: `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m7 17 4-4 3 3 2-2 3 3"/></svg>`,
+  music: `<svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="16" r="2"/></svg>`,
+  warning: `<svg viewBox="0 0 24 24"><path d="m12 4 9 16H3L12 4Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
+  lock: `<svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
+  tag: `<svg viewBox="0 0 24 24"><path d="M20 13 13 20 4 11V4h7l9 9Z"/><circle cx="8.5" cy="8.5" r="1.5"/></svg>`,
+  check: `<svg viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></svg>`,
+  download: `<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>`,
+  blank: `<svg viewBox="0 0 24 24"></svg>`,
 };
 
 function installDirectorLibraryStyles(documentRef) {
@@ -820,47 +1280,109 @@ function installDirectorLibraryStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-director-library-style";
   style.textContent = `
-    .htd-library-dialog { position: fixed; inset: 0; z-index: 10020; display: flex; align-items: stretch; justify-content: center; padding: 18px; box-sizing: border-box; background: rgba(8, 11, 17, 0.84); color: #d8dde8; font: 12px/1.3 system-ui, sans-serif; }
-    .htd-library-panel { width: min(1080px, 100%); min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; border: 1px solid #465064; border-radius: 6px; background: #121925; box-shadow: 0 16px 38px rgba(0,0,0,0.48); overflow: hidden; }
-    .htd-library-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-bottom: 1px solid #30394c; }
-    .htd-library-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #eef2f7; }
-    .htd-library-header-actions, .htd-library-tabs, .htd-library-actions { display: inline-flex; align-items: center; gap: 4px; }
-    .htd-library-controls { min-width: 0; display: grid; grid-template-columns: minmax(180px, 1fr) 126px auto; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid #30394c; }
-    .htd-library-search, .htd-library-sort, .htd-library-replace-select { min-width: 0; height: 26px; box-sizing: border-box; border: 1px solid #465064; border-radius: 4px; background: #151c29; color: #eef2f7; padding: 0 8px; }
-    .htd-library-body { min-height: 0; display: grid; grid-template-columns: 148px minmax(260px, 1fr) 274px; gap: 8px; padding: 8px; overflow: hidden; }
+    .htd-library-dialog { position: fixed; inset: 0; z-index: 10020; display: flex; align-items: center; justify-content: center; padding: 28px; box-sizing: border-box; background: rgba(4, 8, 13, 0.74); color: #dce3ee; font: 13px/1.35 system-ui, sans-serif; }
+    .htd-library-panel { width: min(1120px, calc(100vw - 72px)); height: min(760px, calc(100vh - 72px)); min-height: 560px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto auto; border: 1px solid rgba(129, 143, 164, 0.52); border-radius: 8px; background: linear-gradient(135deg, rgba(18, 24, 31, 0.98), rgba(12, 17, 22, 0.98)); box-shadow: 0 28px 78px rgba(0,0,0,0.62), inset 0 1px rgba(255,255,255,0.04); overflow: hidden; }
+    .htd-library-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 24px 8px; }
+    .htd-library-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 22px; font-weight: 700; color: #f6f8fb; }
+    .htd-library-controls { min-width: 0; display: grid; grid-template-columns: minmax(220px, 360px) 184px auto 1fr; gap: 12px; align-items: center; padding: 8px 24px 10px; }
+    .htd-library-search-wrap { min-width: 0; height: 38px; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 4px; padding: 0 12px; border: 1px solid rgba(111, 123, 143, 0.68); border-radius: 5px; background: rgba(11, 16, 22, 0.72); box-sizing: border-box; color: #9da9ba; }
+    .htd-library-search { min-width: 0; height: 34px; border: 0; outline: 0; background: transparent; color: #f3f6fa; }
+    .htd-library-search::placeholder { color: #9ba5b3; }
+    .htd-library-sort, .htd-library-replace-select { min-width: 0; height: 38px; box-sizing: border-box; border: 1px solid rgba(111, 123, 143, 0.68); border-radius: 5px; background: rgba(13, 18, 25, 0.86); color: #f3f6fa; padding: 0 12px; }
+    .htd-library-tabs { display: inline-flex; align-items: end; gap: 18px; padding: 0 24px; border-bottom: 1px solid rgba(65, 76, 91, 0.72); }
+    .htd-library-tab { height: 36px; padding: 0 0 9px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: #a9b2c0; }
+    .htd-library-tab.is-active { border-color: #2e74ff; background: transparent; color: #2e7cff; }
+    .htd-library-body { min-height: 0; display: grid; grid-template-columns: 190px minmax(360px, 1fr) 348px; overflow: hidden; }
     .htd-library-sidebar, .htd-library-grid, .htd-library-details { min-height: 0; overflow: auto; }
-    .htd-library-sidebar { display: flex; flex-direction: column; gap: 4px; padding-right: 4px; border-right: 1px solid #30394c; }
-    .htd-library-sidebar-title, .htd-library-details-title { color: #9ba8bd; font-weight: 600; }
-    .htd-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); grid-auto-rows: min-content; gap: 8px; }
-    .htd-library-details { display: flex; flex-direction: column; gap: 8px; padding-left: 8px; border-left: 1px solid #30394c; }
-    .htd-library-button { min-width: 28px; height: 24px; padding: 0 8px; border: 1px solid #4b5568; border-radius: 4px; background: #202633; color: #f2f5f8; cursor: pointer; white-space: nowrap; }
-    .htd-library-icon-button { width: 28px; min-width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-    .htd-library-button.is-active { border-color: #d6b65a; background: #4b3d1e; color: #fff1b8; }
+    .htd-library-sidebar { display: flex; flex-direction: column; gap: 8px; padding: 18px 14px 18px 20px; border-right: 1px solid rgba(65, 76, 91, 0.72); }
+    .htd-library-sidebar-title, .htd-library-details-title { color: #f2f5f8; font-weight: 700; }
+    .htd-library-sidebar-section { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+    .htd-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); grid-auto-rows: min-content; gap: 14px; padding: 18px 16px; }
+    .htd-library-details { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; border-left: 1px solid rgba(65, 76, 91, 0.72); }
+    .htd-library-button { min-width: 32px; min-height: 32px; padding: 0 12px; border: 1px solid rgba(78, 89, 105, 0.9); border-radius: 5px; background: linear-gradient(180deg, rgba(36, 44, 54, 0.82), rgba(22, 28, 35, 0.86)); color: #f4f7fb; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+    .htd-library-primary, .htd-library-quick-action.is-primary { border-color: #2c6af0; background: linear-gradient(180deg, #3278ff, #2057d9); color: #fff; }
+    .htd-library-icon-button { width: 34px; min-width: 34px; padding: 0; border: 0; background: transparent; color: #f4f7fb; }
     .htd-library-button:disabled, .htd-library-replace-select:disabled { opacity: 0.44; cursor: not-allowed; }
-    .htd-library-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
+    .htd-library-icon { width: 16px; height: 16px; flex: 0 0 16px; display: inline-flex; align-items: center; justify-content: center; }
     .htd-library-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .htd-library-filter { width: 100%; justify-content: flex-start; text-align: left; overflow: hidden; text-overflow: ellipsis; }
-    .htd-library-card { min-width: 0; display: grid; grid-template-rows: 104px minmax(0, auto); gap: 6px; padding: 6px; border: 1px solid #30394c; border-radius: 6px; background: rgba(17, 23, 34, 0.58); color: #d8dde8; text-align: left; cursor: pointer; }
-    .htd-library-card.is-selected { outline: 2px solid #f2d16b; outline-offset: -2px; }
-    .htd-library-preview { width: 100%; min-width: 0; height: 100%; min-height: 96px; padding: 0; border: 1px solid #3d4658; border-radius: 4px; background: #101722; color: #9ba8bd; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .htd-library-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
-    .htd-library-card-meta { min-width: 0; display: grid; gap: 3px; }
-    .htd-library-card-title, .htd-library-detail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; font-weight: 600; }
-    .htd-library-description, .htd-library-detail-description { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: #9ba8bd; }
-    .htd-library-detail-preview { height: 172px; flex: 0 0 172px; }
-    .htd-library-tags { min-width: 0; display: flex; flex-wrap: wrap; gap: 3px; }
-    .htd-library-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid #394255; border-radius: 999px; color: #c7d0df; background: #151c29; font-size: 10px; }
-    .htd-library-loaded { padding: 6px; border: 1px solid #4b3d1e; border-radius: 4px; background: rgba(214, 182, 90, 0.12); color: #fff1b8; }
-    .htd-library-status { min-height: 18px; padding: 0 8px 4px; color: #9ba8bd; }
-    .htd-library-actions { justify-content: flex-end; padding: 8px; border-top: 1px solid #30394c; }
-    .htd-library-empty { grid-column: 1 / -1; padding: 18px 8px; text-align: center; color: #9ba8bd; }
+    .htd-library-filter-toggle, .htd-library-tag-filter { width: 100%; justify-content: start; text-align: left; overflow: hidden; }
+    .htd-library-filter-toggle { display: grid; align-items: center; }
+    .htd-library-filter-toggle { grid-template-columns: 16px minmax(0, 1fr) 28px auto; }
+    .htd-library-tag-filter { justify-content: space-between; }
+    .htd-library-filter-toggle > span:not(.htd-library-icon):not(.htd-library-toggle-dot):not(.htd-library-count), .htd-library-tag-filter > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .htd-library-filter-toggle.is-active, .htd-library-tag-filter.is-active { border-color: #2d75ff; background: rgba(38, 105, 239, 0.18); color: #f7fbff; }
+    .htd-library-toggle-dot { width: 22px; height: 13px; border-radius: 99px; background: rgba(120, 130, 146, 0.45); position: relative; }
+    .htd-library-toggle-dot::after { content: ""; position: absolute; top: 3px; left: 3px; width: 7px; height: 7px; border-radius: 50%; background: #c8d0dc; }
+    .htd-library-filter-toggle.is-active .htd-library-toggle-dot { background: #2d75ff; }
+    .htd-library-filter-toggle.is-active .htd-library-toggle-dot::after { left: 12px; background: #fff; }
+    .htd-library-count { margin-left: auto; color: #d8e0eb; }
+    .htd-library-manage-tags { margin-top: 8px; width: 100%; justify-content: start; color: #cbd4e2; }
+    .htd-library-card { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid rgba(61, 72, 88, 0.95); border-radius: 7px; background: rgba(21, 27, 34, 0.82); color: #dce3ee; text-align: left; cursor: pointer; box-sizing: border-box; }
+    .htd-library-card:hover { border-color: rgba(78, 125, 210, 0.78); background: rgba(24, 31, 39, 0.92); }
+    .htd-library-card.is-selected { border-color: #2f7cff; box-shadow: 0 0 0 1px #2f7cff inset; }
+    .htd-library-selected-badge { position: absolute; top: 8px; right: 8px; z-index: 2; width: 26px; height: 26px; display: none; align-items: center; justify-content: center; border-radius: 50%; background: #2f7cff; color: #fff; }
+    .htd-library-card.is-selected .htd-library-selected-badge { display: inline-flex; }
+    .htd-library-preview, .htd-library-strip-thumb, .htd-library-strip-empty { width: 100%; min-width: 0; padding: 0; border: 1px solid rgba(61, 72, 88, 0.82); border-radius: 5px; background: #0c1218; color: #9ba8bd; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .htd-library-preview img, .htd-library-strip-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .htd-library-card-preview { height: 112px; flex: 0 0 112px; }
+    .htd-library-media-strip { height: 68px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 54px 4px; gap: 0 1px; overflow: hidden; border-radius: 5px; }
+    .htd-library-strip-thumb, .htd-library-strip-empty { height: 54px; border-radius: 0; border-width: 0; }
+    .htd-library-strip-empty { grid-column: 1 / -1; }
+    .htd-library-segment-bar.is-compact { grid-column: 1 / -1; }
+    .htd-library-segment-preview { display: grid; gap: 5px; }
+    .htd-library-segment-bar-track { height: 4px; display: flex; gap: 3px; overflow: hidden; border-radius: 99px; background: rgba(91, 101, 116, 0.34); }
+    .htd-library-segment { min-width: 10px; background: #2f7cff; }
+    .htd-library-segment.is-image { background: #69c16f; }
+    .htd-library-segment.is-video { background: #a866e8; }
+    .htd-library-segment.is-empty { background: #647085; }
+    .htd-library-segment-times { display: flex; justify-content: space-between; color: #98a4b5; font-size: 11px; }
+    .htd-library-card-title, .htd-library-detail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #f4f7fb; font-weight: 700; font-size: 14px; }
+    .htd-library-detail-name { font-size: 18px; }
+    .htd-library-card-meta-line, .htd-library-card-counts, .htd-library-character-defaults, .htd-library-detail-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #a8b3c3; }
+    .htd-library-description, .htd-library-detail-description { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: #a8b3c3; }
+    .htd-library-detail-preview { height: 180px; flex: 0 0 180px; }
+    .htd-library-tags { min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; }
+    .htd-library-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: 1px solid rgba(70, 82, 99, 0.8); border-radius: 5px; color: #c8d0dc; background: rgba(37, 45, 55, 0.75); font-size: 11px; }
+    .htd-library-status-pill { align-self: start; padding: 3px 7px; border-radius: 999px; font-size: 11px; }
+    .htd-library-status-pill.is-ok { color: #a7efad; background: rgba(67, 165, 82, 0.15); }
+    .htd-library-status-pill.is-warning { color: #ffd17d; background: rgba(205, 135, 28, 0.16); }
+    .htd-library-status-pill.is-private { color: #c6cad2; background: rgba(130, 139, 153, 0.17); }
+    .htd-library-status-pill.is-loaded, .htd-library-loaded { color: #7de0a0; background: rgba(38, 137, 76, 0.16); border: 1px solid rgba(72, 177, 109, 0.35); }
+    .htd-library-loaded { min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 5px; }
+    .htd-library-card-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto 38px; gap: 8px; margin-top: auto; }
+    .htd-library-quick-action { height: 32px; min-height: 32px; padding: 0 12px; }
+    .htd-library-quick-action.is-icon { width: 38px; min-width: 38px; padding: 0; font-size: 18px; line-height: 1; }
+    .htd-library-info-section { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(65, 76, 91, 0.72); }
+    .htd-library-info-title { color: #f3f6fa; font-weight: 700; }
+    .htd-library-summary { display: grid; gap: 8px; }
+    .htd-library-summary-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: start; color: #dce3ee; }
+    .htd-library-summary-label { color: #a8b3c3; }
+    .htd-library-summary-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .htd-library-summary-row.is-ok .htd-library-summary-value { color: #9be6a2; }
+    .htd-library-summary-row.is-warning .htd-library-summary-value { color: #ffc75f; }
+    .htd-library-muted { color: #9ba8bd; }
+    .htd-library-inspector-actions { display: grid; gap: 10px; padding: 0 12px 12px; }
+    .htd-library-status { min-height: 18px; padding: 0 24px 6px; color: #9ba8bd; }
+    .htd-library-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; padding: 14px 18px; border-top: 1px solid rgba(65, 76, 91, 0.72); }
+    .htd-library-actions .htd-library-button:first-child { border-color: #2c6af0; background: linear-gradient(180deg, #3278ff, #2057d9); }
+    .htd-library-actions .htd-library-button[aria-label^="Delete"] { border-color: rgba(143, 52, 47, 0.86); background: linear-gradient(180deg, rgba(116, 42, 38, 0.82), rgba(76, 28, 26, 0.9)); }
+    .htd-library-empty { grid-column: 1 / -1; padding: 28px 8px; text-align: center; color: #9ba8bd; }
     .htd-library-dialog.privacy-mode .htd-library-preview img,
+    .htd-library-dialog.privacy-mode .htd-library-strip-thumb img,
     .htd-library-dialog.privacy-mode .htd-library-description,
     .htd-library-dialog.privacy-mode .htd-library-detail-description { opacity: 0; }
     .htd-library-dialog.privacy-mode .htd-library-card:hover .htd-library-preview img,
+    .htd-library-dialog.privacy-mode .htd-library-card:hover .htd-library-strip-thumb img,
     .htd-library-dialog.privacy-mode .htd-library-card:hover .htd-library-description,
     .htd-library-dialog.privacy-mode .htd-library-details:hover .htd-library-preview img,
     .htd-library-dialog.privacy-mode .htd-library-details:hover .htd-library-detail-description { opacity: 1; }
+    @media (max-width: 980px) {
+      .htd-library-panel { width: calc(100vw - 28px); height: calc(100vh - 28px); min-height: 0; }
+      .htd-library-controls { grid-template-columns: minmax(0, 1fr); }
+      .htd-library-body { grid-template-columns: 150px minmax(260px, 1fr); }
+      .htd-library-details { display: none; }
+      .htd-library-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
   `;
   documentRef.head.append(style);
 }

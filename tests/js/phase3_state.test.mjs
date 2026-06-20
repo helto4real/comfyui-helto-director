@@ -119,6 +119,9 @@ function createMockTarget({ tagName = "div", className = "", item = null, ownerD
     closest(selector) {
       if (this.matches(selector)) return this;
       if (selector === ".htd-item") return item;
+      for (const classToken of String(this.className).split(/\s+/).filter(Boolean)) {
+        if (selector.includes(`.${classToken}`)) return this;
+      }
       return null;
     },
   };
@@ -358,6 +361,23 @@ async function testDeleteKeyIsIgnoredOnInteractiveTimelineControls() {
   }
 }
 
+async function testDeleteKeyIsIgnoredInsideDirectorLibraryDialog() {
+  const node = createNode({ selected: false });
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const { scope, documentRef } = createTimelineKeyboardScope();
+  const libraryDialog = createMockTarget({ className: "htd-library-dialog", ownerDocument: documentRef });
+  documentRef.activeElement = libraryDialog;
+  controller.setTimelineKeyboardScope(scope);
+
+  addSelectedTextSection(controller, "keep library focus");
+
+  const event = createKeyEvent("Delete", libraryDialog);
+  controller.handleKeyDown(event);
+
+  assert.equal(getHiddenTimeline(node).director_track.sections.length, 1);
+  assert.equal(event.defaultPrevented, false);
+}
+
 async function testDeleteKeyIsIgnoredWhileTyping() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
@@ -479,6 +499,7 @@ await testDeleteKeyRemovesSelectedItem();
 await testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused();
 await testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem();
 await testDeleteKeyIsIgnoredOnInteractiveTimelineControls();
+await testDeleteKeyIsIgnoredInsideDirectorLibraryDialog();
 await testDeleteKeyIsIgnoredWhileTyping();
 await testUndoRestoresDeleteKeyRemoval();
 await testPrivacyModeWritesEncryptedHiddenWidget();

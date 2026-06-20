@@ -200,7 +200,7 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   const description = { tagName: "DIV", textContent: "private text" };
   const root = {
     querySelectorAll(selector) {
-      assert.equal(selector, ".htd-library-preview img, .htd-library-description, .htd-library-detail-description");
+      assert.equal(selector, ".htd-library-preview img, .htd-library-strip-thumb img, .htd-library-description, .htd-library-detail-description");
       return [image, description];
     },
   };
@@ -227,7 +227,14 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes("replaceTimelineCharacterReferenceFromLibraryItem(timeline, referenceId, item)"), true);
   assert.equal(librarySource.includes('overlay.className = libraryDialogClassName(privacyMode);'), true);
   assert.equal(librarySource.includes('const saveButton = textButton(documentRef, "Save Current", "Save Current Timeline"'), true);
+  assert.equal(librarySource.includes('panel.append(header, controls, tabs, body, status, actions);'), true);
+  assert.equal(librarySource.includes('renderTimelineMediaStrip(documentRef, item, privacyMode)'), true);
+  assert.equal(librarySource.includes('renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context)'), true);
+  assert.equal(librarySource.includes('htd-library-filter-toggle'), true);
+  assert.equal(librarySource.includes('htd-library-inspector-actions'), true);
+  assert.equal(librarySource.includes('timelinePreviewAssets(item).slice(0, 3)'), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-preview img"), true);
+  assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-strip-thumb img"), true);
 }
 
 await testLibraryTimelineReplacementSyncsWidgetsAndUndo();

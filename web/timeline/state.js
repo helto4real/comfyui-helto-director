@@ -376,7 +376,7 @@ function isInteractiveElement(target) {
     return true;
   }
   return Boolean(target?.closest?.(
-    "input, textarea, select, button, [contenteditable='true'], [role='button'], [role='menuitem'], .htd-menu, .htd-context-menu, .htd-settings-overlay, .htd-reference-overlay, .pr-image-browser-dialog, .pr-image-large-preview",
+    "input, textarea, select, button, [contenteditable='true'], [role='button'], [role='menuitem'], .htd-menu, .htd-context-menu, .htd-settings-overlay, .htd-reference-overlay, .htd-library-dialog, .pr-image-browser-dialog, .pr-image-large-preview",
   ));
 }
 
