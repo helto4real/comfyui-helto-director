@@ -9,8 +9,10 @@ import pytest
 from PIL import Image
 
 from routes import media_cache as media_cache_routes
+from shared import media_browser
 from shared.media_cache import (
     MAX_WAVEFORM_PEAKS,
+    MEDIA_PATH_SECURITY_ERROR,
     MIN_WAVEFORM_PEAKS,
     THUMBNAIL_CACHE_PURPOSE,
     WAVEFORM_CACHE_PURPOSE,
@@ -167,6 +169,69 @@ def test_resolve_media_path_supports_comfy_input_relative_paths(tmp_path):
         assert resolved == media_path.resolve()
     finally:
         folder_paths.set_input_directory(original_input)
+
+
+def test_resolve_media_path_supports_absolute_paths_under_comfy_input(tmp_path):
+    original_input = folder_paths.get_input_directory()
+    folder_paths.set_input_directory(str(tmp_path / "input"))
+    try:
+        media_path = tmp_path / "input" / "clip.wav"
+        media_path.parent.mkdir(parents=True)
+        media_path.write_bytes(b"data")
+
+        resolved = resolve_media_path(str(media_path))
+
+        assert resolved == media_path.resolve()
+    finally:
+        folder_paths.set_input_directory(original_input)
+
+
+def test_resolve_media_path_rejects_absolute_paths_outside_allowed_roots(tmp_path):
+    media_path = tmp_path.parent / f"{tmp_path.name}_outside" / "clip.wav"
+    media_path.parent.mkdir(parents=True)
+    media_path.write_bytes(b"data")
+
+    with pytest.raises(ValueError, match=MEDIA_PATH_SECURITY_ERROR):
+        resolve_media_path(str(media_path))
+
+
+def test_resolve_media_path_rejects_relative_traversal(tmp_path):
+    original_input = folder_paths.get_input_directory()
+    folder_paths.set_input_directory(str(tmp_path / "input"))
+    try:
+        with pytest.raises(ValueError, match=MEDIA_PATH_SECURITY_ERROR):
+            resolve_media_path("../clip.wav", "input")
+    finally:
+        folder_paths.set_input_directory(original_input)
+
+
+def test_resolve_media_path_supports_registered_folder_paths(tmp_path):
+    original_registry = folder_paths.folder_names_and_paths.copy()
+    try:
+        media_root = tmp_path / "registered"
+        media_path = media_root / "clip.wav"
+        media_root.mkdir()
+        media_path.write_bytes(b"data")
+        folder_paths.add_model_folder_path("helto_test_media", str(media_root))
+
+        resolved = resolve_media_path(str(media_path))
+
+        assert resolved == media_path.resolve()
+    finally:
+        folder_paths.folder_names_and_paths = original_registry
+
+
+def test_resolve_media_path_supports_enabled_media_browser_folder_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_browser, "CONFIG_DIR", tmp_path / "config")
+    media_root = tmp_path.parent / f"{tmp_path.name}_browser_media"
+    media_path = media_root / "image.png"
+    media_root.mkdir()
+    Image.new("RGB", (16, 16), color=(32, 96, 160)).save(media_path)
+    media_browser.add_folder("image", "custom", str(media_root))
+
+    resolved = resolve_media_path(str(media_path))
+
+    assert resolved == media_path.resolve()
 
 
 def test_media_view_route_serves_resolved_files_with_private_cache_header():

@@ -25,6 +25,7 @@ MIN_WAVEFORM_PEAKS = 16
 MAX_WAVEFORM_PEAKS = 512
 THUMBNAIL_CACHE_PURPOSE = "timeline-thumbnail-cache"
 WAVEFORM_CACHE_PURPOSE = "timeline-waveform-cache"
+MEDIA_PATH_SECURITY_ERROR = "Security error: media path is outside approved ComfyUI directories."
 
 
 def cache_root() -> Path:
@@ -40,26 +41,83 @@ def resolve_media_path(path_value: str, source_type: str | None = None) -> Path:
         raise ValueError("Media path is required.")
 
     raw_path = str(path_value).strip()
+    if ".." in Path(raw_path).parts:
+        raise ValueError(MEDIA_PATH_SECURITY_ERROR)
+
     path = Path(raw_path).expanduser()
     if path.is_absolute():
-        resolved = path.resolve()
+        resolved = path.resolve(strict=False)
     else:
         filename, annotated_dir = folder_paths.annotated_filepath(raw_path)
-        if not filename or filename.startswith("/") or ".." in Path(filename).parts:
-            raise ValueError("Media path is outside an allowed ComfyUI directory.")
+        if not filename or Path(filename).is_absolute():
+            raise ValueError(MEDIA_PATH_SECURITY_ERROR)
         base_dir = annotated_dir
         if base_dir is None and source_type:
             base_dir = folder_paths.get_directory_by_type(source_type)
         if base_dir is None:
             base_dir = folder_paths.get_input_directory()
-        base = Path(base_dir).resolve()
-        resolved = (base / filename).resolve()
-        if os.path.commonpath((str(base), str(resolved))) != str(base):
-            raise ValueError("Media path is outside an allowed ComfyUI directory.")
+        resolved = (Path(base_dir).expanduser() / filename).resolve(strict=False)
+
+    if not _is_path_inside_allowed_media_root(resolved):
+        raise ValueError(MEDIA_PATH_SECURITY_ERROR)
 
     if not resolved.is_file():
         raise FileNotFoundError(f"Media file not found: {resolved}")
     return resolved
+
+
+def _allowed_media_roots() -> list[Path]:
+    roots: list[Path] = []
+    candidates = [
+        folder_paths.get_input_directory(),
+        folder_paths.get_output_directory(),
+        folder_paths.get_temp_directory(),
+    ]
+    for paths, _extensions in getattr(folder_paths, "folder_names_and_paths", {}).values():
+        candidates.extend(paths)
+    candidates.extend(_configured_media_browser_roots())
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or not str(candidate).strip():
+            continue
+        root = Path(str(candidate)).expanduser().resolve(strict=False)
+        root_key = str(root)
+        if root_key in seen:
+            continue
+        roots.append(root)
+        seen.add(root_key)
+    return roots
+
+
+def _configured_media_browser_roots() -> list[str]:
+    try:
+        from . import media_browser
+    except Exception:
+        try:
+            import shared.media_browser as media_browser
+        except Exception:
+            return []
+
+    roots: list[str] = []
+    for media_type in getattr(media_browser, "MEDIA_TYPES", {}):
+        try:
+            roots.extend(folder.path for folder in media_browser.load_folders(media_type) if folder.enabled)
+        except Exception:
+            continue
+    return roots
+
+
+def _is_path_inside_allowed_media_root(path: Path) -> bool:
+    path_str = str(path)
+    for root in _allowed_media_roots():
+        root_str = str(root)
+        try:
+            if os.path.commonpath((root_str, path_str)) == root_str:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def thumbnail_cache_path(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE, privacy_mode: bool = False) -> Path:

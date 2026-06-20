@@ -36,11 +36,20 @@ UI-only, backend-only, or cross-layer; owns shared contract changes; delegates
 focused worker threads; performs final integration review; and runs final
 validation.
 
-- UI-only work: assign a UI worker with frontend context and JavaScript tests.
-- Backend-only work: assign a backend worker with backend context and Python
-  tests.
-- Cross-layer work: define the shared contract change first, then split UI and
-  backend work against that contract.
+Worker delegation is mandatory for implementation work, including small or
+single-file changes. Do not treat narrow scope as a reason to skip the worker
+step. If the worker tools are unavailable or the user explicitly asks for
+single-threaded execution, state that before making changes and include the
+reason in the final response.
+
+- UI-only implementation: assign a UI worker with frontend context and
+  JavaScript tests before editing.
+- Backend-only implementation: assign a backend worker with backend context and
+  Python tests before editing.
+- Cross-layer implementation: define the shared contract change first, then
+  split UI and backend work against that contract before editing.
+- Advice-only, review-only, or planning-only turns do not need a worker unless
+  they become implementation work.
 
 Backend workers load backend paths, Python tests, and only the minimum shared
 contract files needed for integration. UI workers load frontend paths,
