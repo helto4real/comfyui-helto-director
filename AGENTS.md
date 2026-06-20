@@ -36,13 +36,17 @@ UI-only, backend-only, or cross-layer; owns shared contract changes; delegates
 focused worker threads; performs final integration review; and runs final
 validation.
 
-Worker delegation is for meaningful implementation slices, not ceremony. The
-main thread may make tightly scoped edits directly when delegation would add
-coordination noise, especially for docs-only edits, test expectation updates,
-one-line fixes, or follow-up corrections to work it just integrated. If worker
-tools are unavailable, or the user explicitly asks for single-threaded
-execution, state that before making implementation changes and include the
-reason in the final response.
+Worker delegation is the default for meaningful implementation slices. Do not
+treat worker use as something that requires the user to explicitly ask for
+delegation; the user override goes the other direction. If the user explicitly
+asks not to delegate, asks for single-threaded execution, or worker tools are
+unavailable, the main thread may implement directly and must state the reason
+before making implementation changes and in the final response.
+
+Delegation is still not ceremony. The main thread may make tightly scoped edits
+directly when delegation would add coordination noise, especially for docs-only
+edits, test expectation updates, one-line fixes, or follow-up corrections to
+work it just integrated.
 
 Main thread responsibilities:
 
