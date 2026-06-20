@@ -212,6 +212,7 @@ def build_wan_segmented_executor_outputs(
                 "sampling": sampling_debug,
                 "bernini": wan_debug.get("bernini"),
                 "fmlf_advanced_i2v": wan_debug.get("fmlf_advanced_i2v"),
+                "loras": wan_debug.get("loras") or runtime_debug.get("loras") if isinstance(runtime_debug, dict) else {},
                 "visual_conditioning": {
                     "requested_keyframes": visual_debug.get("requested_keyframes") or [],
                     "applied_keyframes": visual_debug.get("applied_keyframes") or [],
@@ -243,6 +244,7 @@ def build_wan_segmented_executor_outputs(
                 "target_frame_count": int(plan.get("resolved_output", {}).get("frame_count") or 1),
                 "audio_policy": "global_full_mix",
             },
+            "loras": segment_debug[0].get("loras", {}) if segment_debug else {},
             "diagnostics": [
                 *(segmented.get("diagnostics") or []),
                 *audio_diagnostics,

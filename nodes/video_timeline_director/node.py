@@ -2,6 +2,7 @@ from comfy_api.latest import io
 
 from .backend import build_director_outputs
 from ...shared.contracts.socket_types import TIMELINE_VALIDATION, VIDEO_TIMELINE
+from ...shared.contracts.socket_types import HELTO_LORA_CONFIG
 from ...shared.contracts.video_timeline import (
     DEFAULT_ASPECT_RATIO,
     DEFAULT_DURATION_SECONDS,
@@ -77,6 +78,18 @@ class VideoTimelineDirector(io.ComfyNode):
                     advanced=True,
                     extra_dict={"hidden": True},
                 ),
+                HELTO_LORA_CONFIG.Input(
+                    "lora_config_hi",
+                    display_name="lora_config_hi",
+                    optional=True,
+                    tooltip="Optional high-noise or primary timeline LoRA stack.",
+                ),
+                HELTO_LORA_CONFIG.Input(
+                    "lora_config_low",
+                    display_name="lora_config_low",
+                    optional=True,
+                    tooltip="Optional low-noise timeline LoRA stack. LTX accepts one of the hi/low inputs, not both.",
+                ),
             ],
             outputs=[
                 VIDEO_TIMELINE.Output(
@@ -103,6 +116,8 @@ class VideoTimelineDirector(io.ComfyNode):
         orientation: str = DEFAULT_ORIENTATION,
         quality_preset: str = DEFAULT_QUALITY_PRESET,
         video_timeline_json: str = "",
+        lora_config_hi: dict | None = None,
+        lora_config_low: dict | None = None,
     ) -> io.NodeOutput:
         video_timeline, timeline_validation = build_director_outputs(
             video_timeline_json=video_timeline_json,
@@ -111,5 +126,7 @@ class VideoTimelineDirector(io.ComfyNode):
             aspect_ratio=aspect_ratio,
             orientation=orientation,
             quality_preset=quality_preset,
+            lora_config_hi=lora_config_hi,
+            lora_config_low=lora_config_low,
         )
         return io.NodeOutput(video_timeline, timeline_validation, float(video_timeline["project"]["frame_rate"]))

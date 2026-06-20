@@ -37,6 +37,7 @@ export function normalizeVideoTimeline(value) {
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
   normalizeProjectMetadata(normalized);
+  normalizeProjectModelLoras(normalized);
   normalizePrivacy(normalized);
   normalizeUiStateViewRange(normalized);
   return normalized;
@@ -94,6 +95,41 @@ function normalizeProjectMetadata(timeline) {
     : {};
   project.metadata.character_references_enabled = project.metadata.character_references_enabled !== false;
   project.metadata.character_references = normalizeCharacterReferences(project.metadata.character_references);
+}
+
+function normalizeProjectModelLoras(timeline) {
+  const project = timeline.project ??= {};
+  const modelLoras = project.model_loras && typeof project.model_loras === "object" && !Array.isArray(project.model_loras)
+    ? project.model_loras
+    : {};
+  project.model_loras = {
+    lora_config_hi: normalizeTimelineLoraConfig(modelLoras.lora_config_hi),
+    lora_config_low: normalizeTimelineLoraConfig(modelLoras.lora_config_low),
+  };
+}
+
+function normalizeTimelineLoraConfig(config) {
+  const source = config && typeof config === "object" && !Array.isArray(config) ? config : {};
+  const ui = source.ui && typeof source.ui === "object" && !Array.isArray(source.ui) ? source.ui : {};
+  const loras = Array.isArray(source.loras)
+    ? source.loras
+      .filter((lora) => lora && typeof lora === "object" && !Array.isArray(lora) && lora.enabled !== false && lora.name)
+      .map((lora) => ({
+        enabled: true,
+        name: String(lora.name),
+        strength_model: Number(lora.strength_model ?? lora.strength ?? 1),
+        strength_clip: Number(lora.strength_clip ?? lora.strength_model ?? lora.strength ?? 1),
+      }))
+      .filter((lora) => Number.isFinite(lora.strength_model) && Number.isFinite(lora.strength_clip) && (lora.strength_model !== 0 || lora.strength_clip !== 0))
+    : [];
+  return {
+    version: 1,
+    loras,
+    ui: {
+      show_strengths: String(source.show_strengths || ui.show_strengths || "single"),
+      match: String(source.match || ui.match || ""),
+    },
+  };
 }
 
 function normalizeSection(section, index) {

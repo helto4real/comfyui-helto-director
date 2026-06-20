@@ -14,7 +14,9 @@ from PIL import Image
 from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_IMAGE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
+from shared.wan.runtime import runtime as wan_runtime
 from shared.wan.runtime.capabilities import select_keyframes_for_capabilities
+from shared.lora import config as lora_config_module
 
 
 def test_runtime_schema_uses_dual_model_sockets():
@@ -114,6 +116,47 @@ def test_comfyui_core_patches_both_models_when_connected(tmp_path):
         "high_noise_model": "patched",
         "low_noise_model": "patched",
     }
+
+
+def test_wan_runtime_applies_hi_low_loras_to_models_and_not_clip(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_apply_model_lora(*, model, lora_config):
+        calls.append((model.label, [row["name"] for row in lora_config["loras"]]))
+        return FakeModel(f"{model.label}+{lora_config['loras'][0]['name']}"), list(lora_config["loras"])
+
+    monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["hi.safetensors", "low.safetensors"])
+    monkeypatch.setattr(wan_runtime, "apply_lora_config_model_only", fake_apply_model_lora)
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=2),
+        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
+    )
+    plan["project"]["model_loras"]["lora_config_hi"] = {
+        "version": 1,
+        "loras": [{"enabled": True, "name": "hi.safetensors", "strength_model": 0.9, "strength_clip": 0.2}],
+        "ui": {"show_strengths": "separate", "match": ""},
+    }
+    plan["project"]["model_loras"]["lora_config_low"] = {
+        "version": 1,
+        "loras": [{"enabled": True, "name": "low.safetensors", "strength_model": 0.4, "strength_clip": 0.1}],
+        "ui": {"show_strengths": "separate", "match": ""},
+    }
+    clip = FakeClip()
+
+    high_model, low_model, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel("high"),
+        low_noise_model=FakeModel("low"),
+        clip=clip,
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert calls == [("high", ["hi.safetensors"]), ("low", ["low.safetensors"])]
+    assert high_model.label == "high+hi.safetensors"
+    assert low_model.label == "low+low.safetensors"
+    assert not hasattr(clip, "lora_applied")
+    assert runtime_debug["loras"]["lora_config_hi"][0]["name"] == "hi.safetensors"
+    assert runtime_debug["loras"]["lora_config_low"][0]["name"] == "low.safetensors"
 
 
 def test_comfyui_core_patches_one_model_and_warns_when_other_missing(tmp_path):

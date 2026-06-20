@@ -15,6 +15,7 @@ from .media import build_guide_data, source_video_outputs
 from .prompt_relay import encode_prompt_relay
 from .patches import supports_ltx_native_audio
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
+from ...lora import apply_lora_config, normalize_lora_config
 
 
 def build_ltx_runtime_outputs(
@@ -36,6 +37,12 @@ def build_ltx_runtime_outputs(
     status_reporter.report("timeline.prepare", "LTX Runtime: preparing latent")
     plan = deepcopy(ltx_timeline_plan)
     _validate_plan(plan)
+    lora_config, lora_diagnostics = _resolve_ltx_lora_config(plan)
+    if lora_config["loras"]:
+        status_reporter.report("timeline.loras", "LTX Runtime: applying timeline LoRAs")
+        model, clip, applied_loras = apply_lora_config(model=model, clip=clip, lora_config=lora_config)
+    else:
+        applied_loras = []
     width = int(plan["resolved_output"].get("width") or 768)
     height = int(plan["resolved_output"].get("height") or 512)
     frame_count = int(plan["resolved_output"].get("frame_count") or 1)
@@ -110,9 +117,11 @@ def build_ltx_runtime_outputs(
             *audio_diagnostics,
             *audio_latent_diagnostics,
             *_advanced_input_diagnostics(identity_anchor, sigmas),
+            *lora_diagnostics,
         ],
         video_latent,
         combined_audio,
+        applied_loras,
         status_reporter.snapshot(),
     )
     if complete_status:
@@ -287,7 +296,25 @@ def _resolve_negative_conditioning(negative, positive):
     return negative if negative is not None else zero_out_conditioning(positive)
 
 
-def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio, status_events=None):
+def _resolve_ltx_lora_config(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    model_loras = plan.get("project", {}).get("model_loras", {})
+    if not isinstance(model_loras, dict):
+        model_loras = {}
+    hi = normalize_lora_config(model_loras.get("lora_config_hi"))
+    low = normalize_lora_config(model_loras.get("lora_config_low"))
+    if hi["loras"] and low["loras"]:
+        raise ValueError(
+            "LTX timeline runtime accepts only one timeline LoRA config. "
+            "Connect either lora_config_hi or lora_config_low, not both."
+        )
+    if hi["loras"]:
+        return hi, ["LTX runtime applied timeline LoRAs from lora_config_hi."]
+    if low["loras"]:
+        return low, ["LTX runtime applied timeline LoRAs from lora_config_low."]
+    return hi, []
+
+
+def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio, applied_loras=None, status_events=None):
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     return {
         "type": "DEBUG_INFO",
@@ -300,7 +327,9 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
             "audio_clip_count": len(plan.get("audio_plan", [])),
             "video_latent_shape": tuple(video_latent["samples"].shape),
             "combined_audio_shape": tuple(combined_audio["waveform"].shape),
+            "lora_count": len(applied_loras or []),
         },
+        "loras": list(applied_loras or []),
         "prompt_relay": prompt_debug,
         "guide_data": {
             "insert_frames": list(guide_data.get("insert_frames", [])),

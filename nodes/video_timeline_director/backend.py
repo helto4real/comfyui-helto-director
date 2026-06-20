@@ -12,6 +12,7 @@ from ...shared.contracts.validation import (
 from ...shared.timeline import create_default_video_timeline, normalize_video_timeline
 from ...shared.timeline.validate import validate_video_timeline
 from ...shared.privacy import decrypt_state, is_encrypted_payload
+from ...shared.lora.config import normalize_lora_config
 
 
 def build_director_outputs(
@@ -21,6 +22,8 @@ def build_director_outputs(
     aspect_ratio: str,
     orientation: str,
     quality_preset: str,
+    lora_config_hi: dict[str, Any] | None = None,
+    lora_config_low: dict[str, Any] | None = None,
 ) -> tuple[dict, dict]:
     timeline, parse_validation = _parse_timeline_json(video_timeline_json)
     apply_visible_project_fields(
@@ -31,6 +34,11 @@ def build_director_outputs(
         orientation=orientation,
         quality_preset=quality_preset,
     )
+    apply_connected_lora_configs(
+        timeline,
+        lora_config_hi=lora_config_hi,
+        lora_config_low=lora_config_low,
+    )
     timeline = normalize_video_timeline(timeline)
     validation = merge_validation_results(
         parse_validation,
@@ -38,6 +46,21 @@ def build_director_outputs(
     )
     timeline["validation"] = validation
     return timeline, validation
+
+
+def apply_connected_lora_configs(
+    timeline: dict[str, Any],
+    *,
+    lora_config_hi: dict[str, Any] | None = None,
+    lora_config_low: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    project = timeline.setdefault("project", {})
+    model_loras = project.setdefault("model_loras", {})
+    if lora_config_hi is not None:
+        model_loras["lora_config_hi"] = normalize_lora_config(lora_config_hi)
+    if lora_config_low is not None:
+        model_loras["lora_config_low"] = normalize_lora_config(lora_config_low)
+    return timeline
 
 
 def apply_visible_project_fields(

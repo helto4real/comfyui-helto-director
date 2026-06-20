@@ -70,6 +70,18 @@ def create_default_video_timeline() -> dict:
                 "character_references_enabled": True,
                 "character_references": [],
             },
+            "model_loras": {
+                "lora_config_hi": {
+                    "version": 1,
+                    "loras": [],
+                    "ui": {"show_strengths": "single", "match": ""},
+                },
+                "lora_config_low": {
+                    "version": 1,
+                    "loras": [],
+                    "ui": {"show_strengths": "single", "match": ""},
+                },
+            },
         },
         "ui_state": {
             "timeline_display_mode": TIMELINE_DISPLAY_MODE_DEFAULT,

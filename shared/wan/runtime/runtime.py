@@ -23,6 +23,7 @@ from .fmlf import build_fmlf_advanced_i2v_payload
 from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
 from .visual import apply_comfy_core_visual_keyframes
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
+from ...lora import apply_lora_config_model_only, normalize_lora_config
 
 
 def build_wan_runtime_outputs(
@@ -73,6 +74,10 @@ def build_wan_runtime_outputs(
     validation_entries = [_runtime_entry(entry) for entry in backend_entries]
     validation_entries.extend(_visual_validation_entries(visual, resolved_backend))
     diagnostics: list[str] = []
+    applied_loras: dict[str, list[dict[str, Any]]] = {
+        "lora_config_hi": [],
+        "lora_config_low": [],
+    }
     media_decisions: list[dict[str, Any]] = []
     prompt_debug: dict[str, Any] = {"status": "not_built", "patched": False}
     model_patch_status: dict[str, Any] = {
@@ -120,6 +125,7 @@ def build_wan_runtime_outputs(
             model_patch_status=model_patch_status,
             status_events=status_reporter.snapshot(),
         )
+        runtime_debug["loras"] = applied_loras
         if complete_status:
             status_reporter.done("WAN Runtime: ready")
             runtime_debug["status_events"] = status_reporter.snapshot()
@@ -143,12 +149,18 @@ def build_wan_runtime_outputs(
 
     runtime_high_model = high_noise_model
     runtime_low_model = low_noise_model
+    runtime_high_model, runtime_low_model, applied_loras, lora_diagnostics = _apply_wan_timeline_loras(
+        plan,
+        high_noise_model=runtime_high_model,
+        low_noise_model=runtime_low_model,
+    )
+    diagnostics.extend(lora_diagnostics)
     status_reporter.report("timeline.prompt", "WAN Runtime: building prompt relay")
     prompt_debug, positive, runtime_high_model, runtime_low_model = _build_prompt_payload_and_patch_models(
         clip,
         prompt_relay,
-        high_noise_model,
-        low_noise_model,
+        runtime_high_model,
+        runtime_low_model,
         model_patch_status,
         validation_entries,
     )
@@ -269,6 +281,7 @@ def build_wan_runtime_outputs(
         status_events=status_reporter.snapshot(),
         fmlf_debug=fmlf_debug,
     )
+    runtime_debug["loras"] = applied_loras
     if complete_status:
         status_reporter.done("WAN Runtime: ready")
         runtime_debug["status_events"] = status_reporter.snapshot()
@@ -628,6 +641,43 @@ def _plain_prompt(prompt_relay: dict[str, Any]) -> str:
 
 def _resolve_negative_conditioning(negative, positive):
     return negative if negative is not None else zero_out_conditioning(positive)
+
+
+def _apply_wan_timeline_loras(
+    plan: dict[str, Any],
+    *,
+    high_noise_model=None,
+    low_noise_model=None,
+) -> tuple[Any, Any, dict[str, list[dict[str, Any]]], list[str]]:
+    model_loras = plan.get("project", {}).get("model_loras", {})
+    if not isinstance(model_loras, dict):
+        model_loras = {}
+    hi_config = normalize_lora_config(model_loras.get("lora_config_hi"))
+    low_config = normalize_lora_config(model_loras.get("lora_config_low"))
+    applied = {
+        "lora_config_hi": [],
+        "lora_config_low": [],
+    }
+    diagnostics: list[str] = []
+    if hi_config["loras"]:
+        if high_noise_model is None:
+            diagnostics.append("Timeline lora_config_hi is configured, but high_noise_model is not connected.")
+        else:
+            high_noise_model, applied["lora_config_hi"] = apply_lora_config_model_only(
+                model=high_noise_model,
+                lora_config=hi_config,
+            )
+            diagnostics.append("WAN runtime applied timeline LoRAs from lora_config_hi to high_noise_model.")
+    if low_config["loras"]:
+        if low_noise_model is None:
+            diagnostics.append("Timeline lora_config_low is configured, but low_noise_model is not connected.")
+        else:
+            low_noise_model, applied["lora_config_low"] = apply_lora_config_model_only(
+                model=low_noise_model,
+                lora_config=low_config,
+            )
+            diagnostics.append("WAN runtime applied timeline LoRAs from lora_config_low to low_noise_model.")
+    return high_noise_model, low_noise_model, applied, diagnostics
 
 
 def _call_or_value(obj, name: str, fallback):

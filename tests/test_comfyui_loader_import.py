@@ -73,3 +73,10 @@ def test_comfyui_style_loader_includes_phase11_wan_nodes():
     assert "HeltoWAN22TimelineConfig" in node_ids
     assert "HeltoWAN22TimelinePlanner" in node_ids
     assert "HeltoWAN22TimelineRuntime" in node_ids
+
+
+def test_classic_loader_mapping_includes_timeline_lora_node():
+    module = load_nodepack_like_comfyui()
+
+    assert "HeltoTimelineLoraConfiguration" in module.NODE_CLASS_MAPPINGS
+    assert module.NODE_CLASS_MAPPINGS["HeltoTimelineLoraConfiguration"].RETURN_TYPES == ("HELTO_LORA_CONFIG",)

@@ -146,6 +146,18 @@ export function createDefaultVideoTimeline() {
         character_references_enabled: true,
         character_references: [],
       },
+      model_loras: {
+        lora_config_hi: {
+          version: 1,
+          loras: [],
+          ui: { show_strengths: "single", match: "" },
+        },
+        lora_config_low: {
+          version: 1,
+          loras: [],
+          ui: { show_strengths: "single", match: "" },
+        },
+      },
     },
     ui_state: {
       timeline_display_mode: "Sections",

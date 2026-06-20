@@ -24,6 +24,7 @@ from ..contracts.video_timeline import (
 from .defaults import create_default_video_timeline
 from .migration import migrate_video_timeline
 from .references import normalize_character_references
+from ..lora.config import normalize_lora_config
 
 
 def normalize_video_timeline(timeline: Any) -> dict:
@@ -37,6 +38,7 @@ def normalize_video_timeline(timeline: Any) -> dict:
         normalized.get("audio_tracks")
     )
     _normalize_project_metadata(normalized)
+    _normalize_project_model_loras(normalized)
     _normalize_privacy(normalized)
     _normalize_ui_state_view_range(normalized)
     return normalized
@@ -77,6 +79,17 @@ def _normalize_project_metadata(timeline: dict) -> None:
         metadata.get("character_references")
     )
     project["metadata"] = metadata
+
+
+def _normalize_project_model_loras(timeline: dict) -> None:
+    project = timeline.setdefault("project", {})
+    model_loras = project.get("model_loras")
+    if not isinstance(model_loras, dict):
+        model_loras = {}
+    project["model_loras"] = {
+        "lora_config_hi": normalize_lora_config(model_loras.get("lora_config_hi")),
+        "lora_config_low": normalize_lora_config(model_loras.get("lora_config_low")),
+    }
 
 
 def _fill_missing(value: Any, defaults: Any) -> Any:

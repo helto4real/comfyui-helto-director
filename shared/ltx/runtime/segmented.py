@@ -255,6 +255,7 @@ def build_ltx_segmented_executor_outputs(
                 "character_reference_labels_guided": reference_guidance_debug["character_reference_labels_guided"],
                 "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
+                "loras": runtime_debug.get("loras", []) if isinstance(runtime_debug, dict) else [],
                 "sampling": sampling_debug,
                 "native_audio": native_audio_debug,
             })
@@ -314,6 +315,7 @@ def build_ltx_segmented_executor_outputs(
             },
             "sampling": sampling_debug,
             "native_audio": native_audio_debug,
+            "loras": segment_debug[0].get("loras", []) if segment_debug else [],
             "diagnostics": [
                 *(segmented.get("diagnostics") or []),
                 *sampling_debug.get("diagnostics", []),

@@ -44,6 +44,9 @@ WANTimelineRuntime = importlib.import_module(
 WANTimelineSegmentedExecutor = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.wan_timeline_runtime.node"
 ).WANTimelineSegmentedExecutor
+HeltoTimelineLoraConfiguration = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.timeline_lora_configuration.node"
+).HeltoTimelineLoraConfiguration
 _identity_module = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_identity.node"
 )
@@ -68,12 +71,16 @@ register_privacy_routes = importlib.import_module(
 register_timeline_library_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.timeline_library"
 ).register_timeline_library_routes
+register_lora_info_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.lora_info"
+).register_lora_info_routes
 
 register_privacy_routes()
 register_media_cache_routes()
 register_media_browser_routes()
 register_prompt_optimizer_routes()
 register_timeline_library_routes()
+register_lora_info_routes()
 
 
 WEB_DIRECTORY = "./web"
@@ -89,6 +96,7 @@ NODE_CLASS_MAPPINGS = {
     "HeltoWAN22TimelinePlanner": WANTimelinePlanner,
     "HeltoWAN22TimelineRuntime": WANTimelineRuntime,
     "HeltoWAN22TimelineSegmentedExecutor": WANTimelineSegmentedExecutor,
+    "HeltoTimelineLoraConfiguration": HeltoTimelineLoraConfiguration,
     "HeltoLTX23TimelineCropReferenceTail": LTXTimelineCropReferenceTail,
     "HeltoLTX23TimelineReferenceImageSelector": LTXTimelineReferenceImageSelector,
     "HeltoLTX23TimelineIdentityAnchorLatentAware": LTXTimelineIdentityAnchorLatentAware,
@@ -107,6 +115,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoWAN22TimelinePlanner": "WAN 2.2 Timeline Planner",
     "HeltoWAN22TimelineRuntime": "WAN 2.2 Timeline Runtime",
     "HeltoWAN22TimelineSegmentedExecutor": "WAN 2.2 Timeline Segmented Executor",
+    "HeltoTimelineLoraConfiguration": "Timeline LoRA Configuration",
     "HeltoLTX23TimelineCropReferenceTail": "LTX 2.3 Timeline Crop Reference Tail",
     "HeltoLTX23TimelineReferenceImageSelector": "LTX 2.3 Timeline Reference Image Selector",
     "HeltoLTX23TimelineIdentityAnchorLatentAware": "LTX 2.3 Timeline Identity Anchor: Latent Aware",
@@ -163,4 +172,6 @@ __all__ = [
     "register_privacy_routes",
     "register_prompt_optimizer_routes",
     "register_timeline_library_routes",
+    "register_lora_info_routes",
+    "HeltoTimelineLoraConfiguration",
 ]

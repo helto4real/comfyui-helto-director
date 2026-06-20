@@ -33,6 +33,8 @@ from shared.contracts.video_timeline import (
     VIDEO_TIMING_USE_SOURCE_TIMING,
 )
 from shared.ltx import build_ltx_runtime_outputs, build_ltx_timeline_plan, create_ltx_timeline_config
+from shared.ltx.runtime import runtime as ltx_runtime
+from shared.lora import config as lora_config_module
 from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline import create_default_video_timeline
@@ -685,6 +687,48 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
     assert runtime_debug["summary"]["applied_guides"] == 0
     assert runtime_debug["summary"]["audio_clip_count"] == 0
     assert any("No audio_vae connected" in entry for entry in runtime_debug["diagnostics"])
+
+
+def test_ltx_runtime_applies_one_timeline_lora_config(monkeypatch):
+    calls = []
+
+    def fake_apply_lora_config(*, model, clip, lora_config):
+        calls.append(lora_config)
+        return model, clip, [{"name": "style.safetensors", "strength_model": 0.8, "strength_clip": 0.8}]
+
+    monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["style.safetensors"])
+    monkeypatch.setattr(ltx_runtime, "apply_lora_config", fake_apply_lora_config)
+    plan = _text_plan()
+    plan["project"]["model_loras"]["lora_config_hi"] = {
+        "version": 1,
+        "loras": [{"enabled": True, "name": "style.safetensors", "strength_model": 0.8, "strength_clip": 0.8}],
+        "ui": {"show_strengths": "single", "match": ""},
+    }
+
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert calls == [plan["project"]["model_loras"]["lora_config_hi"]]
+    assert runtime_debug["loras"] == [{"name": "style.safetensors", "strength_model": 0.8, "strength_clip": 0.8}]
+    assert runtime_debug["summary"]["lora_count"] == 1
+
+
+def test_ltx_runtime_errors_when_both_timeline_lora_configs_are_populated(monkeypatch):
+    monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["hi.safetensors", "low.safetensors"])
+    monkeypatch.setattr(ltx_runtime, "apply_lora_config", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not apply")))
+    plan = _text_plan()
+    plan["project"]["model_loras"]["lora_config_hi"] = {
+        "version": 1,
+        "loras": [{"enabled": True, "name": "hi.safetensors", "strength_model": 1.0, "strength_clip": 1.0}],
+        "ui": {"show_strengths": "single", "match": ""},
+    }
+    plan["project"]["model_loras"]["lora_config_low"] = {
+        "version": 1,
+        "loras": [{"enabled": True, "name": "low.safetensors", "strength_model": 1.0, "strength_clip": 1.0}],
+        "ui": {"show_strengths": "single", "match": ""},
+    }
+
+    with pytest.raises(ValueError, match="Connect either lora_config_hi or lora_config_low"):
+        build_ltx_runtime_outputs(**_runtime_args(plan))
 
 
 def test_planner_validation_errors_fail_clearly():
