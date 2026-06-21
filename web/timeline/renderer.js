@@ -53,7 +53,6 @@ import {
   clampTimelineViewRange,
   durationToPixels,
   getProjectWholeSeconds,
-  getPixelsPerSecond,
   getTimelineViewportHeight,
   getTimelineViewRange,
   getTimelineWidth,
@@ -1302,9 +1301,16 @@ export class TimelineRenderer {
     this.focusTimelineItem(dragState.itemId, target);
     this.controller.beginTimelineGesture();
     const moveTarget = target?.ownerDocument ?? this.container.ownerDocument ?? globalThis.document;
+    const timeContainer = target?.closest?.(".htd-track") ?? this.container.querySelector?.(".htd-ruler") ?? this.container;
+    const pointerTime = timeFromClientX(event.clientX, timeContainer, this.controller.timeline, this.viewportWidth);
+    const pointerEdgeTime = dragState.mode === "start" || dragState.mode === "audio-start"
+      ? Number(dragState.startStart)
+      : Number(dragState.startEnd);
     this.drag = {
       ...dragState,
-      startX: event.clientX,
+      timeContainer,
+      pointerTimeOffset: pointerTime - Number(dragState.startStart),
+      pointerEdgeTimeOffset: pointerTime - pointerEdgeTime,
       moveTarget,
       captureTarget: target,
     };
@@ -1335,21 +1341,22 @@ export class TimelineRenderer {
       return;
     }
     const timeline = this.controller.timeline;
-    const deltaSeconds = (Number(event.clientX) - Number(this.drag.startX)) / getPixelsPerSecond(timeline, this.viewportWidth);
+    const pointerTime = this.dragTimeFromClientX(event.clientX);
     if (this.drag.mode === "move") {
-      moveSection(timeline, this.drag.itemId, this.drag.startStart + deltaSeconds);
+      moveSection(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset);
     } else if (this.drag.mode === "start") {
-      resizeSection(timeline, this.drag.itemId, "start", this.drag.startStart + deltaSeconds);
+      resizeSection(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset);
     } else if (this.drag.mode === "audio-move") {
-      moveAudioClip(timeline, this.drag.itemId, this.drag.startStart + deltaSeconds);
+      moveAudioClip(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset);
     } else if (this.drag.mode === "audio-start") {
-      resizeAudioClip(timeline, this.drag.itemId, "start", this.drag.startStart + deltaSeconds);
+      resizeAudioClip(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset);
     } else if (this.drag.mode === "audio-end") {
-      resizeAudioClip(timeline, this.drag.itemId, "end", this.drag.startEnd + deltaSeconds);
+      resizeAudioClip(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset);
     } else {
-      resizeSection(timeline, this.drag.itemId, "end", this.drag.startEnd + deltaSeconds);
+      resizeSection(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset);
     }
     this.render(timeline);
+    this.drag.timeContainer = this.findDragTimeContainer(this.drag.itemId) ?? this.drag.timeContainer;
   };
 
   onPointerUp = (event) => {
@@ -1371,6 +1378,17 @@ export class TimelineRenderer {
     const target = fallbackTarget ?? Array.from(this.container.querySelectorAll?.(".htd-item") ?? [])
       .find((item) => item.dataset?.itemId === itemId);
     target?.focus?.({ preventScroll: true });
+  }
+
+  dragTimeFromClientX(clientX) {
+    const timeContainer = this.drag?.timeContainer ?? this.findDragTimeContainer(this.drag?.itemId) ?? this.container;
+    return timeFromClientX(clientX, timeContainer, this.controller.timeline, this.viewportWidth);
+  }
+
+  findDragTimeContainer(itemId) {
+    const item = Array.from(this.container.querySelectorAll?.(".htd-item") ?? [])
+      .find((candidate) => candidate.dataset?.itemId === itemId);
+    return item?.closest?.(".htd-track") ?? null;
   }
 
   showItemContextMenu(event, itemId, itemType) {

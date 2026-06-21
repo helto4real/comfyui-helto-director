@@ -173,10 +173,24 @@ def build_wan_segmented_executor_outputs(
             )
             next_previous_frame_count = max(next_tail_count, configured_seam_blend_frames)
             previous_images = previous_tail(visible_images.detach().cpu(), next_previous_frame_count)
-            previous_latent = (
-                _previous_latent_tail(sampled, next_previous_frame_count)
+            previous_latent, previous_latent_debug = (
+                _previous_latent_tail_from_visible_segment(
+                    sampled,
+                    segment,
+                    next_previous_frame_count,
+                    apply_svi_last_slot_guard=_uses_fmlf_svi(segment_plan),
+                )
                 if index + 1 < len(segments)
-                else None
+                else (
+                    None,
+                    _previous_latent_debug(
+                        sampled,
+                        segment,
+                        0,
+                        apply_svi_last_slot_guard=False,
+                        handoff_enabled=False,
+                    ),
+                )
             )
             status_reporter.report(
                 "timeline.spill",
@@ -200,6 +214,7 @@ def build_wan_segmented_executor_outputs(
             segment_debug.append({
                 "id": segment.get("id"),
                 "seed": segment_seed_value,
+                "source_section_ids": list(segment.get("source_section_ids") or []),
                 "generation_frame_count": segment.get("generation_frame_count"),
                 "visible_frame_count": segment.get("visible_frame_count"),
                 "trim_leading_frames": segment.get("trim_leading_frames"),
@@ -208,6 +223,9 @@ def build_wan_segmented_executor_outputs(
                 "continuity": segment.get("continuity"),
                 "actual_tail_frame_count": int(tail.shape[0]) if tail is not None else 0,
                 "actual_tail_shape": [int(dim) for dim in tail.shape] if tail is not None else [],
+                "previous_latent_handoff": previous_latent_debug,
+                "local_sections": _segment_debug_sections(segment_plan),
+                "prompt_relay": _segment_debug_prompt_relay(segment_plan),
                 "seam_blend": seam_blend_debug,
                 "sampling": sampling_debug,
                 "bernini": wan_debug.get("bernini"),
@@ -247,6 +265,7 @@ def build_wan_segmented_executor_outputs(
             "loras": segment_debug[0].get("loras", {}) if segment_debug else {},
             "diagnostics": [
                 *(segmented.get("diagnostics") or []),
+                _segment_count_diagnostic(plan, segments),
                 *audio_diagnostics,
             ],
         }
@@ -415,13 +434,186 @@ def _split_phase_conditioning(positive):
     return positive, positive, positive, False
 
 
-def _previous_latent_tail(latent: dict[str, Any], frame_count: int) -> dict[str, Any] | None:
+def _previous_latent_tail_from_visible_segment(
+    latent: dict[str, Any],
+    segment: dict[str, Any],
+    frame_count: int,
+    *,
+    apply_svi_last_slot_guard: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     samples = latent.get("samples") if isinstance(latent, dict) else None
+    debug = _previous_latent_debug(
+        latent,
+        segment,
+        frame_count,
+        apply_svi_last_slot_guard=apply_svi_last_slot_guard,
+        handoff_enabled=True,
+    )
     if not torch.is_tensor(samples) or int(samples.shape[2]) <= 0:
-        return None
-    latent_frames = ((max(1, int(frame_count)) - 1) // 4) + 1
-    tail = samples[:, :, -min(int(samples.shape[2]), latent_frames) :].detach().cpu().clone()
-    return {"samples": tail}
+        debug["reason"] = "missing_samples"
+        return None, debug
+
+    total_latent_slots = int(samples.shape[2])
+    visible_frame_start_index, visible_frame_end_index = _visible_decoded_frame_range(segment)
+    first_visible_latent_slot = _latent_slot_for_frame(visible_frame_start_index)
+    last_visible_latent_slot = _latent_slot_for_frame(visible_frame_end_index)
+    visible_latent_slots = min(total_latent_slots, last_visible_latent_slot + 1)
+    continuation_samples = samples[:, :, :visible_latent_slots]
+    dropped_nonvisible = max(0, total_latent_slots - visible_latent_slots)
+    debug["visible_frame_start_index"] = int(visible_frame_start_index)
+    debug["visible_frame_end_index"] = int(visible_frame_end_index)
+    debug["first_visible_latent_slot"] = int(first_visible_latent_slot)
+    debug["last_visible_latent_slot"] = int(last_visible_latent_slot)
+    debug["visible_generation_frame_count"] = int(visible_frame_end_index + 1)
+    debug["visible_generation_latent_slot_count"] = int(visible_latent_slots)
+    debug["visible_continuation_latent_shape"] = _tensor_shape(continuation_samples)
+    debug["dropped_fully_nonvisible_trailing_latent_slots"] = dropped_nonvisible
+    debug["dropped_trailing_latent_slots"] = dropped_nonvisible
+
+    if apply_svi_last_slot_guard and int(continuation_samples.shape[2]) > 1:
+        final_slot_index = int(continuation_samples.shape[2]) - 1
+        if final_slot_index <= last_visible_latent_slot:
+            debug["svi_last_slot_guard_skip_reason"] = "final_slot_overlaps_visible_frames"
+        else:
+            continuation_samples = continuation_samples[:, :, :-1]
+            debug["svi_last_slot_guard_applied"] = True
+            debug["svi_last_slot_guard_dropped_slots"] = 1
+            debug["guarded_continuation_latent_shape"] = _tensor_shape(continuation_samples)
+    elif apply_svi_last_slot_guard:
+        debug["svi_last_slot_guard_skip_reason"] = "minimum_one_latent_slot"
+
+    tail_latent_slots = _latent_chunks_for_frames(frame_count)
+    available_latent_slots = int(continuation_samples.shape[2])
+    if available_latent_slots <= 0:
+        debug["reason"] = "empty_visible_continuation"
+        return None, debug
+    tail_slot_count = min(available_latent_slots, tail_latent_slots)
+    tail = continuation_samples[:, :, -tail_slot_count:].detach().cpu().clone()
+    debug["previous_latent_shape"] = _tensor_shape(tail)
+    debug["previous_latent_slot_count"] = int(tail_slot_count)
+    return {"samples": tail}, debug
+
+
+def _previous_latent_debug(
+    latent: dict[str, Any],
+    segment: dict[str, Any],
+    frame_count: int,
+    *,
+    apply_svi_last_slot_guard: bool,
+    handoff_enabled: bool,
+) -> dict[str, Any]:
+    samples = latent.get("samples") if isinstance(latent, dict) else None
+    return {
+        "handoff_enabled": bool(handoff_enabled),
+        "original_sampled_latent_shape": _tensor_shape(samples),
+        "requested_tail_frame_count": int(frame_count),
+        "requested_tail_latent_slot_count": _latent_chunks_for_frames(frame_count) if frame_count else 0,
+        "visible_frame_count": int(segment.get("visible_frame_count") or segment.get("frame_count") or 0),
+        "trim_leading_frames": int(segment.get("trim_leading_frames") or 0),
+        "trim_trailing_frames": int(segment.get("trim_trailing_frames") or 0),
+        "visible_frame_start_index": 0,
+        "visible_frame_end_index": 0,
+        "first_visible_latent_slot": 0,
+        "last_visible_latent_slot": 0,
+        "visible_generation_frame_count": 0,
+        "visible_generation_latent_slot_count": 0,
+        "visible_continuation_latent_shape": [],
+        "guarded_continuation_latent_shape": [],
+        "dropped_fully_nonvisible_trailing_latent_slots": 0,
+        "dropped_trailing_latent_slots": 0,
+        "svi_last_slot_guard_requested": bool(apply_svi_last_slot_guard),
+        "svi_last_slot_guard_applied": False,
+        "svi_last_slot_guard_dropped_slots": 0,
+        "svi_last_slot_guard_skip_reason": None,
+        "previous_latent_shape": [],
+        "previous_latent_slot_count": 0,
+    }
+
+
+def _uses_fmlf_svi(segment_plan: dict[str, Any]) -> bool:
+    config = segment_plan.get("model_specific", {}).get("wan", {}).get("config", {})
+    return (
+        str(config.get("runtime_backend_profile") or "") == "FMLF Advanced I2V"
+        and str(config.get("fmlf_continuation_mode") or "SVI") == "SVI"
+    )
+
+
+def _latent_chunks_for_frames(frame_count: int) -> int:
+    return ((max(1, int(frame_count)) - 1) // 4) + 1
+
+
+def _latent_slot_for_frame(frame_index: int) -> int:
+    frame = max(0, int(frame_index))
+    if frame == 0:
+        return 0
+    return ((frame - 1) // 4) + 1
+
+
+def _visible_decoded_frame_range(segment: dict[str, Any]) -> tuple[int, int]:
+    visible_frame_count = max(1, int(segment.get("visible_frame_count") or segment.get("frame_count") or 1))
+    trim_leading = max(0, int(segment.get("trim_leading_frames") or 0))
+    trim_trailing = max(0, int(segment.get("trim_trailing_frames") or 0))
+    generation_frame_count = max(
+        1,
+        int(segment.get("generation_frame_count") or (visible_frame_count + trim_leading + trim_trailing)),
+    )
+    visible_start = min(trim_leading, generation_frame_count - 1)
+    available_end_exclusive = max(visible_start + 1, generation_frame_count - trim_trailing)
+    visible_end_exclusive = min(available_end_exclusive, visible_start + visible_frame_count)
+    visible_end_exclusive = max(visible_start + 1, visible_end_exclusive)
+    return visible_start, visible_end_exclusive - 1
+
+
+def _tensor_shape(value) -> list[int]:
+    if torch.is_tensor(value):
+        return [int(dim) for dim in value.shape]
+    return []
+
+
+def _segment_debug_sections(segment_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "item_id": entry.get("item_id"),
+            "type": entry.get("type"),
+            "start_frame": int(entry.get("start_frame") or 0),
+            "end_frame_exclusive": int(entry.get("end_frame_exclusive") or 0),
+            "frame_count": int(entry.get("frame_count") or 0),
+        }
+        for entry in segment_plan.get("section_plan", [])
+    ]
+
+
+def _segment_debug_prompt_relay(segment_plan: dict[str, Any]) -> dict[str, Any]:
+    relay = segment_plan.get("model_specific", {}).get("wan", {}).get("prompt_relay", {})
+    local_prompts = []
+    for entry in relay.get("local_prompts") or []:
+        prompt = str(entry.get("prompt") or "")
+        local_prompts.append({
+            "item_id": entry.get("item_id"),
+            "type": entry.get("type"),
+            "start_frame": int(entry.get("start_frame") or 0),
+            "end_frame_exclusive": int(entry.get("end_frame_exclusive") or 0),
+            "latent_segment_start": int(entry.get("latent_segment_start") or 0),
+            "latent_segment_end_exclusive": int(entry.get("latent_segment_end_exclusive") or 0),
+            "prompt_preview": prompt[:160],
+        })
+    return {
+        "enabled": bool(relay.get("enabled")),
+        "latent_chunk_count": int(relay.get("latent_chunk_count") or 0),
+        "segment_lengths": [int(length) for length in relay.get("segment_lengths") or []],
+        "local_prompts": local_prompts,
+    }
+
+
+def _segment_count_diagnostic(plan: dict[str, Any], segments: list[dict[str, Any]]) -> str:
+    section_count = len(plan.get("section_plan") or [])
+    segment_count = len(segments)
+    if section_count == segment_count:
+        return f"Timeline has {section_count} planned section(s) and {segment_count} generation segment(s)."
+    return (
+        f"Timeline has {section_count} planned section(s) but {segment_count} hidden generation segment(s); "
+        "generation segments are duration-capped runtime chunks and may contain multiple timeline sections."
+    )
 
 
 def _report_unload_events(

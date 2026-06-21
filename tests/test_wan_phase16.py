@@ -257,9 +257,12 @@ def test_phase16_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
     assert positive["_helto_wan_conditioning_split"] is True
     assert positive["high"][0][1]["concat_latent_image"].shape[1] == 16
     assert positive["low"][0][1]["concat_latent_image"].shape[1] == 16
-    assert negative[0][1]["concat_mask"].shape[1] == 4
+    assert negative[0][1]["concat_mask"].shape[1] == 1
     assert video_latent["samples"].shape[1] == 16
     assert runtime_debug["fmlf_advanced_i2v"]["helper"] == "FMLF Advanced I2V"
+    assert runtime_debug["fmlf_advanced_i2v"]["algorithm"] == "svi_latent_continuation"
+    assert runtime_debug["fmlf_advanced_i2v"]["used_prev_latent"] is False
+    assert runtime_debug["fmlf_advanced_i2v"]["prev_latent_shape"] == []
     assert runtime_debug["fmlf_advanced_i2v"]["conditioning_split"] is True
     assert all("path" not in decision for decision in runtime_debug["fmlf_advanced_i2v"]["media_decisions"])
 
@@ -276,6 +279,9 @@ def test_phase16_fmlf_svi_uses_previous_latent(tmp_path):
     )
     prev_latent = {"samples": torch.ones((1, 16, 2, 8, 8))}
     motion_frames = torch.ones((3, 32, 32, 3)) * 0.25
+    visual = plan["model_specific"]["wan"]["visual_conditioning"]
+    visual["transient_start_image"] = torch.ones((1, 32, 32, 3)) * 0.75
+    visual["continuation_source"] = "previous_tail"
 
     *_outputs, runtime_debug = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
@@ -294,6 +300,7 @@ def test_phase16_fmlf_svi_uses_previous_latent(tmp_path):
     assert fmlf["used_prev_latent"] is True
     assert fmlf["prev_latent_shape"] == [1, 16, 2, 8, 8]
     assert fmlf["used_motion_frames"] is True
+    assert fmlf["anchor_source"] == "segment_previous_tail"
 
 
 def test_phase16_fmlf_auto_continue_uses_motion_frames(tmp_path):

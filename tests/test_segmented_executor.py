@@ -4,6 +4,7 @@ from pathlib import Path
 import torch
 
 import shared.privacy as privacy
+from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_IMAGE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
 from shared.privacy import BYTE_CHUNKED_ENVELOPE_SCHEMA, CRYPTO_AVAILABLE
 from shared.segmented_executor import (
     SegmentSpillStore,
@@ -17,10 +18,12 @@ from shared.segmented_executor import (
     stitch_spilled_segment_images,
     trim_visible_segment_images,
 )
+from shared.timeline import create_default_video_timeline
 from shared.timeline_status import TimelineStatusReporter
 import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
+from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
 import shared.ltx.runtime.audio as ltx_audio
 import shared.ltx.runtime.segmented as ltx_segmented
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
@@ -171,6 +174,12 @@ def test_timeline_status_reporter_records_progress_text_and_safe_events():
 def _wan_frame_rule(requested):
     requested = max(1, int(requested))
     return ((requested - 1 + 3) // 4) * 4 + 1
+
+
+def test_wan_latent_slot_for_frame_uses_first_frame_then_four_frame_cells():
+    assert wan_segmented._latent_slot_for_frame(0) == 0
+    assert [wan_segmented._latent_slot_for_frame(frame) for frame in range(1, 5)] == [1, 1, 1, 1]
+    assert [wan_segmented._latent_slot_for_frame(frame) for frame in range(117, 121)] == [30, 30, 30, 30]
 
 
 def test_generation_segments_ignore_model_padding_for_segment_count():
@@ -1601,12 +1610,17 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
 
     def fake_sample_wan_segment_latent(**kwargs):
         sample_calls.append(kwargs)
-        samples = torch.ones((1, 16, 3, 2, 2)) * len(sample_calls)
+        if len(sample_calls) == 1:
+            values = torch.tensor([10.0, 20.0, 99.0], dtype=torch.float32)
+        else:
+            values = torch.tensor([30.0, 40.0, 50.0], dtype=torch.float32)
+        samples = values.view(1, 1, 3, 1, 1).repeat(1, 16, 1, 2, 2)
         return {"samples": samples}, {"sampling_policy": "two_phase", "unload_events": []}
 
     def fake_decode(_vae, latent):
         value = float(latent["samples"].mean().item())
-        return torch.ones((5, 2, 2, 3)) * value
+        frame_count = int(runtime_calls[len(sample_calls) - 1]["wan_timeline_plan"]["resolved_output"]["frame_count"])
+        return torch.ones((frame_count, 2, 2, 3)) * value
 
     monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
@@ -1624,6 +1638,8 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
     wan_config["runtime_backend_profile"] = "FMLF Advanced I2V"
     wan_config["fmlf_continuation_mode"] = "SVI"
     wan_config["model_mode"] = "I2V-A14B"
+    plan["model_specific"]["wan"]["segmented_generation"]["segments"][0]["generation_frame_count"] = 9
+    plan["model_specific"]["wan"]["segmented_generation"]["segments"][0]["trim_trailing_frames"] = 4
     plan["model_specific"]["wan"]["segmented_generation"]["segments"][1]["continuity"]["continuity_frame_count"] = 5
     plan["model_specific"]["wan"]["segmented_generation"]["segments"][1]["trim_leading_frames"] = 1
 
@@ -1645,13 +1661,307 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
     assert runtime_calls[0]["split_conditioning"] is True
     assert runtime_calls[0]["fmlf_prev_latent"] is None
     assert runtime_calls[1]["fmlf_prev_latent"]["samples"].shape == (1, 16, 2, 2, 2)
+    assert float(runtime_calls[1]["fmlf_prev_latent"]["samples"].mean().item()) == 15.0
     assert runtime_calls[1]["fmlf_motion_frames"].shape[0] == 5
+    handoff = debug["segments"][0]["previous_latent_handoff"]
+    assert handoff["dropped_trailing_latent_slots"] == 1
+    assert handoff["dropped_fully_nonvisible_trailing_latent_slots"] == 1
+    assert handoff["visible_frame_start_index"] == 0
+    assert handoff["visible_frame_end_index"] == 4
+    assert handoff["last_visible_latent_slot"] == 1
+    assert handoff["svi_last_slot_guard_applied"] is False
+    assert handoff["svi_last_slot_guard_skip_reason"] == "final_slot_overlaps_visible_frames"
+    assert handoff["previous_latent_shape"] == [1, 16, 2, 2, 2]
     assert debug["segments"][1]["fmlf_advanced_i2v"]["used_prev_latent"] is True
+    assert len(sample_calls) == 2
+
+
+def test_wan_fmlf_svi_three_segment_plan_and_handoff_exclude_padded_tail(monkeypatch, tmp_path):
+    runtime_calls = []
+    sample_calls = []
+
+    def fake_build_runtime_outputs(**kwargs):
+        runtime_calls.append(kwargs)
+        frame_count = int(kwargs["wan_timeline_plan"]["resolved_output"]["frame_count"])
+        latent_slots = ((frame_count - 1) // 4) + 1
+        runtime_debug = {
+            "visual_conditioning": {
+                "requested_keyframes": [],
+                "applied_keyframes": [],
+                "media_decisions": [],
+            },
+            "bernini": None,
+            "fmlf_advanced_i2v": {
+                "helper": "FMLF Advanced I2V",
+                "continuation_mode": "SVI",
+                "used_prev_latent": kwargs.get("fmlf_prev_latent") is not None,
+            },
+            "summary": {},
+        }
+        positive = {
+            "high": [["positive_high"]],
+            "low": [["positive_low"]],
+            "default": [["positive_high"]],
+            "_helto_wan_conditioning_split": True,
+        }
+        latent = {"samples": torch.zeros((1, 16, latent_slots, 2, 2))}
+        return object(), object(), positive, [], latent, runtime_debug
+
+    def fake_sample_wan_segment_latent(**kwargs):
+        sample_calls.append(kwargs)
+        latent_slots = int(kwargs["latent"]["samples"].shape[2])
+        values = torch.arange(latent_slots, dtype=torch.float32) + (100.0 * len(sample_calls))
+        samples = values.view(1, 1, latent_slots, 1, 1).repeat(1, 16, 1, 2, 2)
+        return {"samples": samples}, {"sampling_policy": "two_phase", "unload_events": []}
+
+    def fake_decode(_vae, _latent):
+        frame_count = int(runtime_calls[len(sample_calls) - 1]["wan_timeline_plan"]["resolved_output"]["frame_count"])
+        return torch.ones((frame_count, 2, 2, 3), dtype=torch.float32) * len(sample_calls)
+
+    monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
+    monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
+    monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
+    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(
+        wan_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    plan, validation, _debug = build_wan_timeline_plan(
+        _wan_15s_image_then_two_text_timeline(),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            model_mode="I2V-A14B",
+            max_generation_duration=5.0,
+            segment_continuity_tail_frames=1,
+            segment_seam_blend_frames=0,
+            fmlf_continuation_mode="SVI",
+        ),
+    )
+    segments = plan["model_specific"]["wan"]["segmented_generation"]["segments"]
+
+    assert validation["is_valid"] is True
+    assert [segment["generation_frame_count"] for segment in segments] == [121, 121, 125]
+    assert [segment["visible_frame_count"] for segment in segments] == [120, 120, 121]
+    assert [segment["trim_trailing_frames"] for segment in segments] == [1, 0, 3]
+
+    _images, _audio, _fps, debug = wan_segmented.build_wan_segmented_executor_outputs(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        clip=object(),
+        vae=object(),
+        wan_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Increment Per Segment",
+    )
+
+    assert runtime_calls[0]["fmlf_prev_latent"] is None
+    assert runtime_calls[1]["fmlf_prev_latent"]["samples"].shape == (1, 16, 1, 2, 2)
+    assert float(runtime_calls[1]["fmlf_prev_latent"]["samples"].mean().item()) == 130.0
+    first_handoff = debug["segments"][0]["previous_latent_handoff"]
+    assert first_handoff["original_sampled_latent_shape"] == [1, 16, 31, 2, 2]
+    assert first_handoff["visible_frame_start_index"] == 0
+    assert first_handoff["visible_frame_end_index"] == 119
+    assert first_handoff["first_visible_latent_slot"] == 0
+    assert first_handoff["last_visible_latent_slot"] == 30
+    assert first_handoff["visible_continuation_latent_shape"] == [1, 16, 31, 2, 2]
+    assert first_handoff["dropped_trailing_latent_slots"] == 0
+    assert first_handoff["dropped_fully_nonvisible_trailing_latent_slots"] == 0
+    assert first_handoff["svi_last_slot_guard_applied"] is False
+    assert first_handoff["svi_last_slot_guard_skip_reason"] == "final_slot_overlaps_visible_frames"
+    assert first_handoff["previous_latent_shape"] == [1, 16, 1, 2, 2]
+    assert len(sample_calls) == 3
+
+
+def test_wan_fmlf_svi_10s_debug_shows_two_text_sections_in_second_generation(monkeypatch, tmp_path):
+    runtime_calls = []
+    sample_calls = []
+
+    def fake_build_runtime_outputs(**kwargs):
+        runtime_calls.append(kwargs)
+        frame_count = int(kwargs["wan_timeline_plan"]["resolved_output"]["frame_count"])
+        latent_slots = ((frame_count - 1) // 4) + 1
+        runtime_debug = {
+            "visual_conditioning": {
+                "requested_keyframes": [],
+                "applied_keyframes": [],
+                "media_decisions": [],
+            },
+            "bernini": None,
+            "fmlf_advanced_i2v": {
+                "helper": "FMLF Advanced I2V",
+                "continuation_mode": "SVI",
+                "used_prev_latent": kwargs.get("fmlf_prev_latent") is not None,
+            },
+            "summary": {},
+        }
+        positive = {
+            "high": [["positive_high"]],
+            "low": [["positive_low"]],
+            "default": [["positive_high"]],
+            "_helto_wan_conditioning_split": True,
+        }
+        latent = {"samples": torch.zeros((1, 16, latent_slots, 2, 2))}
+        return object(), object(), positive, [], latent, runtime_debug
+
+    def fake_sample_wan_segment_latent(**kwargs):
+        sample_calls.append(kwargs)
+        latent_slots = int(kwargs["latent"]["samples"].shape[2])
+        samples = torch.zeros((1, 16, latent_slots, 2, 2), dtype=torch.float32)
+        return {"samples": samples}, {"sampling_policy": "two_phase", "unload_events": []}
+
+    def fake_decode(_vae, _latent):
+        frame_count = int(runtime_calls[len(sample_calls) - 1]["wan_timeline_plan"]["resolved_output"]["frame_count"])
+        return torch.ones((frame_count, 2, 2, 3), dtype=torch.float32) * len(sample_calls)
+
+    monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
+    monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
+    monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
+    monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
+    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(
+        wan_segmented,
+        "SegmentSpillStore",
+        lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
+    )
+
+    plan, validation, _debug = build_wan_timeline_plan(
+        _wan_10s_image_then_two_text_timeline(),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            model_mode="I2V-A14B",
+            max_generation_duration=5.0,
+            segment_continuity_tail_frames=1,
+            segment_seam_blend_frames=0,
+            fmlf_continuation_mode="SVI",
+        ),
+    )
+    segments = plan["model_specific"]["wan"]["segmented_generation"]["segments"]
+
+    assert validation["is_valid"] is True
+    assert len(segments) == 2
+    assert segments[0]["source_section_ids"] == ["image_section"]
+    assert segments[1]["source_section_ids"] == ["text_001", "text_002"]
+
+    _images, _audio, _fps, debug = wan_segmented.build_wan_segmented_executor_outputs(
+        high_noise_model=object(),
+        low_noise_model=object(),
+        clip=object(),
+        vae=object(),
+        wan_timeline_plan=plan,
+        seed=1,
+        steps=4,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Increment Per Segment",
+    )
+
+    second = debug["segments"][1]
+    assert second["source_section_ids"] == ["text_001", "text_002"]
+    assert [entry["item_id"] for entry in second["local_sections"]] == ["text_001", "text_002"]
+    assert [entry["item_id"] for entry in second["prompt_relay"]["local_prompts"]] == ["text_001", "text_002"]
+    assert second["prompt_relay"]["segment_lengths"] == [16, 16]
+    assert "he looks around" in second["prompt_relay"]["local_prompts"][0]["prompt_preview"]
+    assert "he walks away" in second["prompt_relay"]["local_prompts"][1]["prompt_preview"]
+    assert any("3 planned section(s) but 2 hidden generation segment(s)" in entry for entry in debug["diagnostics"])
     assert len(sample_calls) == 2
 
 
 class _SegmentAbort(BaseException):
     pass
+
+
+def _wan_10s_image_then_two_text_timeline():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 10.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["assets"].append(
+        {
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/woman.png",
+            "name": "woman.png",
+        }
+    )
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "image_section",
+                "type": SECTION_TYPE_IMAGE,
+                "start_time": 0.0,
+                "end_time": 5.0,
+                "image": {"asset_id": "image_001"},
+                "prompt": "woman in frame",
+            },
+            {
+                "item_id": "text_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 5.0,
+                "end_time": 7.5,
+                "prompt": "he looks around",
+            },
+            {
+                "item_id": "text_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 7.5,
+                "end_time": 10.0,
+                "prompt": "he walks away",
+            },
+        ]
+    )
+    return timeline
+
+
+def _wan_15s_image_then_two_text_timeline():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 15.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["assets"].append(
+        {
+            "asset_id": "image_001",
+            "type": ASSET_TYPE_IMAGE,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/woman.png",
+            "name": "woman.png",
+        }
+    )
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "image_section",
+                "type": SECTION_TYPE_IMAGE,
+                "start_time": 0.0,
+                "end_time": 5.0,
+                "image": {"asset_id": "image_001"},
+                "prompt": "woman in frame",
+            },
+            {
+                "item_id": "text_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 5.0,
+                "end_time": 10.0,
+                "prompt": "she turns toward the window",
+            },
+            {
+                "item_id": "text_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 10.0,
+                "end_time": 15.0,
+                "prompt": "she walks forward",
+            },
+        ]
+    )
+    return timeline
 
 
 def _two_segment_executor_plan(model_key):

@@ -9,6 +9,7 @@ import {
   getVisibleTimelineSeconds,
   pixelsToSeconds,
   secondsToPixels,
+  timeFromClientX,
 } from "../../web/timeline/geometry.js";
 import { zoomToFit } from "../../web/timeline/operations.js";
 
@@ -57,9 +58,24 @@ function testZoomToFitResetsRange() {
   assert.equal(secondsToPixels(timeline.project.duration_seconds, timeline, 640), 640 - TIMELINE_RIGHT_PADDING);
 }
 
+function testClientXUsesRenderedScaleToTimelinePixels() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 10;
+  timeline.ui_state.view_start_seconds = 0;
+  timeline.ui_state.view_end_seconds = 10;
+  const container = {
+    getBoundingClientRect: () => ({ left: 100, width: 480 }),
+  };
+
+  assert.equal(timeFromClientX(100, container, timeline, 960), 0);
+  assert.equal(timeFromClientX(566, container, timeline, 960), 10);
+  assert.equal(timeFromClientX(580, container, timeline, 960), 10);
+}
+
 testDefaultRangeCoversWholeProject();
 testVisibleRangeMapsAbsoluteTimeRelativeToStart();
 testRangeClampSnapsWholeSecondsAndMinimumWidth();
 testZoomToFitResetsRange();
+testClientXUsesRenderedScaleToTimelinePixels();
 
 console.log("phase6 timeline range tests passed");

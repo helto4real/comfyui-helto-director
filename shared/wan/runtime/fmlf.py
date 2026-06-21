@@ -58,7 +58,7 @@ def build_fmlf_advanced_i2v_payload(
     trim_image = continue_frames if has_motion_frames else 0
     next_offset = max(0, int(video_frame_offset or 0)) + int(frame_count)
 
-    if mode == FMLF_CONTINUATION_SVI and has_prev_latent:
+    if mode == FMLF_CONTINUATION_SVI:
         positive_high, positive_low, negative_out, debug = _build_svi_payload(
             positive,
             negative,
@@ -74,12 +74,13 @@ def build_fmlf_advanced_i2v_payload(
         )
         debug.update({
             "continuation_mode": mode,
-            "used_prev_latent": True,
+            "used_prev_latent": has_prev_latent,
             "used_motion_frames": has_motion_frames,
             "motion_frame_count": int(motion_frames.shape[0]) if has_motion_frames else 0,
             "trim_image": int(trim_image),
             "trim_latent": 0,
             "next_offset": int(next_offset),
+            "anchor_source": _anchor_source(media_decisions, start_image),
             "media_decisions": _sanitize_media_decisions(media_decisions),
         })
         return positive_high, positive_low, negative_out, {"samples": latent}, 0, trim_image, next_offset, debug
@@ -106,6 +107,7 @@ def build_fmlf_advanced_i2v_payload(
         "trim_image": int(trim_image),
         "trim_latent": 0,
         "next_offset": int(next_offset),
+        "anchor_source": _anchor_source(media_decisions, start_image),
         "media_decisions": _sanitize_media_decisions(media_decisions),
         "fallback_reason": "missing_prev_latent" if mode == FMLF_CONTINUATION_SVI else None,
     })
@@ -118,7 +120,7 @@ def _build_svi_payload(
     vae,
     latent: torch.Tensor,
     start_image,
-    prev_latent: dict[str, Any],
+    prev_latent: dict[str, Any] | None,
     latent_channels: int,
     latent_t: int,
     latent_h: int,
@@ -134,18 +136,26 @@ def _build_svi_payload(
             dtype=latent.dtype,
         )
     anchor_latent = anchor_latent.to(device=latent.device, dtype=latent.dtype)
-    prev_samples = prev_latent["samples"].to(device=latent.device, dtype=latent.dtype)
-    if int(prev_samples.shape[1]) != latent_channels:
-        raise ValueError(
-            "WAN_FMLF_LATENT_FORMAT_MISMATCH: "
-            f"FMLF Advanced I2V previous latent has {int(prev_samples.shape[1])} channels, expected {latent_channels}."
-        )
-    motion_latent = prev_samples[:, :, -min(int(prev_samples.shape[2]), max(1, latent_t - 1)) :].clone()
-    if int(motion_latent.shape[-2]) != latent_h or int(motion_latent.shape[-1]) != latent_w:
-        motion_latent = torch.nn.functional.interpolate(
-            motion_latent,
-            size=(int(motion_latent.shape[2]), latent_h, latent_w),
-            mode="nearest",
+    prev_samples = None
+    if _valid_prev_latent(prev_latent):
+        prev_samples = prev_latent["samples"].to(device=latent.device, dtype=latent.dtype)
+        if int(prev_samples.shape[1]) != latent_channels:
+            raise ValueError(
+                "WAN_FMLF_LATENT_FORMAT_MISMATCH: "
+                f"FMLF Advanced I2V previous latent has {int(prev_samples.shape[1])} channels, expected {latent_channels}."
+            )
+        motion_latent = prev_samples[:, :, -min(int(prev_samples.shape[2]), max(1, latent_t - 1)) :].clone()
+        if int(motion_latent.shape[-2]) != latent_h or int(motion_latent.shape[-1]) != latent_w:
+            motion_latent = torch.nn.functional.interpolate(
+                motion_latent,
+                size=(int(motion_latent.shape[2]), latent_h, latent_w),
+                mode="nearest",
+            )
+    else:
+        motion_latent = torch.zeros(
+            (1, latent_channels, 0, latent_h, latent_w),
+            device=latent.device,
+            dtype=latent.dtype,
         )
     padding_size = max(0, latent_t - int(anchor_latent.shape[2]) - int(motion_latent.shape[2]))
     padding = torch.zeros(
@@ -342,3 +352,13 @@ def _sanitize_media_decisions(media_decisions: list[dict[str, Any]]) -> list[dic
             if key not in {"path", "filename", "name"}
         })
     return sanitized
+
+
+def _anchor_source(media_decisions: list[dict[str, Any]], start_image) -> str:
+    for decision in media_decisions:
+        if decision.get("role") == "Start" and decision.get("loaded"):
+            section_id = decision.get("section_id")
+            return str(section_id or ("transient_start_image" if decision.get("transient") else "timeline_start_keyframe"))
+    if start_image is not None and hasattr(start_image, "shape") and int(start_image.shape[0]) > 0:
+        return "unknown_start_image"
+    return "none"

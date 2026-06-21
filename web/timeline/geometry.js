@@ -117,6 +117,12 @@ export function getTimelineWidth(timeline, viewportWidth = TIMELINE_WIDTH) {
 }
 
 export function timeFromClientX(clientX, container, timeline, viewportWidth = TIMELINE_WIDTH) {
-  const rect = container.getBoundingClientRect();
-  return clampProjectTime(pixelsToSeconds(clientX - rect.left, timeline, viewportWidth), timeline);
+  const rect = container?.getBoundingClientRect?.() ?? { left: 0, width: Number(viewportWidth) };
+  const rectWidth = Number(rect.width);
+  const visualX = Number(clientX) - Number(rect.left ?? 0);
+  const logicalWidth = Math.max(1, Number(viewportWidth));
+  const logicalX = Number.isFinite(rectWidth) && rectWidth > 0
+    ? visualX * (logicalWidth / rectWidth)
+    : visualX;
+  return clampProjectTime(pixelsToSeconds(logicalX, timeline, viewportWidth), timeline);
 }
