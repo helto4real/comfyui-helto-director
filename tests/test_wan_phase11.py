@@ -11,10 +11,18 @@ from shared.contracts.video_timeline import (
     ASSET_TYPE_AUDIO,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_HARD_CUT,
+    LORA_MERGE_MODE_ADD_TO_GLOBAL,
+    LORA_MERGE_MODE_DISABLE_LORAS,
+    LORA_MERGE_MODE_REPLACE_GLOBAL,
+    MODEL_LORA_MODEL_WAN_2_2,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
 )
+from shared.lora import config as lora_config_module
 from shared.timeline import create_default_video_timeline
 from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.config import normalize_wan_timeline_config
@@ -98,6 +106,52 @@ def _timeline_with_start_image_and_three_text_sections():
         ]
     )
     return timeline
+
+
+def _wan_lora_stack(name: str) -> dict:
+    return {
+        "version": 1,
+        "loras": [
+            {
+                "enabled": True,
+                "name": name,
+                "strength_model": 0.9,
+                "strength_clip": 0.9,
+            }
+        ],
+        "ui": {"show_strengths": "single", "match": name},
+    }
+
+
+def _wan_shot(
+    shot_id: str,
+    section_id: str,
+    start_time: float,
+    end_time: float,
+    merge_mode: str,
+    high_stack: dict,
+    low_stack: dict,
+) -> dict:
+    return {
+        "shot_id": shot_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "section_ids": [section_id],
+        "lora_overrides": {
+            "enabled": True,
+            "merge_mode": merge_mode,
+            "targets": {
+                MODEL_LORA_MODEL_WAN_2_2: {
+                    MODEL_LORA_TARGET_HIGH_NOISE: high_stack,
+                    MODEL_LORA_TARGET_LOW_NOISE: low_stack,
+                },
+            },
+        },
+    }
+
+
+def _lora_names(rows: list[dict]) -> list[str]:
+    return [row["name"] for row in rows]
 
 
 def test_wan_nodes_register_with_custom_sockets_and_mappings():
@@ -325,6 +379,155 @@ def test_wan_planner_builds_serializable_text_plan_with_gap_no_guidance():
     assert debug["source"] == "WAN Planner"
     assert debug["enabled"] is True
     assert debug["summary"]["planned_ranges"] == 2
+
+
+def test_wan_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "first shot",
+            },
+            {
+                "item_id": "section_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "second shot",
+            },
+        ]
+    )
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+    )
+    wan = plan["model_specific"]["wan"]
+
+    assert validation["is_valid"] is True
+    assert [entry["shot_id"] for entry in plan["section_plan"]] == [
+        "shot_section_001",
+        "shot_section_002",
+    ]
+    assert [entry["shot_id"] for entry in wan["prompt_relay"]["local_prompts"]] == [
+        "shot_section_001",
+        "shot_section_002",
+    ]
+    assert wan["timeline_structure"]["section_to_shot"] == {
+        "section_001": "shot_section_001",
+        "section_002": "shot_section_002",
+    }
+    assert wan["timeline_structure"]["boundaries"][0]["mode"] == BOUNDARY_MODE_HARD_CUT
+    assert wan["lora_resolution"]["targets"] == [
+        MODEL_LORA_TARGET_HIGH_NOISE,
+        MODEL_LORA_TARGET_LOW_NOISE,
+    ]
+    assert wan["lora_resolution"]["single_generation_loras"][MODEL_LORA_TARGET_HIGH_NOISE]["loras"] == []
+    assert wan["lora_resolution"]["single_generation_loras"][MODEL_LORA_TARGET_LOW_NOISE]["loras"] == []
+    assert debug["summary"]["shot_count"] == 2
+    assert debug["summary"]["boundary_count"] == 1
+    assert debug["details"]["timeline_structure"]["boundaries"][0]["mode"] == BOUNDARY_MODE_HARD_CUT
+
+
+def test_wan_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_deferred(monkeypatch):
+    monkeypatch.setattr(
+        lora_config_module,
+        "_available_loras",
+        lambda: [
+            "high_global.safetensors",
+            "low_global.safetensors",
+            "high_add.safetensors",
+            "low_add.safetensors",
+            "high_replace.safetensors",
+            "low_replace.safetensors",
+        ],
+    )
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 3.0
+    timeline["project"]["model_loras"]["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE] = _wan_lora_stack("high_global")
+    timeline["project"]["model_loras"]["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_LOW_NOISE] = _wan_lora_stack("low_global")
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_add",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "add stack",
+            },
+            {
+                "item_id": "section_replace",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "replace stack",
+            },
+            {
+                "item_id": "section_disable",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 2.0,
+                "end_time": 3.0,
+                "prompt": "disable stack",
+            },
+        ]
+    )
+    timeline["sequence"]["shots"] = [
+        _wan_shot(
+            "shot_add",
+            "section_add",
+            0.0,
+            1.0,
+            LORA_MERGE_MODE_ADD_TO_GLOBAL,
+            _wan_lora_stack("high_add"),
+            _wan_lora_stack("low_add"),
+        ),
+        _wan_shot(
+            "shot_replace",
+            "section_replace",
+            1.0,
+            2.0,
+            LORA_MERGE_MODE_REPLACE_GLOBAL,
+            _wan_lora_stack("high_replace"),
+            _wan_lora_stack("low_replace"),
+        ),
+        _wan_shot(
+            "shot_disable",
+            "section_disable",
+            2.0,
+            3.0,
+            LORA_MERGE_MODE_DISABLE_LORAS,
+            _wan_lora_stack("high_add"),
+            _wan_lora_stack("low_add"),
+        ),
+    ]
+
+    plan, validation, _debug = build_wan_timeline_plan(timeline, create_wan_timeline_config())
+    lora_resolution = plan["model_specific"]["wan"]["lora_resolution"]
+    loras_by_section = {
+        entry["item_id"]: entry["effective_loras"]
+        for entry in lora_resolution["section_loras"]
+    }
+
+    assert _lora_names(loras_by_section["section_add"][MODEL_LORA_TARGET_HIGH_NOISE]["loras"]) == [
+        "high_global.safetensors",
+        "high_add.safetensors",
+    ]
+    assert _lora_names(loras_by_section["section_add"][MODEL_LORA_TARGET_LOW_NOISE]["loras"]) == [
+        "low_global.safetensors",
+        "low_add.safetensors",
+    ]
+    assert _lora_names(loras_by_section["section_replace"][MODEL_LORA_TARGET_HIGH_NOISE]["loras"]) == ["high_replace.safetensors"]
+    assert _lora_names(loras_by_section["section_replace"][MODEL_LORA_TARGET_LOW_NOISE]["loras"]) == ["low_replace.safetensors"]
+    assert loras_by_section["section_disable"][MODEL_LORA_TARGET_HIGH_NOISE]["loras"] == []
+    assert loras_by_section["section_disable"][MODEL_LORA_TARGET_LOW_NOISE]["loras"] == []
+    assert lora_resolution["single_generation_loras"] is None
+    assert lora_resolution["execution_strategy"] == "defer_per_shot_lora_execution"
+    assert "WAN_SHOT_LORA_STACKS_DIFFER" in [entry["code"] for entry in validation["warnings"]]
 
 
 def test_wan_planner_builds_hidden_segments_and_requires_vanilla_start_or_end_frame():

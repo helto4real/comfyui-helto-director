@@ -13,6 +13,9 @@ from ..contracts.validation import (
     flatten_validation_result,
 )
 from ..contracts.video_timeline import (
+    MODEL_LORA_MODEL_WAN_2_2,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
     QUALITY_PRESET_DRAFT,
     QUALITY_PRESET_HIGH,
     QUALITY_PRESET_NATIVE_RESOLUTION,
@@ -29,6 +32,11 @@ from ..timeline import (
     normalize_video_timeline,
     time_range_to_frames,
     validate_video_timeline,
+)
+from ..timeline.planner_context import (
+    build_model_lora_resolution,
+    build_section_shot_map,
+    build_sequence_plan_metadata,
 )
 from .config import (
     RESOLUTION_PROFILE_AUTO,
@@ -68,6 +76,13 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
     frame_info = _wan_frame_info(requested_frames, total_frames, frame_rate)
     resolved_output = _resolve_output(timeline["project"], config)
     section_entries, gap_decisions = _build_section_plan(timeline, config, frame_rate, total_frames)
+    sequence_metadata = build_sequence_plan_metadata(timeline)
+    lora_resolution = build_model_lora_resolution(
+        timeline,
+        section_entries,
+        model_key=MODEL_LORA_MODEL_WAN_2_2,
+        target_keys=[MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE],
+    )
     segmented_generation = build_generation_segments(
         section_entries=section_entries,
         frame_rate=frame_rate,
@@ -121,6 +136,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         bernini,
         segmented_generation,
         reference_validation_entries,
+        lora_resolution,
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
@@ -158,6 +174,8 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
                 "bernini": bernini,
                 "segmented_generation": segmented_generation,
                 "gap_decisions": gap_decisions,
+                "timeline_structure": sequence_metadata,
+                "lora_resolution": lora_resolution,
             },
         },
         "validation": validation,
@@ -172,13 +190,17 @@ def _build_section_plan(
     frame_rate: float,
     total_frames: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    section_to_shot = build_section_shot_map(timeline)
     sections = []
     for section in sorted(timeline["director_track"]["sections"], key=lambda item: item.get("start_time", 0.0)):
+        item_id = section.get("item_id")
+        shot = section_to_shot.get(str(item_id)) if item_id is not None else None
         frame_range = time_range_to_frames(section["start_time"], section["end_time"], frame_rate)
         start_frame = min(max(0, frame_range["start_frame"]), total_frames)
         end_frame = min(max(start_frame, frame_range["end_frame_exclusive"]), total_frames)
         sections.append({
-            "item_id": section.get("item_id"),
+            "item_id": item_id,
+            "shot_id": shot.get("shot_id") if shot else None,
             "type": section.get("type"),
             "role": _section_role(section.get("type")),
             "start_time": section.get("start_time"),
@@ -206,6 +228,7 @@ def _build_section_plan(
         if config["gap_policy"] != "Merge With Previous Prompt":
             sections.append({
                 "item_id": decision["item_id"],
+                "shot_id": None,
                 "type": "Gap",
                 "role": "No Guidance",
                 "start_time": gap["start_time"],
@@ -230,6 +253,7 @@ def _build_prompt_plan(timeline: dict[str, Any], section_entries: list[dict[str,
         raw_prompt = section.get("prompt", "") if section else ""
         prompts.append({
             "item_id": entry["item_id"],
+            "shot_id": entry.get("shot_id"),
             "type": entry["type"],
             "raw_prompt": raw_prompt,
             "effective_prompt": merge_prompts(
@@ -260,6 +284,7 @@ def _build_media_plan(timeline: dict[str, Any], section_entries: list[dict[str, 
         section_type = section.get("type")
         media.append({
             "item_id": entry["item_id"],
+            "shot_id": entry.get("shot_id"),
             "section_type": section_type,
             "asset_id": asset.get("asset_id"),
             "asset_type": asset.get("type"),
@@ -336,6 +361,7 @@ def _build_prompt_relay(
             guidance_type = "Prompt"
         segments.append({
             "item_id": entry.get("item_id"),
+            "shot_id": entry.get("shot_id"),
             "type": entry.get("type"),
             "guidance_type": guidance_type,
             "prompt": prompt,
@@ -359,6 +385,7 @@ def _build_prompt_relay(
         local_prompts.append(segment)
         mapping.append({
             "item_id": segment["item_id"],
+            "shot_id": segment.get("shot_id"),
             "start_frame": segment["start_frame"],
             "end_frame_exclusive": segment["end_frame_exclusive"],
             "start_latent_chunk": segment["start_latent_chunk"],
@@ -398,6 +425,7 @@ def _build_visual_conditioning(
         requested.append({
             "role": _keyframe_role(index, len(image_media)),
             "section_id": media.get("item_id"),
+            "shot_id": section.get("shot_id"),
             "asset_id": media.get("asset_id"),
             "path": media.get("path"),
             "time": section.get("start_time"),
@@ -439,6 +467,7 @@ def _validate_wan_inputs(
     bernini: dict[str, Any],
     segmented_generation: dict[str, Any],
     reference_validation_entries: list[dict[str, Any]] | None = None,
+    lora_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     entries = list(reference_validation_entries or [])
     if not director_validation.get("is_valid", False):
@@ -632,6 +661,17 @@ def _validate_wan_inputs(
             "Inspect DEBUG_INFO for frame and latent mapping.",
         ))
 
+    if lora_resolution and lora_resolution.get("requires_per_shot_execution"):
+        entries.append(_entry(
+            "WAN_SHOT_LORA_STACKS_DIFFER",
+            SEVERITY_WARNING,
+            "LoRA",
+            None,
+            "Different shots resolve to different WAN LoRA stacks.",
+            "Current WAN runtime generation does not switch LoRAs inside one generation; generate by compatible shot/segment groups or keep one high/low stack pair.",
+            _lora_warning_details(lora_resolution),
+        ))
+
     entries.append(_entry(
         "WAN_RESOLUTION_RESOLVED",
         SEVERITY_INFO,
@@ -657,6 +697,8 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
     prompt_relay = wan["prompt_relay"]
     visual = wan["visual_conditioning"]
     bernini = wan.get("bernini") or {}
+    timeline_structure = wan.get("timeline_structure", {})
+    lora_resolution = wan.get("lora_resolution", {})
     enabled = config["debug_mode"] != "Off"
     summary = {
         "model_mode": config["model_mode"],
@@ -674,12 +716,15 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
         "frame_count_rule": plan["resolved_output"].get("frame_count_rule"),
         "latent_chunk_count": prompt_relay["latent_chunk_count"],
         "section_count": len(timeline["director_track"]["sections"]),
+        "shot_count": len(timeline_structure.get("shots", [])),
+        "boundary_count": len(timeline_structure.get("boundaries", [])),
         "planned_ranges": len(plan["section_plan"]),
         "prompt_relay_segments": len(prompt_relay["local_prompts"]),
         "segment_lengths": list(prompt_relay["segment_lengths"]),
         "requested_visual_keyframes": len(visual["requested_keyframes"]),
         "applied_visual_keyframes": len(visual["applied_keyframes"]),
         "unsupported_visual_keyframes": len(visual["unsupported_keyframes"]),
+        "lora_signature_count": int(lora_resolution.get("unique_signature_count") or 0),
         "error_count": len(validation["errors"]),
         "warning_count": len(validation["warnings"]),
         "info_count": len(validation["info"]),
@@ -701,6 +746,8 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
             "media_plan": deepcopy(plan["media_plan"]),
             "audio_plan": deepcopy(plan["audio_plan"]),
             "gap_decisions": deepcopy(wan["gap_decisions"]),
+            "timeline_structure": deepcopy(timeline_structure),
+            "lora_resolution": deepcopy(lora_resolution),
             "validation": deepcopy(validation),
         }
     return debug
@@ -861,3 +908,24 @@ def _entry(
         suggestion,
         details,
     )
+
+
+def _lora_warning_details(lora_resolution: dict[str, Any]) -> dict[str, Any]:
+    shot_ids = [
+        entry.get("shot_id")
+        for entry in lora_resolution.get("shot_loras", [])
+        if entry.get("shot_id")
+    ]
+    section_ids = [
+        entry.get("item_id")
+        for entry in lora_resolution.get("section_loras", [])
+        if entry.get("shot_id")
+    ]
+    return {
+        "model": lora_resolution.get("model"),
+        "targets": list(lora_resolution.get("targets") or []),
+        "shot_ids": shot_ids,
+        "section_ids": section_ids,
+        "unique_signature_count": lora_resolution.get("unique_signature_count"),
+        "execution_strategy": lora_resolution.get("execution_strategy"),
+    }

@@ -7,11 +7,18 @@ from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_HARD_CUT,
+    LORA_MERGE_MODE_ADD_TO_GLOBAL,
+    LORA_MERGE_MODE_DISABLE_LORAS,
+    LORA_MERGE_MODE_REPLACE_GLOBAL,
+    MODEL_LORA_MODEL_LTX_2_3,
+    MODEL_LORA_TARGET_MAIN,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
     VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
 )
+from shared.lora import config as lora_config_module
 from shared.ltx import build_ltx_timeline_plan, create_ltx_timeline_config
 from shared.ltx.config import normalize_ltx_timeline_config
 from shared.timeline import create_default_video_timeline
@@ -44,6 +51,50 @@ def get_node_classes():
             sys.modules.pop(sys_module_name, None)
         else:
             sys.modules[sys_module_name] = previous
+
+
+def _lora_stack(name: str) -> dict:
+    return {
+        "version": 1,
+        "loras": [
+            {
+                "enabled": True,
+                "name": name,
+                "strength_model": 0.8,
+                "strength_clip": 0.6,
+            }
+        ],
+        "ui": {"show_strengths": "separate", "match": name},
+    }
+
+
+def _shot(
+    shot_id: str,
+    section_id: str,
+    start_time: float,
+    end_time: float,
+    merge_mode: str,
+    lora_stack: dict,
+) -> dict:
+    return {
+        "shot_id": shot_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "section_ids": [section_id],
+        "lora_overrides": {
+            "enabled": True,
+            "merge_mode": merge_mode,
+            "targets": {
+                MODEL_LORA_MODEL_LTX_2_3: {
+                    MODEL_LORA_TARGET_MAIN: lora_stack,
+                },
+            },
+        },
+    }
+
+
+def _lora_names(rows: list[dict]) -> list[str]:
+    return [row["name"] for row in rows]
 
 
 def test_ltx_nodes_are_registered_with_custom_sockets():
@@ -189,6 +240,127 @@ def test_ltx_planner_builds_serializable_plan_with_gaps_prompts_and_media():
     assert plan["media_plan"][0]["ltx_role"] == "Section Guides"
     assert validation["is_valid"] is True
     assert debug["summary"]["planned_ranges"] == 3
+
+
+def test_ltx_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "first shot",
+            },
+            {
+                "item_id": "section_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "second shot",
+            },
+        ]
+    )
+
+    plan, validation, debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    ltx = plan["model_specific"]["ltx"]
+
+    assert validation["is_valid"] is True
+    assert [entry["shot_id"] for entry in plan["section_plan"]] == [
+        "shot_section_001",
+        "shot_section_002",
+    ]
+    assert ltx["timeline_structure"]["section_to_shot"] == {
+        "section_001": "shot_section_001",
+        "section_002": "shot_section_002",
+    }
+    assert ltx["timeline_structure"]["boundaries"][0]["mode"] == BOUNDARY_MODE_HARD_CUT
+    assert ltx["lora_resolution"]["targets"] == [MODEL_LORA_TARGET_MAIN]
+    assert ltx["lora_resolution"]["single_generation_loras"][MODEL_LORA_TARGET_MAIN]["loras"] == []
+    assert debug["summary"]["shot_count"] == 2
+    assert debug["summary"]["boundary_count"] == 1
+
+
+def test_ltx_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_deferred(monkeypatch):
+    monkeypatch.setattr(
+        lora_config_module,
+        "_available_loras",
+        lambda: [
+            "global.safetensors",
+            "add.safetensors",
+            "replace.safetensors",
+        ],
+    )
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 3.0
+    timeline["project"]["model_loras"]["global"][MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN] = _lora_stack("global")
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_add",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "add stack",
+            },
+            {
+                "item_id": "section_replace",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "replace stack",
+            },
+            {
+                "item_id": "section_disable",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 2.0,
+                "end_time": 3.0,
+                "prompt": "disable stack",
+            },
+        ]
+    )
+    timeline["sequence"]["shots"] = [
+        _shot(
+            "shot_add",
+            "section_add",
+            0.0,
+            1.0,
+            LORA_MERGE_MODE_ADD_TO_GLOBAL,
+            _lora_stack("add"),
+        ),
+        _shot(
+            "shot_replace",
+            "section_replace",
+            1.0,
+            2.0,
+            LORA_MERGE_MODE_REPLACE_GLOBAL,
+            _lora_stack("replace"),
+        ),
+        _shot(
+            "shot_disable",
+            "section_disable",
+            2.0,
+            3.0,
+            LORA_MERGE_MODE_DISABLE_LORAS,
+            _lora_stack("add"),
+        ),
+    ]
+
+    plan, validation, _debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    lora_resolution = plan["model_specific"]["ltx"]["lora_resolution"]
+    loras_by_section = {
+        entry["item_id"]: entry["effective_loras"][MODEL_LORA_TARGET_MAIN]["loras"]
+        for entry in lora_resolution["section_loras"]
+    }
+
+    assert _lora_names(loras_by_section["section_add"]) == ["global.safetensors", "add.safetensors"]
+    assert _lora_names(loras_by_section["section_replace"]) == ["replace.safetensors"]
+    assert loras_by_section["section_disable"] == []
+    assert lora_resolution["single_generation_loras"] is None
+    assert lora_resolution["execution_strategy"] == "defer_per_shot_lora_execution"
+    assert "LTX_SHOT_LORA_STACKS_DIFFER" in [entry["code"] for entry in validation["warnings"]]
 
 
 def test_ltx_planner_builds_hidden_generation_segments_when_duration_is_capped():

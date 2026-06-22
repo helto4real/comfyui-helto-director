@@ -13,6 +13,8 @@ from ..contracts.validation import (
     flatten_validation_result,
 )
 from ..contracts.video_timeline import (
+    MODEL_LORA_MODEL_LTX_2_3,
+    MODEL_LORA_TARGET_MAIN,
     QUALITY_PRESET_DRAFT,
     QUALITY_PRESET_HIGH,
     QUALITY_PRESET_NATIVE_RESOLUTION,
@@ -29,6 +31,11 @@ from ..timeline import (
     normalize_video_timeline,
     time_range_to_frames,
     validate_video_timeline,
+)
+from ..timeline.planner_context import (
+    build_model_lora_resolution,
+    build_section_shot_map,
+    build_sequence_plan_metadata,
 )
 from .config import (
     LTX_MODEL_FAMILY,
@@ -60,6 +67,13 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
     total_frames = _ltx_frame_count_from_requested(requested_frames, int(config["rules"]["temporal_stride"]))
     resolved_output = _resolve_output(timeline["project"], config)
     section_entries = _build_section_plan(timeline, frame_rate, total_frames)
+    sequence_metadata = build_sequence_plan_metadata(timeline)
+    lora_resolution = build_model_lora_resolution(
+        timeline,
+        section_entries,
+        model_key=MODEL_LORA_MODEL_LTX_2_3,
+        target_keys=[MODEL_LORA_TARGET_MAIN],
+    )
     segmented_generation = build_generation_segments(
         section_entries=section_entries,
         frame_rate=frame_rate,
@@ -77,6 +91,7 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
         config,
         director_validation,
         character_validation_entries,
+        lora_resolution,
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
@@ -113,6 +128,8 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
                 },
                 "character_references": character_references,
                 "segmented_generation": segmented_generation,
+                "timeline_structure": sequence_metadata,
+                "lora_resolution": lora_resolution,
                 "rules": deepcopy(config["rules"]),
             },
         },
@@ -127,6 +144,7 @@ def _validate_ltx_inputs(
     config: dict[str, Any],
     director_validation: dict[str, Any],
     character_validation_entries: list[dict[str, Any]] | None = None,
+    lora_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     entries = [*(character_validation_entries or [])]
     if not director_validation.get("is_valid", False):
@@ -168,6 +186,19 @@ def _validate_ltx_inputs(
                         "Enable image guidance or use a Text Section.",
                     )
                 )
+    if lora_resolution and lora_resolution.get("requires_per_shot_execution"):
+        entries.append(
+            create_validation_entry(
+                "LTX_SHOT_LORA_STACKS_DIFFER",
+                SEVERITY_WARNING,
+                "LTX Planner",
+                "LoRA",
+                None,
+                "Different shots resolve to different LTX LoRA stacks.",
+                "Current LTX runtime generation does not switch LoRAs inside one generation; generate by compatible shot/segment groups or keep one stack.",
+                _lora_warning_details(lora_resolution),
+            )
+        )
     return create_validation_result(entries)
 
 
@@ -193,11 +224,15 @@ def _resolve_output(project: dict[str, Any], config: dict[str, Any]) -> dict[str
 
 
 def _build_section_plan(timeline: dict[str, Any], frame_rate: float, total_frames: int) -> list[dict[str, Any]]:
+    section_to_shot = build_section_shot_map(timeline)
     sections = []
     for section in sorted(timeline["director_track"]["sections"], key=lambda item: item.get("start_time", 0.0)):
+        item_id = section.get("item_id")
+        shot = section_to_shot.get(str(item_id)) if item_id is not None else None
         frame_range = time_range_to_frames(section["start_time"], section["end_time"], frame_rate)
         sections.append({
-            "item_id": section.get("item_id"),
+            "item_id": item_id,
+            "shot_id": shot.get("shot_id") if shot else None,
             "type": section.get("type"),
             "role": _section_role(section.get("type")),
             "start_time": section.get("start_time"),
@@ -210,6 +245,7 @@ def _build_section_plan(timeline: dict[str, Any], frame_rate: float, total_frame
         frame_range = time_range_to_frames(gap["start_time"], gap["end_time"], frame_rate)
         sections.append({
             "item_id": f"gap_{index + 1:03d}",
+            "shot_id": None,
             "type": "Gap",
             "role": "No Guidance",
             "start_time": gap["start_time"],
@@ -243,6 +279,7 @@ def _build_prompt_plan(
         runtime_prompt = runtime_prompts_by_id.get(entry["item_id"], raw_prompt)
         prompts.append({
             "item_id": entry["item_id"],
+            "shot_id": entry.get("shot_id"),
             "type": entry["type"],
             "raw_prompt": raw_prompt,
             "runtime_prompt": runtime_prompt,
@@ -279,6 +316,7 @@ def _build_media_plan(timeline: dict[str, Any], section_entries: list[dict[str, 
             continue
         media.append({
             "item_id": entry["item_id"],
+            "shot_id": entry.get("shot_id"),
             "section_type": section.get("type"),
             "asset_id": asset.get("asset_id"),
             "asset_type": asset.get("type"),
@@ -324,15 +362,21 @@ def _build_audio_plan(timeline: dict[str, Any], frame_rate: float) -> list[dict[
 
 
 def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[str, Any], validation: dict[str, Any]) -> dict[str, Any]:
+    ltx = plan["model_specific"]["ltx"]
+    timeline_structure = ltx.get("timeline_structure", {})
+    lora_resolution = ltx.get("lora_resolution", {})
     return {
         "type": "DEBUG_INFO",
         "source": "LTX Planner",
         "enabled": bool(config.get("debug_mode")),
         "summary": {
             "section_count": len(timeline["director_track"]["sections"]),
+            "shot_count": len(timeline_structure.get("shots", [])),
+            "boundary_count": len(timeline_structure.get("boundaries", [])),
             "planned_ranges": len(plan["section_plan"]),
             "media_items": len(plan["media_plan"]),
             "audio_items": len(plan["audio_plan"]),
+            "lora_signature_count": int(lora_resolution.get("unique_signature_count") or 0),
             "error_count": len(validation["errors"]),
             "warning_count": len(validation["warnings"]),
             "info_count": len(validation["info"]),
@@ -371,6 +415,27 @@ def _ltx_media_role(section: dict[str, Any], config: dict[str, Any]) -> str:
     if section.get("type") == SECTION_TYPE_VIDEO:
         return config["video_section_mode"]
     return "None"
+
+
+def _lora_warning_details(lora_resolution: dict[str, Any]) -> dict[str, Any]:
+    shot_ids = [
+        entry.get("shot_id")
+        for entry in lora_resolution.get("shot_loras", [])
+        if entry.get("shot_id")
+    ]
+    section_ids = [
+        entry.get("item_id")
+        for entry in lora_resolution.get("section_loras", [])
+        if entry.get("shot_id")
+    ]
+    return {
+        "model": lora_resolution.get("model"),
+        "targets": list(lora_resolution.get("targets") or []),
+        "shot_ids": shot_ids,
+        "section_ids": section_ids,
+        "unique_signature_count": lora_resolution.get("unique_signature_count"),
+        "execution_strategy": lora_resolution.get("execution_strategy"),
+    }
 
 
 def _resolve_asset(reference: Any, assets_by_id: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
