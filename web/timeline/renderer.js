@@ -77,7 +77,9 @@ import {
   adjacentShotPairs,
   canFitLastDirectorSectionToDuration,
   changeShotType,
+  clearProjectModelLoraStack,
   clearShotLoraOverride,
+  clearShotLoraTargetStack,
   createOrUpdateBoundaryBetweenShots,
   createShot,
   deleteSelectedItem,
@@ -100,11 +102,16 @@ import {
   setClipInstanceFromAsset,
   setProjectModelLoraStack,
   setShotLoraMergeMode,
+  setShotLoraTargetStack,
   setTakeStatus,
   splitSelectedSection,
   toggleSelectItem,
   zoomToFit,
 } from "./operations.js";
+import {
+  loraEditorProfileForTarget,
+  showTimelineLoraStackEditor,
+} from "./lora_editor.js";
 
 const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
@@ -1076,11 +1083,26 @@ export class TimelineRenderer {
     }));
     block.append(header);
     block.append(
-      this.renderLoraSummaryRow("LTX Main", shot.lora_overrides?.targets?.[MODEL_LORA_MODEL_LTX_2_3]?.[MODEL_LORA_TARGET_MAIN]),
-      this.renderLoraSummaryRow("WAN High", shot.lora_overrides?.targets?.[MODEL_LORA_MODEL_WAN_2_2]?.[MODEL_LORA_TARGET_HIGH_NOISE]),
-      this.renderLoraSummaryRow("WAN Low", shot.lora_overrides?.targets?.[MODEL_LORA_MODEL_WAN_2_2]?.[MODEL_LORA_TARGET_LOW_NOISE]),
+      this.renderShotLoraTargetRow(timeline, shot, "LTX Main", MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN),
+      this.renderShotLoraTargetRow(timeline, shot, "WAN High", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE),
+      this.renderShotLoraTargetRow(timeline, shot, "WAN Low", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_LOW_NOISE),
     );
     return block;
+  }
+
+  renderShotLoraTargetRow(timeline, shot, labelText, modelKey, targetKey) {
+    const stack = shot.lora_overrides?.targets?.[modelKey]?.[targetKey];
+    const row = this.renderLoraSummaryRow(labelText, stack, { privacyRevealed: this.isPrivacyRevealed(timeline) });
+    row.append(this.renderLoraTargetActions({
+      timeline,
+      labelText,
+      stack,
+      onEdit: () => this.openShotLoraStackEditor(shot.shot_id, labelText, modelKey, targetKey),
+      onClear: () => this.commitMutation((currentTimeline) => {
+        clearShotLoraTargetStack(currentTimeline, shot.shot_id, modelKey, targetKey);
+      }, "shot lora clear target"),
+    }));
+    return row;
   }
 
   renderPromptRow(item) {
@@ -1812,38 +1834,88 @@ export class TimelineRenderer {
 
   renderProjectLoraStackRow(timeline, labelText, modelKey, targetKey) {
     const stack = timeline.project?.model_loras?.global?.[modelKey]?.[targetKey] ?? { loras: [], ui: {} };
-    const row = el("label", "htd-project-lora-row");
+    const row = el("div", "htd-project-lora-row");
     const label = el("span", "htd-project-lora-label");
     label.textContent = labelText;
-    const count = el("span", "htd-lora-count");
-    count.textContent = `${stack.loras?.length ?? 0} LoRAs`;
-    const match = el("input", "htd-setting-text htd-lora-match");
-    match.value = stack.ui?.match ?? "";
-    match.placeholder = "Stack note";
-    match.title = `${labelText} LoRA stack note`;
-    match.addEventListener("change", () => {
-      this.commitMutation((currentTimeline) => {
-        setProjectModelLoraStack(currentTimeline, modelKey, targetKey, {
-          ...stack,
-          ui: { ...(stack.ui ?? {}), match: match.value },
-        });
-      }, "project lora change");
-    });
-    row.append(label, count, match);
+    const summary = this.renderLoraStackSummary(stack, { privacyRevealed: this.isPrivacyRevealed(timeline) });
+    row.append(label, summary, this.renderLoraTargetActions({
+      timeline,
+      labelText,
+      stack,
+      onEdit: () => this.openProjectLoraStackEditor(labelText, modelKey, targetKey),
+      onClear: () => this.commitMutation((currentTimeline) => {
+        clearProjectModelLoraStack(currentTimeline, modelKey, targetKey);
+      }, "project lora clear target"),
+    }));
     return row;
   }
 
-  renderLoraSummaryRow(labelText, stack) {
+  renderLoraSummaryRow(labelText, stack, options = {}) {
     const row = el("div", "htd-lora-summary-row");
     const label = el("span", "htd-shot-row-label");
     label.textContent = labelText;
+    row.append(label, this.renderLoraStackSummary(stack, options));
+    return row;
+  }
+
+  renderLoraStackSummary(stack, options = {}) {
     const value = el("span", "htd-lora-count");
     const count = stack?.loras?.length ?? 0;
-    const note = stack?.ui?.match ? ` · ${stack.ui.match}` : "";
-    value.textContent = `${count} LoRAs${note}`;
-    value.title = stack?.loras?.map((lora) => lora.name).join(", ") || value.textContent;
-    row.append(label, value);
-    return row;
+    value.textContent = `${count} LoRAs`;
+    value.title = options.privacyRevealed === false
+      ? "Private LoRA stack"
+      : stack?.loras?.map((lora) => lora.name).join(", ") || value.textContent;
+    return value;
+  }
+
+  renderLoraTargetActions({ timeline, labelText, stack, onEdit, onClear }) {
+    const actions = el("span", "htd-lora-actions");
+    const locked = this.isLoraEditingLocked(timeline);
+    const editTitle = locked ? "Reveal privacy before editing LoRAs" : `Edit ${labelText} LoRAs`;
+    const clearTitle = locked ? "Reveal privacy before clearing LoRAs" : `Clear ${labelText} LoRAs`;
+    const edit = iconButton("lora", editTitle, onEdit, { disabled: locked });
+    const clear = iconButton("delete", clearTitle, onClear, { disabled: locked || !(stack?.loras?.length > 0) });
+    actions.append(edit, clear);
+    return actions;
+  }
+
+  openProjectLoraStackEditor(labelText, modelKey, targetKey) {
+    const timeline = this.controller.timeline;
+    if (this.isLoraEditingLocked(timeline)) return;
+    const stack = timeline.project?.model_loras?.global?.[modelKey]?.[targetKey];
+    showTimelineLoraStackEditor({
+      documentRef: this.container.ownerDocument ?? globalThis.document,
+      title: `${labelText} LoRAs`,
+      stack,
+      profile: loraEditorProfileForTarget(modelKey, targetKey),
+      onSave: (nextStack) => {
+        this.commitMutation((currentTimeline) => {
+          setProjectModelLoraStack(currentTimeline, modelKey, targetKey, nextStack);
+        }, "project lora edit");
+      },
+    });
+  }
+
+  openShotLoraStackEditor(shotId, labelText, modelKey, targetKey) {
+    const timeline = this.controller.timeline;
+    if (this.isLoraEditingLocked(timeline)) return;
+    const shot = findShot(timeline, shotId);
+    const stack = shot?.lora_overrides?.targets?.[modelKey]?.[targetKey];
+    showTimelineLoraStackEditor({
+      documentRef: this.container.ownerDocument ?? globalThis.document,
+      title: `${labelText} Shot LoRAs`,
+      stack,
+      profile: loraEditorProfileForTarget(modelKey, targetKey),
+      onSave: (nextStack) => {
+        this.commitMutation((currentTimeline) => {
+          setShotLoraTargetStack(currentTimeline, shotId, modelKey, targetKey, nextStack);
+        }, "shot lora edit");
+      },
+    });
+  }
+
+  isLoraEditingLocked(timeline) {
+    return Boolean(timeline?.project?.privacy?.mode && !this.isPrivacyRevealed(timeline));
   }
 
   startSectionDrag(event, section, mode) {
@@ -3262,9 +3334,10 @@ function installStyles(documentRef) {
     .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-project-loras { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 7px; padding-top: 7px; border-top: 1px solid #30394c; }
     .htd-project-loras-title { grid-column: 1 / -1; color: #eef2f7; font-weight: 600; }
-    .htd-project-lora-row { min-width: 0; display: grid; grid-template-columns: 70px 66px minmax(80px, 1fr); align-items: center; gap: 6px; color: #c7d0df; }
+    .htd-project-lora-row { min-width: 0; display: grid; grid-template-columns: 70px minmax(66px, 1fr) auto; align-items: center; gap: 6px; color: #c7d0df; }
     .htd-project-lora-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
-    .htd-lora-match { width: 100%; }
+    .htd-lora-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+    .htd-lora-actions .htd-icon-button { width: 24px; min-width: 24px; height: 22px; }
     .htd-settings-overlay { position: absolute; inset: 0; z-index: 20; display: flex; align-items: stretch; justify-content: center; background: rgba(8, 11, 17, 0.82); padding: 10px; box-sizing: border-box; }
     .htd-settings-modal { width: min(760px, 100%); min-height: 0; border: 1px solid #465064; border-radius: 6px; background: #121925; box-shadow: 0 12px 34px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
     .htd-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #30394c; }

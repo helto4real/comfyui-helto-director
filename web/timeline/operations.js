@@ -484,6 +484,10 @@ export function setProjectModelLoraStack(timeline, modelKey, targetKey, stack) {
   return true;
 }
 
+export function clearProjectModelLoraStack(timeline, modelKey, targetKey) {
+  return setProjectModelLoraStack(timeline, modelKey, targetKey, createDefaultLoraStack());
+}
+
 export function setShotLoraMergeMode(timeline, shotId, mergeMode) {
   const shot = findShot(timeline, shotId);
   if (!shot || !LORA_MERGE_MODES.includes(mergeMode)) return false;
@@ -497,12 +501,31 @@ export function setShotLoraMergeMode(timeline, shotId, mergeMode) {
 export function setShotLoraTargetStack(timeline, shotId, modelKey, targetKey, stack) {
   const shot = findShot(timeline, shotId);
   if (!shot || !isValidLoraTarget(modelKey, targetKey)) return false;
+  const normalizedStack = normalizeTimelineLoraStack(stack);
   shot.lora_overrides ??= { enabled: true, merge_mode: "Add To Global", targets: {} };
   shot.lora_overrides.enabled = true;
-  if (shot.lora_overrides.merge_mode === "Inherit Global") shot.lora_overrides.merge_mode = "Add To Global";
+  if (
+    normalizedStack.loras.length > 0
+    && (shot.lora_overrides.merge_mode === "Inherit Global" || shot.lora_overrides.merge_mode === "Disable LoRAs")
+  ) {
+    shot.lora_overrides.merge_mode = "Add To Global";
+  }
   shot.lora_overrides.targets ??= {};
   shot.lora_overrides.targets[modelKey] ??= {};
-  shot.lora_overrides.targets[modelKey][targetKey] = normalizeTimelineLoraStack(stack);
+  shot.lora_overrides.targets[modelKey][targetKey] = normalizedStack;
+  return true;
+}
+
+export function clearShotLoraTargetStack(timeline, shotId, modelKey, targetKey) {
+  const shot = findShot(timeline, shotId);
+  if (!shot || !isValidLoraTarget(modelKey, targetKey)) return false;
+  shot.lora_overrides ??= { enabled: false, merge_mode: "Inherit Global", targets: {} };
+  shot.lora_overrides.targets ??= {};
+  const modelTargets = shot.lora_overrides.targets[modelKey];
+  if (modelTargets && typeof modelTargets === "object" && !Array.isArray(modelTargets)) {
+    delete modelTargets[targetKey];
+    if (!Object.keys(modelTargets).length) delete shot.lora_overrides.targets[modelKey];
+  }
   return true;
 }
 

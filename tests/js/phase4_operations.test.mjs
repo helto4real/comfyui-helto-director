@@ -21,7 +21,9 @@ import {
   canFitLastDirectorSectionToDuration,
   changeBoundaryMode,
   changeShotType,
+  clearProjectModelLoraStack,
   clearShotLoraOverride,
+  clearShotLoraTargetStack,
   createOrUpdateBoundaryBetweenShots,
   createShot,
   deleteSelectedItem,
@@ -483,6 +485,8 @@ function testProjectAndShotLoraOperations() {
   assert.equal(setProjectModelLoraStack(timeline, MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN, stack), true);
   assert.deepEqual(timeline.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras, stack.loras);
   assert.equal(setProjectModelLoraStack(timeline, MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_HIGH_NOISE, stack), false);
+  assert.equal(clearProjectModelLoraStack(timeline, MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN), true);
+  assert.deepEqual(timeline.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras, []);
 
   assert.equal(setShotLoraMergeMode(timeline, shot.shot_id, "Replace Global"), true);
   assert.equal(shot.lora_overrides.enabled, true);
@@ -490,6 +494,12 @@ function testProjectAndShotLoraOperations() {
   assert.equal(setShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE, stack), true);
   assert.equal(shot.lora_overrides.targets[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE].loras[0].name, "style.safetensors");
   assert.equal(setShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_MAIN, stack), false);
+  assert.equal(clearShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE), true);
+  assert.equal(shot.lora_overrides.merge_mode, "Replace Global");
+  assert.equal(shot.lora_overrides.targets[MODEL_LORA_MODEL_WAN_2_2], undefined);
+  assert.equal(setShotLoraMergeMode(timeline, shot.shot_id, "Disable LoRAs"), true);
+  assert.equal(setShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE, stack), true);
+  assert.equal(shot.lora_overrides.merge_mode, "Add To Global");
   assert.equal(clearShotLoraOverride(timeline, shot.shot_id), true);
   assert.deepEqual(shot.lora_overrides, {
     enabled: false,

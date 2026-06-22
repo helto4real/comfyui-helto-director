@@ -198,6 +198,13 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("Project Folder"), true);
   assert.equal(rendererSource.includes("projectFolderDisplay(timeline"), true);
   assert.equal(rendererSource.includes("entry.code === \"BOUNDARY_LORA_STACK_MISMATCH\""), true);
+  assert.equal(rendererSource.includes("showTimelineLoraStackEditor"), true);
+  assert.equal(rendererSource.includes("loraEditorProfileForTarget"), true);
+  assert.equal(rendererSource.includes("renderLoraTargetActions"), true);
+  assert.equal(rendererSource.includes("openProjectLoraStackEditor"), true);
+  assert.equal(rendererSource.includes("openShotLoraStackEditor"), true);
+  assert.equal(rendererSource.includes("Reveal privacy before editing LoRAs"), true);
+  assert.equal(rendererSource.includes("Stack note"), false);
   assert.equal(rendererSource.includes("assetDisplayLabel(asset, privacyRevealed"), true);
   assert.equal(rendererSource.includes("assetSummaryLabel(asset, privacyRevealed)"), true);
   assert.equal(rendererSource.includes("takeSummaryLabel(timeline, take, privacyRevealed)"), true);
@@ -494,6 +501,7 @@ function testTimelineStatusBarOverlayIsNotInstalled() {
 
 function testRendererUsesRealWaveformsOnly() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+  const stateSource = readFileSync(new URL("../../web/timeline/state.js", import.meta.url), "utf8");
 
   assert.equal(rendererSource.includes("createWaveformBars"), false);
   assert.equal(rendererSource.includes("requestWaveform?.(asset, peakCount)"), true);
@@ -515,6 +523,8 @@ function testRendererUsesRealWaveformsOnly() {
   assert.equal(rendererSource.includes("is-privacy-modal-open"), true);
   assert.equal(rendererSource.includes("this.privacyRevealActive && !this.privacyExternalModalOpen"), true);
   assert.equal(rendererSource.includes("onClose: () => {"), true);
+  assert.equal(stateSource.includes(".htd-lora-editor-dialog"), true);
+  assert.equal(stateSource.includes(".htd-lora-info-dialog"), true);
 }
 
 function testWaveformHelpersAdaptAndTrimPeaks() {
