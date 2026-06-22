@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = "1.0";
+export const SCHEMA_VERSION = "2.0";
 export const VIDEO_TIMELINE_TYPE = "VIDEO_TIMELINE";
 
 export const SECTION_TYPE_IMAGE = "Image";
@@ -95,11 +95,141 @@ export const QUALITY_PRESETS = [
   "Native Resolution",
 ];
 
+export const SEQUENCE_ID_MAIN = "main";
+export const SEQUENCE_NAME_MAIN = "Main Timeline";
+
+export const SHOT_TYPES = [
+  "Generated",
+  "Imported",
+  "Extended",
+  "Edited",
+  "Placeholder",
+];
+
+export const BOUNDARY_MODES = [
+  "Hard Cut",
+  "Continuous Shot",
+  "Blend Seam",
+  "Transition",
+];
+
+export const TAKE_STATUSES = [
+  "Candidate",
+  "Accepted",
+  "Rejected",
+];
+
+export const LORA_MERGE_MODES = [
+  "Inherit Global",
+  "Add To Global",
+  "Replace Global",
+  "Disable LoRAs",
+];
+
+export const MODEL_LORA_SCHEMA_VERSION = 2;
+export const MODEL_LORA_MODEL_LTX_2_3 = "ltx_2_3";
+export const MODEL_LORA_MODEL_WAN_2_2 = "wan_2_2";
+export const MODEL_LORA_TARGET_MAIN = "main";
+export const MODEL_LORA_TARGET_HIGH_NOISE = "high_noise";
+export const MODEL_LORA_TARGET_LOW_NOISE = "low_noise";
+
 export const DEFAULT_DURATION_SECONDS = 5.0;
 export const DEFAULT_FRAME_RATE = 24.0;
 export const DEFAULT_ASPECT_RATIO = "16:9";
 export const DEFAULT_ORIENTATION = "Landscape";
 export const DEFAULT_QUALITY_PRESET = "Standard";
+
+export function createDefaultLoraStack() {
+  return {
+    version: 1,
+    loras: [],
+    ui: { show_strengths: "single", match: "" },
+  };
+}
+
+export function createDefaultProjectModelLoras() {
+  return {
+    schema_version: MODEL_LORA_SCHEMA_VERSION,
+    global: {
+      [MODEL_LORA_MODEL_LTX_2_3]: {
+        [MODEL_LORA_TARGET_MAIN]: createDefaultLoraStack(),
+      },
+      [MODEL_LORA_MODEL_WAN_2_2]: {
+        [MODEL_LORA_TARGET_HIGH_NOISE]: createDefaultLoraStack(),
+        [MODEL_LORA_TARGET_LOW_NOISE]: createDefaultLoraStack(),
+      },
+    },
+  };
+}
+
+export function createDefaultSequence() {
+  return {
+    sequence_id: SEQUENCE_ID_MAIN,
+    name: SEQUENCE_NAME_MAIN,
+    shots: [],
+    boundaries: [],
+  };
+}
+
+export function createDefaultShot(index = 1) {
+  return {
+    shot_id: `shot_${String(index).padStart(3, "0")}`,
+    name: "",
+    type: "Generated",
+    start_time: 0.0,
+    end_time: 0.0,
+    section_ids: [],
+    lora_overrides: {
+      enabled: false,
+      merge_mode: "Inherit Global",
+      targets: {},
+    },
+    takes: [],
+    accepted_take_id: null,
+    clip_instance: null,
+    metadata: {},
+  };
+}
+
+export function createDefaultBoundary(index = 1) {
+  return {
+    boundary_id: `boundary_${String(index).padStart(3, "0")}`,
+    left_shot_id: null,
+    right_shot_id: null,
+    mode: "Hard Cut",
+    tail_frames: 5,
+    blend_frames: 3,
+    transition_prompt: "",
+    reuse_character_refs: true,
+    reuse_style: true,
+    metadata: {},
+  };
+}
+
+export function createDefaultTake(index = 1) {
+  return {
+    take_id: `take_${String(index).padStart(3, "0")}`,
+    asset_id: null,
+    status: "Candidate",
+    seed: null,
+    model_family: "",
+    model_version: "",
+    plan_hash: "",
+    prompt_hash: "",
+    resolved_loras: null,
+    metadata: {},
+  };
+}
+
+export function createDefaultClipInstance() {
+  return {
+    asset_id: null,
+    source_in: 0.0,
+    source_out: null,
+    speed: 1.0,
+    enabled: true,
+  };
+}
 
 export function createDefaultVideoTimeline() {
   return {
@@ -146,18 +276,7 @@ export function createDefaultVideoTimeline() {
         character_references_enabled: true,
         character_references: [],
       },
-      model_loras: {
-        lora_config_hi: {
-          version: 1,
-          loras: [],
-          ui: { show_strengths: "single", match: "" },
-        },
-        lora_config_low: {
-          version: 1,
-          loras: [],
-          ui: { show_strengths: "single", match: "" },
-        },
-      },
+      model_loras: createDefaultProjectModelLoras(),
     },
     ui_state: {
       timeline_display_mode: "Sections",
@@ -170,6 +289,7 @@ export function createDefaultVideoTimeline() {
       state_revision: 0,
     },
     assets: [],
+    sequence: createDefaultSequence(),
     director_track: {
       track_id: "director",
       sections: [],

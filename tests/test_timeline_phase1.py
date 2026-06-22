@@ -4,13 +4,23 @@ from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_HARD_CUT,
     DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT,
     DEFAULT_VIDEO_GUIDANCE_RANGE,
     GLOBAL_PROMPT_POSITION_SUFFIX,
+    MODEL_LORA_MODEL_LTX_2_3,
+    MODEL_LORA_MODEL_WAN_2_2,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
+    MODEL_LORA_TARGET_MAIN,
     SCHEMA_VERSION,
+    SEQUENCE_ID_MAIN,
+    SEQUENCE_NAME_MAIN,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
+    SHOT_TYPE_GENERATED,
+    TAKE_STATUS_CANDIDATE,
     VIDEO_TIMELINE_TYPE,
 )
 from shared.timeline import (
@@ -41,8 +51,38 @@ def test_create_default_video_timeline_shape():
     assert timeline["ui_state"]["view_start_seconds"] == 0
     assert timeline["ui_state"]["view_end_seconds"] == 5
     assert timeline["assets"] == []
+    assert timeline["sequence"] == {
+        "sequence_id": SEQUENCE_ID_MAIN,
+        "name": SEQUENCE_NAME_MAIN,
+        "shots": [],
+        "boundaries": [],
+    }
     assert timeline["director_track"]["sections"] == []
     assert timeline["audio_tracks"] == []
+    assert timeline["project"]["model_loras"] == {
+        "schema_version": 2,
+        "global": {
+            MODEL_LORA_MODEL_LTX_2_3: {
+                MODEL_LORA_TARGET_MAIN: {
+                    "version": 1,
+                    "loras": [],
+                    "ui": {"show_strengths": "single", "match": ""},
+                },
+            },
+            MODEL_LORA_MODEL_WAN_2_2: {
+                MODEL_LORA_TARGET_HIGH_NOISE: {
+                    "version": 1,
+                    "loras": [],
+                    "ui": {"show_strengths": "single", "match": ""},
+                },
+                MODEL_LORA_TARGET_LOW_NOISE: {
+                    "version": 1,
+                    "loras": [],
+                    "ui": {"show_strengths": "single", "match": ""},
+                },
+            },
+        },
+    }
 
 
 def test_migrate_accepts_json_string():
@@ -95,6 +135,67 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
     assert section["custom_note"] == "keep me"
     assert section["image"] is None
     assert section["guide_strength"] == 1.0
+
+
+def test_normalization_fills_sequence_shot_boundary_and_take_defaults():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {},
+        "sequence": {
+            "shots": [
+                {
+                    "shot_id": "shot_custom",
+                    "section_ids": [123, None, "section_b"],
+                    "takes": [{"take_id": "take_custom", "status": "Nope"}],
+                    "clip_instance": {"asset_id": 42, "speed": "bad"},
+                    "lora_overrides": {"merge_mode": "Nope", "targets": []},
+                }
+            ],
+            "boundaries": [{"boundary_id": "boundary_custom", "mode": "Nope"}],
+        },
+    }
+
+    normalized = normalize_video_timeline(timeline)
+    sequence = normalized["sequence"]
+    shot = sequence["shots"][0]
+    boundary = sequence["boundaries"][0]
+    take = shot["takes"][0]
+
+    assert sequence["sequence_id"] == SEQUENCE_ID_MAIN
+    assert sequence["name"] == SEQUENCE_NAME_MAIN
+    assert shot["shot_id"] == "shot_custom"
+    assert shot["type"] == SHOT_TYPE_GENERATED
+    assert shot["section_ids"] == ["123", "section_b"]
+    assert shot["lora_overrides"] == {
+        "enabled": False,
+        "merge_mode": "Inherit Global",
+        "targets": {},
+    }
+    assert shot["clip_instance"]["asset_id"] == "42"
+    assert shot["clip_instance"]["speed"] == 1.0
+    assert take["take_id"] == "take_custom"
+    assert take["status"] == TAKE_STATUS_CANDIDATE
+    assert take["resolved_loras"] is None
+    assert boundary["boundary_id"] == "boundary_custom"
+    assert boundary["mode"] == BOUNDARY_MODE_HARD_CUT
+
+
+def test_normalization_drops_legacy_lora_fields_and_creates_model_targets():
+    timeline = create_default_video_timeline()
+    timeline["project"]["model_loras"] = {
+        "lora_config_hi": {"loras": [{"enabled": True, "name": "hi.safetensors"}]},
+        "lora_config_low": {"loras": [{"enabled": True, "name": "low.safetensors"}]},
+    }
+
+    normalized = normalize_video_timeline(timeline)
+    model_loras = normalized["project"]["model_loras"]
+
+    assert "lora_config_hi" not in model_loras
+    assert "lora_config_low" not in model_loras
+    assert model_loras["schema_version"] == 2
+    assert model_loras["global"][MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN]["loras"] == []
+    assert model_loras["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE]["loras"] == []
+    assert model_loras["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_LOW_NOISE]["loras"] == []
 
 
 def test_video_section_normalization_defaults_to_tail_guidance():

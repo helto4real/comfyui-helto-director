@@ -8,6 +8,7 @@ from ..contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_SOURCE_KINDS,
     ASSET_TYPES,
+    BOUNDARY_MODES,
     CROP_MODE_PROJECT_DEFAULT,
     DEFAULT_AUDIO_FADE_IN_SECONDS,
     DEFAULT_AUDIO_FADE_OUT_SECONDS,
@@ -17,11 +18,31 @@ from ..contracts.video_timeline import (
     DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT,
     DEFAULT_VIDEO_GUIDANCE_RANGE,
     DEFAULT_VIDEO_TIMING_MODE,
+    LORA_MERGE_MODE_INHERIT_GLOBAL,
+    LORA_MERGE_MODES,
+    MODEL_LORA_MODEL_LTX_2_3,
+    MODEL_LORA_MODEL_WAN_2_2,
+    MODEL_LORA_SCHEMA_VERSION,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
+    MODEL_LORA_TARGET_MAIN,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
+    SEQUENCE_ID_MAIN,
+    SEQUENCE_NAME_MAIN,
+    SHOT_TYPES,
+    TAKE_STATUSES,
 )
-from .defaults import create_default_video_timeline
+from .defaults import (
+    create_default_boundary,
+    create_default_clip_instance,
+    create_default_lora_stack,
+    create_default_sequence,
+    create_default_shot,
+    create_default_take,
+    create_default_video_timeline,
+)
 from .migration import migrate_video_timeline
 from .references import normalize_character_references
 from ..lora.config import normalize_lora_config
@@ -37,6 +58,7 @@ def normalize_video_timeline(timeline: Any) -> dict:
     normalized["audio_tracks"] = _normalize_audio_tracks(
         normalized.get("audio_tracks")
     )
+    normalized["sequence"] = _normalize_sequence(normalized.get("sequence"))
     _normalize_project_metadata(normalized)
     _normalize_project_model_loras(normalized)
     _normalize_privacy(normalized)
@@ -86,10 +108,43 @@ def _normalize_project_model_loras(timeline: dict) -> None:
     model_loras = project.get("model_loras")
     if not isinstance(model_loras, dict):
         model_loras = {}
+    global_loras = model_loras.get("global")
+    if not isinstance(global_loras, dict):
+        global_loras = {}
     project["model_loras"] = {
-        "lora_config_hi": normalize_lora_config(model_loras.get("lora_config_hi")),
-        "lora_config_low": normalize_lora_config(model_loras.get("lora_config_low")),
+        "schema_version": MODEL_LORA_SCHEMA_VERSION,
+        "global": _normalize_project_lora_targets(global_loras),
     }
+
+
+def _normalize_project_lora_targets(targets: dict[str, Any]) -> dict[str, Any]:
+    ltx = targets.get(MODEL_LORA_MODEL_LTX_2_3)
+    if not isinstance(ltx, dict):
+        ltx = {}
+    wan = targets.get(MODEL_LORA_MODEL_WAN_2_2)
+    if not isinstance(wan, dict):
+        wan = {}
+    return {
+        MODEL_LORA_MODEL_LTX_2_3: {
+            MODEL_LORA_TARGET_MAIN: _normalize_lora_stack(
+                ltx.get(MODEL_LORA_TARGET_MAIN)
+            ),
+        },
+        MODEL_LORA_MODEL_WAN_2_2: {
+            MODEL_LORA_TARGET_HIGH_NOISE: _normalize_lora_stack(
+                wan.get(MODEL_LORA_TARGET_HIGH_NOISE)
+            ),
+            MODEL_LORA_TARGET_LOW_NOISE: _normalize_lora_stack(
+                wan.get(MODEL_LORA_TARGET_LOW_NOISE)
+            ),
+        },
+    }
+
+
+def _normalize_lora_stack(stack: Any) -> dict[str, Any]:
+    if not isinstance(stack, dict):
+        stack = create_default_lora_stack()
+    return normalize_lora_config(stack)
 
 
 def _fill_missing(value: Any, defaults: Any) -> Any:
@@ -115,6 +170,152 @@ def _normalize_director_track(track: Any) -> dict:
         for index, section in enumerate(sections if isinstance(sections, list) else [])
         if isinstance(section, dict)
     ]
+    return normalized
+
+
+def _normalize_sequence(sequence: Any) -> dict:
+    if not isinstance(sequence, dict):
+        sequence = {}
+    normalized = _fill_missing(sequence, create_default_sequence())
+    normalized["sequence_id"] = str(normalized.get("sequence_id") or SEQUENCE_ID_MAIN)
+    normalized["name"] = str(normalized.get("name") or SEQUENCE_NAME_MAIN)
+    shots = normalized.get("shots")
+    normalized["shots"] = [
+        _normalize_shot(shot, index)
+        for index, shot in enumerate(shots if isinstance(shots, list) else [])
+        if isinstance(shot, dict)
+    ]
+    boundaries = normalized.get("boundaries")
+    normalized["boundaries"] = [
+        _normalize_boundary(boundary, index)
+        for index, boundary in enumerate(boundaries if isinstance(boundaries, list) else [])
+        if isinstance(boundary, dict)
+    ]
+    return normalized
+
+
+def _normalize_shot(shot: dict, index: int) -> dict:
+    normalized = _fill_missing(shot, create_default_shot(index + 1))
+    normalized["shot_id"] = str(normalized.get("shot_id") or f"shot_{index + 1:03d}")
+    normalized["name"] = str(normalized.get("name") or "")
+    if normalized.get("type") not in SHOT_TYPES:
+        normalized["type"] = create_default_shot(index + 1)["type"]
+    normalized["start_time"] = _as_float(normalized.get("start_time"), 0.0)
+    normalized["end_time"] = _as_float(normalized.get("end_time"), normalized["start_time"])
+    section_ids = normalized.get("section_ids")
+    normalized["section_ids"] = [
+        str(section_id)
+        for section_id in (section_ids if isinstance(section_ids, list) else [])
+        if section_id is not None
+    ]
+    normalized["lora_overrides"] = _normalize_shot_lora_overrides(
+        normalized.get("lora_overrides")
+    )
+    takes = normalized.get("takes")
+    normalized["takes"] = [
+        _normalize_take(take, take_index)
+        for take_index, take in enumerate(takes if isinstance(takes, list) else [])
+        if isinstance(take, dict)
+    ]
+    accepted_take_id = normalized.get("accepted_take_id")
+    normalized["accepted_take_id"] = (
+        str(accepted_take_id) if accepted_take_id is not None else None
+    )
+    normalized["clip_instance"] = _normalize_clip_instance(
+        normalized.get("clip_instance")
+    )
+    if not isinstance(normalized.get("metadata"), dict):
+        normalized["metadata"] = {}
+    return normalized
+
+
+def _normalize_boundary(boundary: dict, index: int) -> dict:
+    normalized = _fill_missing(boundary, create_default_boundary(index + 1))
+    normalized["boundary_id"] = str(
+        normalized.get("boundary_id") or f"boundary_{index + 1:03d}"
+    )
+    for key in ("left_shot_id", "right_shot_id"):
+        normalized[key] = str(normalized[key]) if normalized.get(key) is not None else None
+    if normalized.get("mode") not in BOUNDARY_MODES:
+        normalized["mode"] = create_default_boundary(index + 1)["mode"]
+    normalized["tail_frames"] = _as_int(normalized.get("tail_frames"), 5)
+    normalized["blend_frames"] = _as_int(normalized.get("blend_frames"), 3)
+    normalized["transition_prompt"] = str(normalized.get("transition_prompt") or "")
+    normalized["reuse_character_refs"] = normalized.get("reuse_character_refs") is not False
+    normalized["reuse_style"] = normalized.get("reuse_style") is not False
+    if not isinstance(normalized.get("metadata"), dict):
+        normalized["metadata"] = {}
+    return normalized
+
+
+def _normalize_take(take: dict, index: int) -> dict:
+    normalized = _fill_missing(take, create_default_take(index + 1))
+    normalized["take_id"] = str(normalized.get("take_id") or f"take_{index + 1:03d}")
+    if normalized.get("status") not in TAKE_STATUSES:
+        normalized["status"] = create_default_take(index + 1)["status"]
+    for key in ("asset_id", "seed", "resolved_loras"):
+        normalized[key] = normalized.get(key)
+    for key in ("model_family", "model_version", "plan_hash", "prompt_hash"):
+        normalized[key] = str(normalized.get(key) or "")
+    if not isinstance(normalized.get("metadata"), dict):
+        normalized["metadata"] = {}
+    return normalized
+
+
+def _normalize_clip_instance(clip_instance: Any) -> dict | None:
+    if clip_instance is None:
+        return None
+    if not isinstance(clip_instance, dict):
+        clip_instance = {}
+    normalized = _fill_missing(clip_instance, create_default_clip_instance())
+    normalized["asset_id"] = (
+        str(normalized["asset_id"]) if normalized.get("asset_id") is not None else None
+    )
+    normalized["source_in"] = _as_float(normalized.get("source_in"), 0.0)
+    source_out = normalized.get("source_out")
+    normalized["source_out"] = (
+        _as_float(source_out, None) if source_out is not None else None
+    )
+    normalized["speed"] = _as_float(normalized.get("speed"), 1.0)
+    normalized["enabled"] = normalized.get("enabled") is not False
+    return normalized
+
+
+def _normalize_shot_lora_overrides(overrides: Any) -> dict:
+    if not isinstance(overrides, dict):
+        overrides = {}
+    normalized = deepcopy(overrides)
+    normalized["enabled"] = bool(normalized.get("enabled", False))
+    if normalized.get("merge_mode") not in LORA_MERGE_MODES:
+        normalized["merge_mode"] = LORA_MERGE_MODE_INHERIT_GLOBAL
+    normalized["targets"] = _normalize_optional_lora_targets(normalized.get("targets"))
+    return normalized
+
+
+def _normalize_optional_lora_targets(targets: Any) -> dict[str, Any]:
+    if not isinstance(targets, dict):
+        return {}
+    normalized: dict[str, Any] = {}
+    ltx = targets.get(MODEL_LORA_MODEL_LTX_2_3)
+    if isinstance(ltx, dict) and MODEL_LORA_TARGET_MAIN in ltx:
+        normalized[MODEL_LORA_MODEL_LTX_2_3] = {
+            MODEL_LORA_TARGET_MAIN: _normalize_lora_stack(
+                ltx.get(MODEL_LORA_TARGET_MAIN)
+            )
+        }
+    wan = targets.get(MODEL_LORA_MODEL_WAN_2_2)
+    wan_targets: dict[str, Any] = {}
+    if isinstance(wan, dict):
+        if MODEL_LORA_TARGET_HIGH_NOISE in wan:
+            wan_targets[MODEL_LORA_TARGET_HIGH_NOISE] = _normalize_lora_stack(
+                wan.get(MODEL_LORA_TARGET_HIGH_NOISE)
+            )
+        if MODEL_LORA_TARGET_LOW_NOISE in wan:
+            wan_targets[MODEL_LORA_TARGET_LOW_NOISE] = _normalize_lora_stack(
+                wan.get(MODEL_LORA_TARGET_LOW_NOISE)
+            )
+    if wan_targets:
+        normalized[MODEL_LORA_MODEL_WAN_2_2] = wan_targets
     return normalized
 
 
@@ -220,6 +421,20 @@ def _normalize_ui_state_view_range(timeline: dict) -> None:
     end = max(start + 1, min(end, project_seconds))
     ui_state["view_start_seconds"] = start
     ui_state["view_end_seconds"] = end
+
+
+def _as_float(value: Any, fallback: float | None) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _as_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _basename(path: Any) -> str:

@@ -5,11 +5,9 @@ import sys
 from pathlib import Path
 
 from shared.contracts.video_timeline import SECTION_TYPE_TEXT
-from shared.lora import config as lora_config_module
 from shared.timeline import create_default_video_timeline
 from shared.privacy import CRYPTO_AVAILABLE, encrypt_state
 import pytest
-import folder_paths
 
 
 def get_video_timeline_director():
@@ -54,8 +52,6 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
         "orientation",
         "quality_preset",
         "video_timeline_json",
-        "lora_config_hi",
-        "lora_config_low",
     ]
     assert "IMAGE" not in input_types
     assert "VIDEO" not in input_types
@@ -65,8 +61,6 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
     assert schema.inputs[input_ids.index("aspect_ratio")].options == ["16:9", "4:3", "3:2", "21:9", "1:1"]
     assert schema.inputs[input_ids.index("orientation")].options == ["Landscape", "Portrait"]
     assert schema.inputs[input_ids.index("video_timeline_json")].extra_dict["hidden"] is True
-    assert input_types[input_ids.index("lora_config_hi")] == "HELTO_LORA_CONFIG"
-    assert input_types[input_ids.index("lora_config_low")] == "HELTO_LORA_CONFIG"
 
 
 def test_director_runs_without_frontend_state():
@@ -122,25 +116,23 @@ def test_director_applies_visible_widgets_as_authoritative_fields():
     assert output_timeline["ui_state"]["view_end_seconds"] == 4
 
 
-def test_director_embeds_connected_lora_configs_in_timeline_data(monkeypatch):
-    monkeypatch.setattr(
-        lora_config_module,
-        "_available_loras",
-        lambda: ["hi.safetensors", "low.safetensors"],
-    )
-    monkeypatch.setattr(folder_paths, "get_filename_list", lambda category: ["hi.safetensors", "low.safetensors"] if category == "loras" else [])
+def test_director_drops_legacy_lora_config_fields_from_timeline_data():
     VideoTimelineDirector = get_video_timeline_director()
+    timeline = create_default_video_timeline()
+    timeline["project"]["model_loras"] = {
+        "lora_config_hi": {"loras": [{"enabled": True, "name": "hi.safetensors"}]},
+        "lora_config_low": {"loras": [{"enabled": True, "name": "low.safetensors"}]},
+    }
 
     output_timeline, validation, _frame_rate = VideoTimelineDirector.execute(
-        lora_config_hi={"loras": [{"enabled": True, "name": "hi.safetensors", "strength_model": 0.8}]},
-        lora_config_low={"loras": [{"enabled": True, "name": "low.safetensors", "strength_model": 0.4}]},
+        video_timeline_json=json.dumps(timeline),
     ).result
 
     assert validation["is_valid"] is True
     model_loras = output_timeline["project"]["model_loras"]
-    assert model_loras["lora_config_hi"]["loras"][0]["name"] == "hi.safetensors"
-    assert model_loras["lora_config_hi"]["loras"][0]["strength_clip"] == 0.8
-    assert model_loras["lora_config_low"]["loras"][0]["name"] == "low.safetensors"
+    assert "lora_config_hi" not in model_loras
+    assert "lora_config_low" not in model_loras
+    assert model_loras["schema_version"] == 2
 
 
 def test_director_outputs_validation_for_invalid_timeline():

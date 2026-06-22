@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
+import {
+  MODEL_LORA_MODEL_LTX_2_3,
+  MODEL_LORA_MODEL_WAN_2_2,
+  MODEL_LORA_TARGET_HIGH_NOISE,
+  MODEL_LORA_TARGET_LOW_NOISE,
+  MODEL_LORA_TARGET_MAIN,
+  createDefaultVideoTimeline,
+} from "../../web/timeline/schema.js";
 import { normalizeVideoTimeline } from "../../web/timeline/migration.js";
 import {
   addAudioClip,
@@ -123,6 +130,69 @@ function testMigrationDerivesSelectedItemIdsFromPrimarySelection() {
 
   assert.deepEqual(normalized.ui_state.selected_item_ids, [section.item_id]);
   assert.equal(normalized.ui_state.selected_item_id, section.item_id);
+}
+
+function testDefaultTimelineHasSequenceAndModelTargetedLoras() {
+  const timeline = createDefaultVideoTimeline();
+
+  assert.deepEqual(timeline.sequence, {
+    sequence_id: "main",
+    name: "Main Timeline",
+    shots: [],
+    boundaries: [],
+  });
+  assert.equal(timeline.project.model_loras.schema_version, 2);
+  assert.deepEqual(timeline.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras, []);
+  assert.deepEqual(timeline.project.model_loras.global[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE].loras, []);
+  assert.deepEqual(timeline.project.model_loras.global[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_LOW_NOISE].loras, []);
+}
+
+function testMigrationDropsLegacyLorasAndPreservesSections() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.model_loras = {
+    lora_config_hi: { loras: [{ enabled: true, name: "hi.safetensors" }] },
+    lora_config_low: { loras: [{ enabled: true, name: "low.safetensors" }] },
+  };
+  addValidTextSection(timeline, 0);
+
+  const normalized = normalizeVideoTimeline(timeline);
+
+  assert.equal("lora_config_hi" in normalized.project.model_loras, false);
+  assert.equal("lora_config_low" in normalized.project.model_loras, false);
+  assert.equal(normalized.project.model_loras.schema_version, 2);
+  assert.equal(normalized.director_track.sections.length, 1);
+  assert.deepEqual(normalized.sequence.shots, []);
+}
+
+function testMigrationNormalizesPartialSequenceStructures() {
+  const normalized = normalizeVideoTimeline({
+    type: "VIDEO_TIMELINE",
+    project: {},
+    sequence: {
+      shots: [{
+        shot_id: "shot_custom",
+        section_ids: [123, null, "section_b"],
+        lora_overrides: { merge_mode: "Nope", targets: [] },
+        takes: [{ take_id: "take_custom", status: "Nope" }],
+        clip_instance: { asset_id: 42, speed: "bad" },
+      }],
+      boundaries: [{ boundary_id: "boundary_custom", mode: "Nope" }],
+    },
+  });
+  const shot = normalized.sequence.shots[0];
+
+  assert.equal(normalized.sequence.sequence_id, "main");
+  assert.equal(shot.type, "Generated");
+  assert.deepEqual(shot.section_ids, ["123", "section_b"]);
+  assert.deepEqual(shot.lora_overrides, {
+    enabled: false,
+    merge_mode: "Inherit Global",
+    targets: {},
+  });
+  assert.equal(shot.takes[0].status, "Candidate");
+  assert.equal(shot.clip_instance.asset_id, "42");
+  assert.equal(shot.clip_instance.speed, 1);
+  assert.equal(normalized.sequence.boundaries[0].mode, "Hard Cut");
 }
 
 function testGroupDeleteRemovesMixedSelection() {
@@ -311,6 +381,9 @@ testGapsRemainAllowedAndDetected();
 testSplitAndDuplicate();
 testSelectionHelpersKeepPrimaryInSync();
 testMigrationDerivesSelectedItemIdsFromPrimarySelection();
+testDefaultTimelineHasSequenceAndModelTargetedLoras();
+testMigrationDropsLegacyLorasAndPreservesSections();
+testMigrationNormalizesPartialSequenceStructures();
 testGroupDeleteRemovesMixedSelection();
 testGroupMoveClampsSectionsAndMovesUnlockedAudio();
 testGroupDuplicatePreservesOffsetsAndSelectsCopies();

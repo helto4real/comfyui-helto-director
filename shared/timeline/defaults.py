@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from ..contracts.video_timeline import (
+    BOUNDARY_MODE_HARD_CUT,
     CROP_MODE_PROJECT_DEFAULT,
     DEFAULT_ALLOW_GAPS,
     DEFAULT_ASPECT_RATIO,
@@ -17,12 +18,31 @@ from ..contracts.video_timeline import (
     DEFAULT_QUALITY_PRESET,
     DEFAULT_USE_NATIVE_AUDIO,
     GLOBAL_PROMPT_POSITION_PREFIX,
+    LORA_MERGE_MODE_INHERIT_GLOBAL,
+    MODEL_LORA_MODEL_LTX_2_3,
+    MODEL_LORA_MODEL_WAN_2_2,
+    MODEL_LORA_SCHEMA_VERSION,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
+    MODEL_LORA_TARGET_MAIN,
     SCHEMA_VERSION,
     SECTION_EDIT_MODE_TRIM_NEIGHBOR,
+    SEQUENCE_ID_MAIN,
+    SEQUENCE_NAME_MAIN,
+    SHOT_TYPE_GENERATED,
+    TAKE_STATUS_CANDIDATE,
     SNAP_MODE_FRAMES,
     TIMELINE_DISPLAY_MODE_DEFAULT,
     VIDEO_TIMELINE_TYPE,
 )
+
+
+def create_default_lora_stack() -> dict:
+    return {
+        "version": 1,
+        "loras": [],
+        "ui": {"show_strengths": "single", "match": ""},
+    }
 
 
 def create_default_video_timeline() -> dict:
@@ -70,18 +90,7 @@ def create_default_video_timeline() -> dict:
                 "character_references_enabled": True,
                 "character_references": [],
             },
-            "model_loras": {
-                "lora_config_hi": {
-                    "version": 1,
-                    "loras": [],
-                    "ui": {"show_strengths": "single", "match": ""},
-                },
-                "lora_config_low": {
-                    "version": 1,
-                    "loras": [],
-                    "ui": {"show_strengths": "single", "match": ""},
-                },
-            },
+            "model_loras": create_default_project_model_loras(),
         },
         "ui_state": {
             "timeline_display_mode": TIMELINE_DISPLAY_MODE_DEFAULT,
@@ -94,6 +103,7 @@ def create_default_video_timeline() -> dict:
             "state_revision": 0,
         },
         "assets": [],
+        "sequence": create_default_sequence(),
         "director_track": {
             "track_id": "director",
             "sections": [],
@@ -108,3 +118,87 @@ def create_default_video_timeline() -> dict:
         },
     }
     return deepcopy(timeline)
+
+
+def create_default_project_model_loras() -> dict:
+    return {
+        "schema_version": MODEL_LORA_SCHEMA_VERSION,
+        "global": {
+            MODEL_LORA_MODEL_LTX_2_3: {
+                MODEL_LORA_TARGET_MAIN: create_default_lora_stack(),
+            },
+            MODEL_LORA_MODEL_WAN_2_2: {
+                MODEL_LORA_TARGET_HIGH_NOISE: create_default_lora_stack(),
+                MODEL_LORA_TARGET_LOW_NOISE: create_default_lora_stack(),
+            },
+        },
+    }
+
+
+def create_default_sequence() -> dict:
+    return {
+        "sequence_id": SEQUENCE_ID_MAIN,
+        "name": SEQUENCE_NAME_MAIN,
+        "shots": [],
+        "boundaries": [],
+    }
+
+
+def create_default_shot(index: int = 1) -> dict:
+    return {
+        "shot_id": f"shot_{index:03d}",
+        "name": "",
+        "type": SHOT_TYPE_GENERATED,
+        "start_time": 0.0,
+        "end_time": 0.0,
+        "section_ids": [],
+        "lora_overrides": {
+            "enabled": False,
+            "merge_mode": LORA_MERGE_MODE_INHERIT_GLOBAL,
+            "targets": {},
+        },
+        "takes": [],
+        "accepted_take_id": None,
+        "clip_instance": None,
+        "metadata": {},
+    }
+
+
+def create_default_boundary(index: int = 1) -> dict:
+    return {
+        "boundary_id": f"boundary_{index:03d}",
+        "left_shot_id": None,
+        "right_shot_id": None,
+        "mode": BOUNDARY_MODE_HARD_CUT,
+        "tail_frames": 5,
+        "blend_frames": 3,
+        "transition_prompt": "",
+        "reuse_character_refs": True,
+        "reuse_style": True,
+        "metadata": {},
+    }
+
+
+def create_default_take(index: int = 1) -> dict:
+    return {
+        "take_id": f"take_{index:03d}",
+        "asset_id": None,
+        "status": TAKE_STATUS_CANDIDATE,
+        "seed": None,
+        "model_family": "",
+        "model_version": "",
+        "plan_hash": "",
+        "prompt_hash": "",
+        "resolved_loras": None,
+        "metadata": {},
+    }
+
+
+def create_default_clip_instance() -> dict:
+    return {
+        "asset_id": None,
+        "source_in": 0.0,
+        "source_out": None,
+        "speed": 1.0,
+        "enabled": True,
+    }
