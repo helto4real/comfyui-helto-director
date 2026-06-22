@@ -40,8 +40,13 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
   closeMediaPicker(documentRef);
   const mediaType = mediaTypeForAsset(assetType);
   const isReference = mode === "reference";
-  const title = isReference ? "Add Character Reference" : `${mode === "replace" ? "Replace" : "Add"} Timeline ${assetType}`;
-  const okLabel = isReference ? "Add Reference" : `${mode === "replace" ? "Replace" : "Add"} ${assetType}`;
+  const isGeneratedTake = mode === "attach-generated-take";
+  const title = isGeneratedTake
+    ? "Pick Generated Video As Take"
+    : (isReference ? "Add Character Reference" : `${mode === "replace" ? "Replace" : "Add"} Timeline ${assetType}`);
+  const okLabel = isGeneratedTake
+    ? "Register Take"
+    : (isReference ? "Add Reference" : `${mode === "replace" ? "Replace" : "Add"} ${assetType}`);
   const noun = mediaType === "video" ? "videos" : "images";
 
   return new Promise((resolve) => {
@@ -676,7 +681,8 @@ function compareNames(a, b) {
 
 function itemCaption(item) {
   const size = item.width || item.height ? ` (${item.width || "?"}x${item.height || "?"})` : "";
-  return `${item.filename}${size}`;
+  const take = item.has_take_capture ? " · take metadata" : "";
+  return `${item.filename}${size}${take}`;
 }
 
 function mediaTypeForAsset(assetType) {

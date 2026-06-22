@@ -3,6 +3,8 @@ import {
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
   ASSET_SOURCE_GENERATED,
+  TAKE_STATUSES,
+  deepClone,
 } from "./schema.js";
 import {
   addAudioClip,
@@ -53,15 +55,32 @@ export function addPickedMediaItem(timeline, assetType, item) {
 export function attachPickedGeneratedVideoAsTake(timeline, shotId, item, takeData = {}) {
   const asset = createPickedMediaAsset(ASSET_TYPE_VIDEO, item);
   if (!asset) return null;
+  const capture = normalizeGeneratedTakeCapture(item?.take_capture);
+  const registration = capture?.registration && typeof capture.registration === "object"
+    ? capture.registration
+    : null;
+  const registrationAsset = registration?.asset && typeof registration.asset === "object"
+    ? registration.asset
+    : null;
   asset.source_kind = ASSET_SOURCE_GENERATED;
+  if (registrationAsset?.asset_id) asset.asset_id = String(registrationAsset.asset_id);
+  if (registrationAsset?.name) asset.name = String(registrationAsset.name);
+  if (registrationAsset?.mime_type) asset.mime_type = String(registrationAsset.mime_type);
+  if (Number.isFinite(registrationAsset?.size_bytes)) asset.size_bytes = Number(registrationAsset.size_bytes);
   asset.metadata = {
     ...(asset.metadata ?? {}),
+    ...safeObject(registrationAsset?.metadata),
+    ...mediaMetadataFromCapture(capture?.media),
     shot_id: shotId,
     source_kind: ASSET_SOURCE_GENERATED,
   };
   timeline.assets ??= [];
   timeline.assets.push(asset);
-  const take = attachVideoAssetAsTake(timeline, shotId, asset.asset_id, takeData);
+  const captureTake = takeDataFromRegistration(registration?.take);
+  const take = attachVideoAssetAsTake(timeline, shotId, asset.asset_id, {
+    ...captureTake,
+    ...deepClone(takeData),
+  });
   return take ? { asset, take } : null;
 }
 
@@ -78,4 +97,37 @@ export function replacePickedSectionMedia(timeline, itemId, assetType, item) {
 
 function basename(path) {
   return String(path ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+function normalizeGeneratedTakeCapture(capture) {
+  if (!capture || typeof capture !== "object" || capture.type !== "HELTO_GENERATED_TAKE_CAPTURE") return null;
+  if (!capture.registration || typeof capture.registration !== "object") return null;
+  return capture;
+}
+
+function takeDataFromRegistration(take) {
+  if (!take || typeof take !== "object") return {};
+  const copy = deepClone(take);
+  delete copy.shot_id;
+  if (!TAKE_STATUSES.includes(copy.status)) copy.status = "Candidate";
+  copy.metadata = safeObject(copy.metadata);
+  copy.resolved_loras = copy.resolved_loras ?? null;
+  return copy;
+}
+
+function mediaMetadataFromCapture(media) {
+  const metadata = {};
+  if (!media || typeof media !== "object") return metadata;
+  for (const key of ["frame_rate", "frame_count", "duration_seconds", "width", "height"]) {
+    if (media[key] !== undefined && media[key] !== null && media[key] !== "") {
+      metadata[key] = media[key];
+    }
+  }
+  return metadata;
+}
+
+function safeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? deepClone(value)
+    : {};
 }

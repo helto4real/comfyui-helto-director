@@ -1,7 +1,11 @@
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+from shared.contracts.video_timeline import ASSET_TYPE_VIDEO, SECTION_TYPE_TEXT
+from shared.timeline import create_default_video_timeline, validate_video_timeline
 
 
 def load_nodepack_like_comfyui():
@@ -80,3 +84,152 @@ def test_classic_loader_mapping_includes_timeline_lora_node():
 
     assert "HeltoTimelineLoraConfiguration" in module.NODE_CLASS_MAPPINGS
     assert module.NODE_CLASS_MAPPINGS["HeltoTimelineLoraConfiguration"].RETURN_TYPES == ("HELTO_LORA_CONFIG",)
+
+
+def test_comfyui_style_loader_includes_timeline_take_capture_node():
+    nodes = get_node_list()
+    schemas = {node.define_schema().node_id: node.define_schema() for node in nodes}
+    schema = schemas["HeltoTimelineTakeCapture"]
+
+    assert schema.display_name == "Timeline Take Capture"
+    assert [output.io_type for output in schema.outputs] == [
+        "VIDEO_TIMELINE",
+        "VIDEO",
+        "STRING",
+        "STRING",
+        "DEBUG_INFO",
+    ]
+    assert [input.id for input in schema.inputs] == [
+        "video_timeline",
+        "runtime_debug",
+        "video",
+        "images",
+        "audio",
+        "frame_rate",
+        "take_registration_json",
+        "generated_asset_path",
+        "shot_id_override",
+        "filename_prefix",
+        "accept",
+        "update_clip_instance",
+    ]
+
+
+def test_timeline_take_capture_node_registers_asset_path_and_writes_sidecar(tmp_path):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    media_path = tmp_path / "generated.mp4"
+
+    output = node.execute(
+        _timeline_with_shot(),
+        take_registration_json=json.dumps(
+            {
+                "type": "TAKE_REGISTRATION_ENVELOPE",
+                "shot_id": "shot_001",
+                "asset": {
+                    "asset_id": "asset_capture_path",
+                    "type": ASSET_TYPE_VIDEO,
+                    "name": "generated.mp4",
+                },
+                "take": {
+                    "take_id": "take_capture_path",
+                    "seed": 123,
+                },
+            }
+        ),
+        generated_asset_path=str(media_path),
+        accept=True,
+    )
+
+    timeline = output[0]
+    assert output[1] is None
+    assert output[2] == "asset_capture_path"
+    assert output[3] == "take_capture_path"
+    assert output[4]["code"] == "TAKE_CAPTURE_REGISTERED"
+    assert (tmp_path / "generated.helto_take.json").is_file()
+    assert timeline["assets"][0]["path"] == str(media_path)
+    assert timeline["sequence"]["shots"][0]["accepted_take_id"] == "take_capture_path"
+    assert validate_video_timeline(timeline)["is_valid"] is True
+
+
+def test_timeline_take_capture_node_saves_video_and_registers_sidecar(tmp_path, monkeypatch):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    node_module = sys.modules[node.__module__]
+    monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(tmp_path))
+    video = FakeVideo()
+
+    output = node.execute(
+        _timeline_with_shot(),
+        take_registration_json=json.dumps(
+            {
+                "type": "TAKE_REGISTRATION_ENVELOPE",
+                "shot_id": "shot_001",
+                "asset": {
+                    "asset_id": "asset_capture_video",
+                    "type": ASSET_TYPE_VIDEO,
+                    "name": "captured.mp4",
+                },
+                "take": {
+                    "take_id": "take_capture_video",
+                    "seed": 456,
+                    "model_family": "LTX",
+                    "model_version": "2.3",
+                },
+            }
+        ),
+        video=video,
+        filename_prefix="helto_test/%shot_id%/%take_id%",
+    )
+
+    timeline = output[0]
+    saved_path = Path(timeline["assets"][0]["path"])
+    assert output[1] is video
+    assert saved_path.is_file()
+    assert saved_path.name.startswith("take_capture_video_")
+    assert saved_path.with_suffix(".helto_take.json").is_file()
+    assert output[4]["summary"]["sidecar_filename"] == saved_path.with_suffix(".helto_take.json").name
+    assert timeline["assets"][0]["metadata"]["frame_count"] == 12
+    assert timeline["sequence"]["shots"][0]["takes"][0]["seed"] == 456
+    assert validate_video_timeline(timeline)["is_valid"] is True
+
+
+class FakeVideo:
+    def save_to(self, path, **_kwargs):
+        Path(path).write_bytes(b"fake video")
+
+    def get_dimensions(self):
+        return 64, 32
+
+    def get_frame_rate(self):
+        return 24.0
+
+    def get_frame_count(self):
+        return 12
+
+    def get_duration(self):
+        return 0.5
+
+
+def _timeline_with_shot() -> dict:
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["director_track"]["sections"] = [
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "prompt": "generate a quiet establishing shot",
+        }
+    ]
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": "Generated",
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "section_ids": ["section_001"],
+        }
+    ]
+    return timeline

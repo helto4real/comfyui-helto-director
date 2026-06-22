@@ -18,6 +18,11 @@ from .media_cache import (
     VIDEO_EXTENSIONS,
     make_thumbnail,
 )
+from .timeline.generated_capture import (
+    GeneratedCaptureError,
+    build_generated_take_capture_sidecar,
+    normalize_generated_take_capture_sidecar,
+)
 
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
@@ -80,6 +85,19 @@ def default_folder() -> MediaFolder:
     )
 
 
+def default_folders(media_type: str) -> list[MediaFolder]:
+    defaults = [default_folder()]
+    if normalize_media_type(media_type) == "video":
+        output = MediaFolder(
+            alias="output",
+            path=os.path.normpath(folder_paths.get_output_directory()),
+            enabled=True,
+        )
+        if os.path.normcase(os.path.abspath(output.path)) != os.path.normcase(os.path.abspath(defaults[0].path)):
+            defaults.append(output)
+    return defaults
+
+
 def safe_alias(alias: str) -> str:
     value = str(alias or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_. -]{1,80}", value):
@@ -112,14 +130,14 @@ def folder_alias_from_path(path: str, existing_aliases: set[str]) -> str:
 
 def load_folders(media_type: str) -> list[MediaFolder]:
     file_path = config_file(media_type)
-    default = default_folder()
+    defaults = default_folders(media_type)
     if not file_path.exists():
-        return [default]
+        return defaults
 
     try:
         data = json.loads(file_path.read_text(encoding="utf-8") or "{}")
     except Exception:
-        return [default]
+        return defaults
 
     folders: list[MediaFolder] = []
     seen: set[str] = set()
@@ -134,8 +152,9 @@ def load_folders(media_type: str) -> list[MediaFolder]:
         folders.append(MediaFolder(alias=alias, path=path, enabled=bool(entry.get("enabled", True))))
         seen.add(alias)
 
-    if default.alias not in seen:
-        folders.insert(0, default)
+    for default in reversed(defaults):
+        if default.alias not in seen:
+            folders.insert(0, default)
     return folders
 
 
@@ -183,8 +202,8 @@ def add_folder(media_type: str, alias: str, path: str) -> list[MediaFolder]:
 
 
 def remove_folder(media_type: str, alias: str) -> list[MediaFolder]:
-    if alias == "input":
-        raise ValueError("Cannot remove the default input folder.")
+    if alias in {folder.alias for folder in default_folders(media_type)}:
+        raise ValueError(f"Cannot remove the default {alias} folder.")
     folders = load_folders(media_type)
     next_folders = [folder for folder in folders if folder.alias != alias]
     if len(next_folders) == len(folders):
@@ -193,7 +212,13 @@ def remove_folder(media_type: str, alias: str) -> list[MediaFolder]:
     return next_folders
 
 
-def list_media(media_type: str, root: str | Path, recursive: bool = True) -> list[dict[str, Any]]:
+def list_media(
+    media_type: str,
+    root: str | Path,
+    recursive: bool = True,
+    *,
+    privacy_mode: bool = False,
+) -> list[dict[str, Any]]:
     media_type = normalize_media_type(media_type)
     extensions = media_definition(media_type)["extensions"]
     root_path = Path(root)
@@ -224,6 +249,7 @@ def list_media(media_type: str, root: str | Path, recursive: bool = True) -> lis
                 item.update(image_metadata(path))
             elif media_type == "video":
                 item.update(video_metadata(path))
+                item.update(generated_take_capture_metadata(path, privacy_mode=privacy_mode))
             elif media_type == "audio":
                 item["duration_seconds"] = media_duration_seconds(path, "audio")
             results.append(item)
@@ -262,6 +288,41 @@ def resolve_browser_media_path(media_type: str, alias: str, filename: str) -> Pa
     if not candidate.is_file():
         raise FileNotFoundError(f"Media not found: {alias}/{filename}")
     return candidate
+
+
+def generated_take_capture_metadata(path: Path, *, privacy_mode: bool = False) -> dict[str, Any]:
+    sidecar_path = generated_take_sidecar_path(path)
+    if sidecar_path is None:
+        return {"has_take_capture": False}
+    try:
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8") or "{}")
+        normalized = normalize_generated_take_capture_sidecar(payload)
+        if privacy_mode:
+            normalized = build_generated_take_capture_sidecar(
+                normalized["registration"],
+                media=normalized.get("media"),
+                privacy_mode=True,
+            )
+        return {
+            "has_take_capture": True,
+            "take_capture": normalized,
+        }
+    except (GeneratedCaptureError, OSError, json.JSONDecodeError) as exc:
+        return {
+            "has_take_capture": False,
+            "take_capture_error": str(exc),
+        }
+
+
+def generated_take_sidecar_path(path: Path) -> Path | None:
+    candidates = [
+        path.with_suffix(".helto_take.json"),
+        Path(f"{path}.helto_take.json"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def make_browser_thumbnail(media_type: str, alias: str, filename: str, max_size: int = 320, privacy_mode: bool = False) -> Path | bytes:

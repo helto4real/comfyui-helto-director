@@ -47,6 +47,9 @@ WANTimelineSegmentedExecutor = importlib.import_module(
 HeltoTimelineLoraConfiguration = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.timeline_lora_configuration.node"
 ).HeltoTimelineLoraConfiguration
+TimelineTakeCapture = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.timeline_take_capture.node"
+).TimelineTakeCapture
 _identity_module = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_identity.node"
 )
@@ -97,6 +100,7 @@ NODE_CLASS_MAPPINGS = {
     "HeltoWAN22TimelineRuntime": WANTimelineRuntime,
     "HeltoWAN22TimelineSegmentedExecutor": WANTimelineSegmentedExecutor,
     "HeltoTimelineLoraConfiguration": HeltoTimelineLoraConfiguration,
+    "HeltoTimelineTakeCapture": TimelineTakeCapture,
     "HeltoLTX23TimelineCropReferenceTail": LTXTimelineCropReferenceTail,
     "HeltoLTX23TimelineReferenceImageSelector": LTXTimelineReferenceImageSelector,
     "HeltoLTX23TimelineIdentityAnchorLatentAware": LTXTimelineIdentityAnchorLatentAware,
@@ -116,6 +120,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoWAN22TimelineRuntime": "WAN 2.2 Timeline Runtime",
     "HeltoWAN22TimelineSegmentedExecutor": "WAN 2.2 Timeline Segmented Executor",
     "HeltoTimelineLoraConfiguration": "Timeline LoRA Configuration",
+    "HeltoTimelineTakeCapture": "Timeline Take Capture",
     "HeltoLTX23TimelineCropReferenceTail": "LTX 2.3 Timeline Crop Reference Tail",
     "HeltoLTX23TimelineReferenceImageSelector": "LTX 2.3 Timeline Reference Image Selector",
     "HeltoLTX23TimelineIdentityAnchorLatentAware": "LTX 2.3 Timeline Identity Anchor: Latent Aware",
@@ -138,6 +143,7 @@ class TimelineDirectorExtension(ComfyExtension):
             WANTimelinePlanner,
             WANTimelineRuntime,
             WANTimelineSegmentedExecutor,
+            TimelineTakeCapture,
             LTXTimelineCropReferenceTail,
             LTXTimelineReferenceImageSelector,
             LTXTimelineIdentityAnchorLatentAware,
@@ -174,4 +180,5 @@ __all__ = [
     "register_timeline_library_routes",
     "register_lora_info_routes",
     "HeltoTimelineLoraConfiguration",
+    "TimelineTakeCapture",
 ]

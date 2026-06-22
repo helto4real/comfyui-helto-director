@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import PurePath
 from typing import Any
 
@@ -14,11 +15,61 @@ from ..contracts.video_timeline import (
     TAKE_STATUSES,
 )
 from .defaults import create_default_clip_instance, create_default_take
+from .generated_capture import (
+    GENERATED_TAKE_CAPTURE_TYPE,
+    generated_take_capture_to_registration,
+)
 from .normalize import normalize_video_timeline
+from .take_capture import TAKE_CAPTURE_TYPE
 
 
 class TakeRegistrationError(ValueError):
     """Raised when a generated take cannot be safely registered."""
+
+
+def apply_take_registration(
+    timeline: Any,
+    registration: dict[str, Any] | str,
+    *,
+    generated_asset_path: str | None = None,
+    accept: bool = False,
+    update_clip_instance: bool = True,
+) -> dict:
+    """Apply a take-registration envelope or sidecar payload to a timeline."""
+
+    envelope = prepare_take_registration(
+        registration,
+        generated_asset_path=generated_asset_path,
+        accept=accept,
+        update_clip_instance=update_clip_instance,
+    )
+    return register_generated_take(timeline, envelope)
+
+
+def prepare_take_registration(
+    registration: dict[str, Any] | str,
+    *,
+    generated_asset_path: str | None = None,
+    accept: bool = False,
+    update_clip_instance: bool = True,
+) -> dict[str, Any]:
+    """Return a normalized registration envelope ready for application."""
+
+    envelope = _registration_envelope_from_input(registration)
+    path = _safe_string(generated_asset_path)
+    if path:
+        asset = _raw_dict(envelope.get("asset"))
+        if not _safe_string(asset.get("path") or asset.get("file_path")):
+            asset["path"] = path
+        if not _safe_string(asset.get("name")):
+            asset["name"] = _basename(path)
+        envelope["asset"] = asset
+    asset = _raw_dict(envelope.get("asset"))
+    if not _safe_string(asset.get("path") or asset.get("file_path")):
+        raise TakeRegistrationError("generated_asset_path is required.")
+    envelope["accept"] = bool(accept) or envelope.get("accept") is True
+    envelope["update_clip_instance"] = bool(update_clip_instance)
+    return envelope
 
 
 def register_generated_take(timeline: Any, registration: dict[str, Any]) -> dict:
@@ -168,6 +219,30 @@ def set_take_status(
         "status": status,
         "accepted": status == TAKE_STATUS_ACCEPTED,
     }
+
+
+def _registration_envelope_from_input(registration: dict[str, Any] | str) -> dict[str, Any]:
+    payload = _parse_registration_payload(registration)
+    payload_type = payload.get("type")
+    if payload_type == GENERATED_TAKE_CAPTURE_TYPE:
+        return generated_take_capture_to_registration(payload)
+    if payload_type not in {None, TAKE_CAPTURE_TYPE}:
+        raise TakeRegistrationError(f"Unsupported take registration type: {payload_type}")
+    return deepcopy(payload)
+
+
+def _parse_registration_payload(registration: dict[str, Any] | str) -> dict[str, Any]:
+    if isinstance(registration, str):
+        text = registration.strip()
+        if not text:
+            raise TakeRegistrationError("Take registration JSON is required.")
+        try:
+            registration = json.loads(text)
+        except Exception as exc:
+            raise TakeRegistrationError("Take registration JSON is invalid.") from exc
+    if not isinstance(registration, dict):
+        raise TakeRegistrationError("Take registration must be an object.")
+    return registration
 
 
 def _asset_payload_from_registration(registration: dict[str, Any]) -> dict[str, Any]:

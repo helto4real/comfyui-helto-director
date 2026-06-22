@@ -26,6 +26,8 @@ from .take_capture import build_take_capture_metadata
 from .take_registration import (
     TakeRegistrationError,
     accept_take,
+    apply_take_registration,
+    prepare_take_registration,
     register_generated_take,
     register_take_for_asset,
     reject_take,
@@ -36,6 +38,8 @@ from .validate import validate_video_timeline
 
 __all__ = [
     "accept_take",
+    "apply_take_registration",
+    "prepare_take_registration",
     "assemble_timeline_sequence",
     "create_default_video_timeline",
     "create_resolved_lora_snapshot",

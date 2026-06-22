@@ -19,6 +19,7 @@ from shared.timeline import (
     GeneratedCaptureError,
     TakeRegistrationError,
     accept_take,
+    apply_take_registration,
     build_generated_take_capture_sidecar,
     build_take_capture_metadata,
     create_default_video_timeline,
@@ -317,6 +318,57 @@ def test_generated_take_capture_sidecar_pairs_asset_metadata_with_registration()
     assert take["take_id"] == "take_001"
     assert take["status"] == TAKE_STATUS_ACCEPTED
     assert validate_video_timeline(timeline)["is_valid"] is True
+
+
+def test_apply_take_registration_accepts_json_envelope_and_asset_path():
+    registration_json = json.dumps(
+        {
+            "type": "TAKE_REGISTRATION_ENVELOPE",
+            "shot_id": "shot_001",
+            "asset": {
+                "asset_id": "asset_registered",
+                "type": ASSET_TYPE_VIDEO,
+                "name": "registered.mp4",
+            },
+            "take": {
+                "take_id": "take_registered",
+                "seed": 987,
+                "model_family": "WAN",
+                "model_version": "2.2",
+            },
+        }
+    )
+
+    result = apply_take_registration(
+        _timeline_with_shot(),
+        registration_json,
+        generated_asset_path="/tmp/output/registered.mp4",
+        accept=True,
+    )
+    timeline = result["timeline"]
+    shot = _shot(timeline)
+
+    assert result["accepted"] is True
+    assert result["asset_id"] == "asset_registered"
+    assert result["take_id"] == "take_registered"
+    assert timeline["assets"][0]["path"] == "/tmp/output/registered.mp4"
+    assert shot["accepted_take_id"] == "take_registered"
+    assert shot["clip_instance"]["asset_id"] == "asset_registered"
+    assert "shot_id" not in shot["takes"][0]
+    assert validate_video_timeline(timeline)["is_valid"] is True
+
+
+def test_apply_take_registration_rejects_missing_asset_path():
+    with pytest.raises(TakeRegistrationError, match="generated_asset_path"):
+        apply_take_registration(
+            _timeline_with_shot(),
+            {
+                "type": "TAKE_REGISTRATION_ENVELOPE",
+                "shot_id": "shot_001",
+                "asset": {"type": ASSET_TYPE_VIDEO},
+                "take": {"take_id": "take_missing_path"},
+            },
+        )
 
 
 def test_generated_take_capture_privacy_redacts_clear_names_paths_and_loras():

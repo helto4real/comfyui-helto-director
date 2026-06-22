@@ -99,11 +99,12 @@ def register_media_browser_routes() -> bool:
             media_type = normalize_media_type(request.match_info["media_type"])
             alias = request.rel_url.query.get("alias", "")
             recursive = request.rel_url.query.get("recursive", "1").lower() not in {"0", "false", "no"}
+            privacy_mode = query_bool(request.rel_url.query.get("privacy"))
             folder = folder_by_alias(media_type, alias)
             if not folder.enabled:
                 return web.json_response({"error": f"Folder alias is disabled: {alias}"}, status=400)
             items_key = media_definition(media_type)["items_key"]
-            items = list_media(media_type, folder.path, recursive=recursive)
+            items = list_media(media_type, folder.path, recursive=recursive, privacy_mode=privacy_mode)
             for item in items:
                 params = {
                     "alias": alias,
@@ -114,7 +115,7 @@ def register_media_browser_routes() -> bool:
                 item["view_url"] = f"{ROUTE_PREFIX}/{media_type}/view?{encoded}"
                 if media_type in {"image", "video"}:
                     thumb_params = dict(params)
-                    if query_bool(request.rel_url.query.get("privacy")):
+                    if privacy_mode:
                         thumb_params["privacy"] = "1"
                     item["thumb_url"] = f"{ROUTE_PREFIX}/{media_type}/thumb?{urllib.parse.urlencode(thumb_params)}"
             return web.json_response({items_key: items})

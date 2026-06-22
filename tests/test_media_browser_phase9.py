@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import wave
 
@@ -8,8 +9,10 @@ import pytest
 from PIL import Image
 
 from routes import media_browser as media_browser_routes
+from shared.contracts.video_timeline import ASSET_TYPE_VIDEO, MODEL_LORA_TARGET_MAIN
 from shared import media_browser
 from shared.privacy import CRYPTO_AVAILABLE
+from shared.timeline.generated_capture import build_generated_take_capture_sidecar
 
 
 def test_media_browser_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):
@@ -77,6 +80,26 @@ def test_media_browser_folder_config_defaults_adds_removes_and_rejects_invalid(t
         folder_paths.set_input_directory(original_input)
 
 
+def test_video_browser_defaults_include_output_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(media_browser, "CONFIG_DIR", tmp_path / "config")
+    original_input = folder_paths.get_input_directory()
+    original_output = folder_paths.get_output_directory()
+    folder_paths.set_input_directory(str(tmp_path / "input"))
+    folder_paths.set_output_directory(str(tmp_path / "output"))
+    try:
+        (tmp_path / "input").mkdir()
+        (tmp_path / "output").mkdir()
+
+        folders = media_browser.load_folders("video")
+
+        assert [folder.alias for folder in folders] == ["input", "output"]
+        with pytest.raises(ValueError):
+            media_browser.remove_folder("video", "output")
+    finally:
+        folder_paths.set_input_directory(original_input)
+        folder_paths.set_output_directory(original_output)
+
+
 def test_media_browser_lists_only_matching_extensions(tmp_path):
     Image.new("RGB", (16, 16), color=(10, 20, 30)).save(tmp_path / "image.png")
     (tmp_path / "movie.mp4").write_bytes(b"not a real movie")
@@ -86,6 +109,47 @@ def test_media_browser_lists_only_matching_extensions(tmp_path):
     assert [item["filename"] for item in media_browser.list_media("image", tmp_path)] == ["image.png"]
     assert [item["filename"] for item in media_browser.list_media("video", tmp_path)] == ["movie.mp4"]
     assert [item["filename"] for item in media_browser.list_media("audio", tmp_path)] == ["tone.wav"]
+
+
+def test_video_browser_reads_generated_take_sidecar_and_privacy_redacts(tmp_path):
+    (tmp_path / "clip.mp4").write_bytes(b"not a real movie")
+    sidecar = build_generated_take_capture_sidecar(
+        {
+            "shot_id": "shot_001",
+            "asset": {"name": "private_subject.mp4"},
+            "take": {
+                "take_id": "take_001",
+                "seed": 321,
+                "resolved_loras": {
+                    "model_family": "LTX",
+                    "model_version": "2.3",
+                    "targets": {
+                        MODEL_LORA_TARGET_MAIN: [
+                            {"name": "secret_style.safetensors", "strength_model": 0.8}
+                        ]
+                    },
+                },
+            },
+        },
+        media={
+            "type": ASSET_TYPE_VIDEO,
+            "filename": "clip.mp4",
+            "frame_rate": 24.0,
+            "frame_count": 12,
+        },
+    )
+    (tmp_path / "clip.helto_take.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    public_item = media_browser.list_media("video", tmp_path)[0]
+    private_item = media_browser.list_media("video", tmp_path, privacy_mode=True)[0]
+
+    assert public_item["has_take_capture"] is True
+    assert public_item["take_capture"]["registration"]["take"]["seed"] == 321
+    assert public_item["take_capture"]["media"]["frame_rate"] == 24.0
+    assert "secret_style" in json.dumps(public_item["take_capture"])
+    assert "secret_style" not in json.dumps(private_item["take_capture"])
+    row = private_item["take_capture"]["registration"]["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_MAIN][0]
+    assert row["name"] == "lora_001"
 
 
 def test_media_browser_rejects_wrong_extension_and_traversal(tmp_path, monkeypatch):
