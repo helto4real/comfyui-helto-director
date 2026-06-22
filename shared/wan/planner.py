@@ -29,7 +29,7 @@ from ..timeline import (
     build_generation_segments,
     detect_director_gaps,
     merge_prompts,
-    normalize_video_timeline,
+    select_shot_timeline_for_planning,
     time_range_to_frames,
     validate_video_timeline,
 )
@@ -64,8 +64,15 @@ QUALITY_SHORT_EDGE = {
 }
 
 
-def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    timeline = normalize_video_timeline(video_timeline)
+def build_wan_timeline_plan(
+    video_timeline: Any,
+    wan_config: Any,
+    shot_id: str = "",
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    timeline, shot_context, shot_selection_error = select_shot_timeline_for_planning(
+        video_timeline,
+        shot_id,
+    )
     config = normalize_wan_timeline_config(wan_config)
     director_validation = validate_video_timeline(timeline)
 
@@ -140,6 +147,7 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
+        *_shot_selection_validation_entries(shot_selection_error, "WAN Planner"),
         *flatten_validation_result(wan_validation),
     ])
 
@@ -180,7 +188,16 @@ def build_wan_timeline_plan(video_timeline: Any, wan_config: Any) -> tuple[dict[
         },
         "validation": validation,
     }
-    debug = _build_debug(timeline, config, plan, validation)
+    if shot_context is not None:
+        plan["model_specific"]["wan"]["shot_context"] = deepcopy(shot_context)
+    debug = _build_debug(
+        timeline,
+        config,
+        plan,
+        validation,
+        shot_context=shot_context,
+        shot_selection_error=shot_selection_error,
+    )
     return plan, validation, debug
 
 
@@ -692,7 +709,35 @@ def _validate_wan_inputs(
     return create_validation_result(entries)
 
 
-def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[str, Any], validation: dict[str, Any]) -> dict[str, Any]:
+def _shot_selection_validation_entries(
+    shot_selection_error: dict[str, Any] | None,
+    source: str,
+) -> list[dict[str, Any]]:
+    if not shot_selection_error:
+        return []
+    return [
+        create_validation_entry(
+            "SHOT_SELECTION_NOT_FOUND",
+            SEVERITY_ERROR,
+            source,
+            "Shot",
+            shot_selection_error.get("shot_id"),
+            "Selected shot_id was not found in the timeline sequence.",
+            "Use an existing sequence shot_id or leave Shot ID blank for full-timeline planning.",
+            shot_selection_error,
+        )
+    ]
+
+
+def _build_debug(
+    timeline: dict[str, Any],
+    config: dict[str, Any],
+    plan: dict[str, Any],
+    validation: dict[str, Any],
+    *,
+    shot_context: dict[str, Any] | None = None,
+    shot_selection_error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     wan = plan["model_specific"]["wan"]
     prompt_relay = wan["prompt_relay"]
     visual = wan["visual_conditioning"]
@@ -729,6 +774,7 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
         "warning_count": len(validation["warnings"]),
         "info_count": len(validation["info"]),
     }
+    _add_shot_debug_summary(summary, shot_context, shot_selection_error)
     debug = {
         "type": "DEBUG_INFO",
         "source": "WAN Planner",
@@ -750,7 +796,24 @@ def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[st
             "lora_resolution": deepcopy(lora_resolution),
             "validation": deepcopy(validation),
         }
+        if shot_context is not None:
+            debug["details"]["shot_context"] = deepcopy(shot_context)
     return debug
+
+
+def _add_shot_debug_summary(
+    summary: dict[str, Any],
+    shot_context: dict[str, Any] | None,
+    shot_selection_error: dict[str, Any] | None,
+) -> None:
+    if shot_context is not None:
+        summary["selected_shot_id"] = shot_context.get("shot_id")
+        summary["shot_original_start_time"] = shot_context.get("original_start_time")
+        summary["shot_original_end_time"] = shot_context.get("original_end_time")
+        summary["shot_duration_seconds"] = shot_context.get("duration_seconds")
+    elif shot_selection_error:
+        summary["selected_shot_id"] = shot_selection_error.get("shot_id")
+        summary["shot_selection_error"] = shot_selection_error.get("error")
 
 
 def _requested_frame_count(duration_seconds: float, frame_rate: float) -> int:

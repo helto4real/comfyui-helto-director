@@ -78,6 +78,24 @@ def extract_shot_timeline(timeline: Any, shot_id: str) -> dict[str, Any]:
     }
 
 
+def select_shot_timeline_for_planning(
+    timeline: Any,
+    shot_id: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    normalized = normalize_video_timeline(timeline)
+    requested_shot_id = str(shot_id or "").strip()
+    if not requested_shot_id:
+        return normalized, None, None
+    try:
+        extracted = extract_shot_timeline(normalized, requested_shot_id)
+    except ShotExtractionError as error:
+        return normalized, None, {
+            "shot_id": requested_shot_id,
+            "error": str(error),
+        }
+    return extracted["timeline"], extracted["shot_context"], None
+
+
 def build_shot_boundary_context(timeline: Any, shot_id: str) -> dict[str, Any]:
     normalized = normalize_video_timeline(timeline)
     requested_shot_id = str(shot_id or "")

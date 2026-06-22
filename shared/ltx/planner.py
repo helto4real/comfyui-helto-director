@@ -28,7 +28,7 @@ from ..timeline import (
     build_generation_segments,
     detect_director_gaps,
     merge_prompts,
-    normalize_video_timeline,
+    select_shot_timeline_for_planning,
     time_range_to_frames,
     validate_video_timeline,
 )
@@ -58,8 +58,15 @@ QUALITY_SHORT_EDGE = {
 }
 
 
-def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    timeline = normalize_video_timeline(video_timeline)
+def build_ltx_timeline_plan(
+    video_timeline: Any,
+    ltx_config: Any,
+    shot_id: str = "",
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    timeline, shot_context, shot_selection_error = select_shot_timeline_for_planning(
+        video_timeline,
+        shot_id,
+    )
     config = normalize_ltx_timeline_config(ltx_config)
     director_validation = validate_video_timeline(timeline)
     frame_rate = float(timeline["project"].get("frame_rate") or 24.0)
@@ -95,6 +102,7 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
+        *_shot_selection_validation_entries(shot_selection_error, "LTX Planner"),
         *flatten_validation_result(ltx_validation),
     ])
 
@@ -135,7 +143,16 @@ def build_ltx_timeline_plan(video_timeline: Any, ltx_config: Any) -> tuple[dict[
         },
         "validation": validation,
     }
-    debug = _build_debug(timeline, config, plan, validation)
+    if shot_context is not None:
+        plan["model_specific"]["ltx"]["shot_context"] = deepcopy(shot_context)
+    debug = _build_debug(
+        timeline,
+        config,
+        plan,
+        validation,
+        shot_context=shot_context,
+        shot_selection_error=shot_selection_error,
+    )
     return plan, validation, debug
 
 
@@ -361,27 +378,75 @@ def _build_audio_plan(timeline: dict[str, Any], frame_rate: float) -> list[dict[
     return audio_entries
 
 
-def _build_debug(timeline: dict[str, Any], config: dict[str, Any], plan: dict[str, Any], validation: dict[str, Any]) -> dict[str, Any]:
+def _shot_selection_validation_entries(
+    shot_selection_error: dict[str, Any] | None,
+    source: str,
+) -> list[dict[str, Any]]:
+    if not shot_selection_error:
+        return []
+    return [
+        create_validation_entry(
+            "SHOT_SELECTION_NOT_FOUND",
+            SEVERITY_ERROR,
+            source,
+            "Shot",
+            shot_selection_error.get("shot_id"),
+            "Selected shot_id was not found in the timeline sequence.",
+            "Use an existing sequence shot_id or leave Shot ID blank for full-timeline planning.",
+            shot_selection_error,
+        )
+    ]
+
+
+def _build_debug(
+    timeline: dict[str, Any],
+    config: dict[str, Any],
+    plan: dict[str, Any],
+    validation: dict[str, Any],
+    *,
+    shot_context: dict[str, Any] | None = None,
+    shot_selection_error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ltx = plan["model_specific"]["ltx"]
     timeline_structure = ltx.get("timeline_structure", {})
     lora_resolution = ltx.get("lora_resolution", {})
-    return {
+    summary = {
+        "section_count": len(timeline["director_track"]["sections"]),
+        "shot_count": len(timeline_structure.get("shots", [])),
+        "boundary_count": len(timeline_structure.get("boundaries", [])),
+        "planned_ranges": len(plan["section_plan"]),
+        "media_items": len(plan["media_plan"]),
+        "audio_items": len(plan["audio_plan"]),
+        "lora_signature_count": int(lora_resolution.get("unique_signature_count") or 0),
+        "error_count": len(validation["errors"]),
+        "warning_count": len(validation["warnings"]),
+        "info_count": len(validation["info"]),
+    }
+    _add_shot_debug_summary(summary, shot_context, shot_selection_error)
+    debug = {
         "type": "DEBUG_INFO",
         "source": "LTX Planner",
         "enabled": bool(config.get("debug_mode")),
-        "summary": {
-            "section_count": len(timeline["director_track"]["sections"]),
-            "shot_count": len(timeline_structure.get("shots", [])),
-            "boundary_count": len(timeline_structure.get("boundaries", [])),
-            "planned_ranges": len(plan["section_plan"]),
-            "media_items": len(plan["media_plan"]),
-            "audio_items": len(plan["audio_plan"]),
-            "lora_signature_count": int(lora_resolution.get("unique_signature_count") or 0),
-            "error_count": len(validation["errors"]),
-            "warning_count": len(validation["warnings"]),
-            "info_count": len(validation["info"]),
-        },
+        "summary": summary,
     }
+    if bool(config.get("debug_mode")) and shot_context is not None:
+        debug["details"] = {"shot_context": deepcopy(shot_context)}
+    return debug
+
+
+def _add_shot_debug_summary(
+    summary: dict[str, Any],
+    shot_context: dict[str, Any] | None,
+    shot_selection_error: dict[str, Any] | None,
+) -> None:
+    if shot_context is not None:
+        summary["selected_shot_id"] = shot_context.get("shot_id")
+        summary["shot_original_start_time"] = shot_context.get("original_start_time")
+        summary["shot_original_end_time"] = shot_context.get("original_end_time")
+        summary["shot_duration_seconds"] = shot_context.get("duration_seconds")
+    elif shot_selection_error:
+        summary["selected_shot_id"] = shot_selection_error.get("shot_id")
+        summary["shot_selection_error"] = shot_selection_error.get("error")
 
 
 def _ltx_frame_count(duration_seconds: float, frame_rate: float, temporal_stride: int) -> int:

@@ -97,6 +97,30 @@ def _lora_names(rows: list[dict]) -> list[str]:
     return [row["name"] for row in rows]
 
 
+def _two_shot_text_timeline() -> dict:
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 3.0
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "first shot",
+            },
+            {
+                "item_id": "section_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 3.0,
+                "prompt": "second shot",
+            },
+        ]
+    )
+    return timeline
+
+
 def test_ltx_nodes_are_registered_with_custom_sockets():
     node_classes = get_node_classes()
     node_ids = [node.define_schema().node_id for node in node_classes]
@@ -131,7 +155,11 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
     assert [input_item.io_type for input_item in planner_schema.inputs] == [
         "VIDEO_TIMELINE",
         "LTX_TIMELINE_CONFIG",
+        "STRING",
     ]
+    shot_input = planner_schema.inputs[2]
+    assert shot_input.id == "shot_id"
+    assert shot_input.default == ""
     assert [output.io_type for output in planner_schema.outputs] == [
         "LTX_TIMELINE_PLAN",
         "TIMELINE_VALIDATION",
@@ -281,6 +309,61 @@ def test_ltx_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
     assert ltx["lora_resolution"]["single_generation_loras"][MODEL_LORA_TARGET_MAIN]["loras"] == []
     assert debug["summary"]["shot_count"] == 2
     assert debug["summary"]["boundary_count"] == 1
+    assert "selected_shot_id" not in debug["summary"]
+    assert "shot_context" not in ltx
+
+
+def test_ltx_planner_plans_selected_shot_timeline():
+    timeline = _two_shot_text_timeline()
+
+    plan, validation, debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(debug_mode=True),
+        shot_id="shot_section_002",
+    )
+    ltx = plan["model_specific"]["ltx"]
+    shot_context = ltx["shot_context"]
+
+    assert validation["is_valid"] is True
+    assert plan["project"]["duration_seconds"] == 2.0
+    assert len(plan["section_plan"]) == 1
+    assert plan["section_plan"][0]["item_id"] == "section_002"
+    assert plan["section_plan"][0]["shot_id"] == "shot_section_002"
+    assert plan["section_plan"][0]["start_time"] == 0.0
+    assert plan["section_plan"][0]["end_time"] == 2.0
+    assert ltx["timeline_structure"]["section_to_shot"] == {
+        "section_002": "shot_section_002",
+    }
+    assert shot_context["shot_id"] == "shot_section_002"
+    assert shot_context["original_start_time"] == 1.0
+    assert shot_context["original_end_time"] == 3.0
+    assert shot_context["duration_seconds"] == 2.0
+    assert ltx["timeline_structure"]["metadata"]["shot_extraction"] == shot_context
+    assert debug["summary"]["selected_shot_id"] == "shot_section_002"
+    assert debug["summary"]["shot_original_start_time"] == 1.0
+    assert debug["summary"]["shot_original_end_time"] == 3.0
+    assert debug["summary"]["shot_duration_seconds"] == 2.0
+    assert debug["details"]["shot_context"] == shot_context
+
+
+def test_ltx_planner_invalid_shot_id_marks_plan_invalid_without_crashing():
+    timeline = _two_shot_text_timeline()
+
+    plan, validation, debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(debug_mode=True),
+        shot_id="missing_shot",
+    )
+
+    assert validation["is_valid"] is False
+    assert [entry["code"] for entry in validation["errors"]] == [
+        "SHOT_SELECTION_NOT_FOUND"
+    ]
+    assert plan["project"]["duration_seconds"] == 3.0
+    assert len(plan["section_plan"]) == 2
+    assert "shot_context" not in plan["model_specific"]["ltx"]
+    assert debug["summary"]["selected_shot_id"] == "missing_shot"
+    assert "missing_shot" in debug["summary"]["shot_selection_error"]
 
 
 def test_ltx_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_deferred(monkeypatch):

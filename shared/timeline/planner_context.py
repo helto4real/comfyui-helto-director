@@ -62,6 +62,7 @@ def build_sequence_plan_metadata(timeline: dict[str, Any]) -> dict[str, Any]:
     return {
         "sequence_id": sequence.get("sequence_id"),
         "name": sequence.get("name"),
+        "metadata": deepcopy(sequence.get("metadata") or {}),
         "shots": shots,
         "boundaries": boundaries,
         "section_to_shot": section_to_shot,

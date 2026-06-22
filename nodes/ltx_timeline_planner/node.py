@@ -27,6 +27,12 @@ class LTXTimelinePlanner(io.ComfyNode):
                     "ltx_timeline_config",
                     display_name="LTX_TIMELINE_CONFIG",
                 ),
+                io.String.Input(
+                    "shot_id",
+                    display_name="Shot ID",
+                    default="",
+                    socketless=True,
+                ),
             ],
             outputs=[
                 LTX_TIMELINE_PLAN.Output(
@@ -49,9 +55,11 @@ class LTXTimelinePlanner(io.ComfyNode):
         cls,
         video_timeline: dict,
         ltx_timeline_config: dict,
+        shot_id: str = "",
     ) -> io.NodeOutput:
         plan, validation, debug_info = build_ltx_timeline_plan(
             video_timeline=video_timeline,
             ltx_config=ltx_timeline_config,
+            shot_id=shot_id,
         )
         return io.NodeOutput(plan, validation, debug_info)

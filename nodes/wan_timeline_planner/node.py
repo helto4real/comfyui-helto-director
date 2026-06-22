@@ -27,6 +27,12 @@ class WANTimelinePlanner(io.ComfyNode):
                     "wan_timeline_config",
                     display_name="WAN_TIMELINE_CONFIG",
                 ),
+                io.String.Input(
+                    "shot_id",
+                    display_name="Shot ID",
+                    default="",
+                    socketless=True,
+                ),
             ],
             outputs=[
                 WAN_TIMELINE_PLAN.Output(
@@ -49,9 +55,11 @@ class WANTimelinePlanner(io.ComfyNode):
         cls,
         video_timeline: dict,
         wan_timeline_config: dict,
+        shot_id: str = "",
     ) -> io.NodeOutput:
         plan, validation, debug_info = build_wan_timeline_plan(
             video_timeline=video_timeline,
             wan_config=wan_timeline_config,
+            shot_id=shot_id,
         )
         return io.NodeOutput(plan, validation, debug_info)
