@@ -54,6 +54,7 @@ def build_runtime_debug(
     wan = plan.get("model_specific", {}).get("wan", {})
     config = wan.get("config", {})
     bernini = _bernini_runtime_debug(wan.get("bernini") or {}, media_decisions or [], diagnostics)
+    continuity = _runtime_continuity_debug(plan)
     validation = build_runtime_validation(validation_entries)
     backend = build_backend_report(
         plan=plan,
@@ -88,6 +89,8 @@ def build_runtime_debug(
             "latent_chunk_count": plan.get("resolved_output", {}).get("latent_chunk_count"),
             "warning_count": len(validation.get("warnings", [])),
             "error_count": len(validation.get("errors", [])),
+            "shot_continuity_policy": continuity.get("policy"),
+            "shot_continuity_status": continuity.get("model_status"),
         },
         "backend": backend,
         "backend_capabilities": deepcopy(capabilities),
@@ -99,6 +102,7 @@ def build_runtime_debug(
             "painter_motion_boost": deepcopy(visual.get("painter_motion_boost") or {}),
         },
         "prompt_relay": deepcopy(prompt_debug),
+        "continuity": continuity,
         "bernini": bernini,
         "fmlf_advanced_i2v": deepcopy(fmlf_debug or {}),
         "model_patch_status": deepcopy(model_patch_status or {}),
@@ -119,6 +123,55 @@ def build_runtime_debug(
         )
     runtime_debug["status"] = summarize_wan_runtime_status(plan, runtime_debug, validation)
     return runtime_debug
+
+
+def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
+    wan = plan.get("model_specific", {}).get("wan", {})
+    continuity = wan.get("continuity_context")
+    if isinstance(continuity, dict):
+        return deepcopy(continuity)
+    shot_context = wan.get("shot_context")
+    if not isinstance(shot_context, dict):
+        return {
+            "policy": "none",
+            "source_status": "not_requested",
+            "model_status": "not_requested",
+            "message": "No selected shot continuity context is present.",
+        }
+    boundary_context = shot_context.get("boundary_context")
+    incoming = boundary_context.get("incoming_continuity") if isinstance(boundary_context, dict) else None
+    if not isinstance(incoming, dict):
+        return {
+            "policy": "none",
+            "source_status": "not_requested",
+            "model_status": "not_requested",
+            "message": "No selected shot continuity context is present.",
+        }
+    policy = incoming.get("policy") or "none"
+    source_status = incoming.get("status") or "not_requested"
+    if policy == "none":
+        model_status = "not_requested"
+    elif source_status == "available":
+        model_status = "unsupported"
+    else:
+        model_status = source_status
+    return {
+        "policy": policy,
+        "source_status": source_status,
+        "model_status": model_status,
+        "boundary_id": incoming.get("boundary_id"),
+        "source_shot_id": incoming.get("source_shot_id"),
+        "target_shot_id": incoming.get("target_shot_id"),
+        "tail_frames": int(incoming.get("tail_frames") or 0),
+        "blend_frames": int(incoming.get("blend_frames") or 0),
+        "clip_reference": deepcopy(incoming.get("clip_reference")),
+        "warning_code": incoming.get("warning_code"),
+        "message": (
+            "WAN shot-level continuity consumption is not implemented."
+            if model_status == "unsupported"
+            else incoming.get("message")
+        ),
+    }
 
 
 def build_backend_report(

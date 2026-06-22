@@ -118,6 +118,36 @@ def test_wan_shot_runtime_emits_take_registration_metadata():
     assert validate_video_timeline(registered["timeline"])["is_valid"] is True
 
 
+def test_wan_runtime_reports_shot_continuity_debug():
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _text_timeline(),
+        create_wan_timeline_config(debug_mode="Summary"),
+        shot_id="shot_section_text",
+    )
+    plan["model_specific"]["wan"]["continuity_context"] = {
+        "policy": "continuous",
+        "source_status": "available",
+        "model_status": "unsupported",
+        "boundary_id": "boundary_continuous",
+        "source_shot_id": "shot_previous",
+        "target_shot_id": "shot_section_text",
+        "tail_frames": 6,
+        "blend_frames": 0,
+        "clip_reference": {
+            "source_kind": "accepted_take",
+            "shot_id": "shot_previous",
+            "take_id": "take_previous",
+            "asset_id": "asset_previous_take",
+        },
+    }
+
+    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+
+    assert runtime_debug["summary"]["shot_continuity_policy"] == "continuous"
+    assert runtime_debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert runtime_debug["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
+
+
 def test_auto_backend_resolves_to_plan_only_or_comfyui_core(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=2),

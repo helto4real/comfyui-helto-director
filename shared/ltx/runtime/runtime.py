@@ -347,6 +347,7 @@ def _build_ltx_lora_report(runtime_loras: dict[str, Any], applied_loras: list[di
 
 def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio, lora_report=None, status_events=None):
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
+    continuity = _runtime_continuity_debug(plan)
     lora_targets = (lora_report or {}).get("targets", {})
     main_loras = lora_targets.get(MODEL_LORA_TARGET_MAIN, {})
     take_registration = build_take_capture_metadata(
@@ -374,8 +375,11 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
             "combined_audio_shape": tuple(combined_audio["waveform"].shape),
             "lora_count": int(main_loras.get("applied_count") or 0),
             "lora_target_count": len(lora_targets),
+            "shot_continuity_policy": continuity.get("policy"),
+            "shot_continuity_status": continuity.get("model_status"),
         },
         "loras": deepcopy(lora_report or {}),
+        "continuity": continuity,
         "prompt_relay": prompt_debug,
         "guide_data": {
             "insert_frames": list(guide_data.get("insert_frames", [])),
@@ -403,6 +407,55 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
         debug["summary"]["take_registration_ready"] = bool(take_registration.get("registration_ready"))
         debug["summary"]["take_registration_shot_ids"] = list(take_registration.get("shot_ids") or [])
     return debug
+
+
+def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
+    ltx = plan.get("model_specific", {}).get("ltx", {})
+    continuity = ltx.get("continuity_context")
+    if isinstance(continuity, dict):
+        return deepcopy(continuity)
+    shot_context = ltx.get("shot_context")
+    if not isinstance(shot_context, dict):
+        return {
+            "policy": "none",
+            "source_status": "not_requested",
+            "model_status": "not_requested",
+            "message": "No selected shot continuity context is present.",
+        }
+    boundary_context = shot_context.get("boundary_context")
+    incoming = boundary_context.get("incoming_continuity") if isinstance(boundary_context, dict) else None
+    if not isinstance(incoming, dict):
+        return {
+            "policy": "none",
+            "source_status": "not_requested",
+            "model_status": "not_requested",
+            "message": "No selected shot continuity context is present.",
+        }
+    policy = incoming.get("policy") or "none"
+    source_status = incoming.get("status") or "not_requested"
+    if policy == "none":
+        model_status = "not_requested"
+    elif source_status == "available":
+        model_status = "unsupported"
+    else:
+        model_status = source_status
+    return {
+        "policy": policy,
+        "source_status": source_status,
+        "model_status": model_status,
+        "boundary_id": incoming.get("boundary_id"),
+        "source_shot_id": incoming.get("source_shot_id"),
+        "target_shot_id": incoming.get("target_shot_id"),
+        "tail_frames": int(incoming.get("tail_frames") or 0),
+        "blend_frames": int(incoming.get("blend_frames") or 0),
+        "clip_reference": deepcopy(incoming.get("clip_reference")),
+        "warning_code": incoming.get("warning_code"),
+        "message": (
+            "LTX shot-level continuity consumption is not implemented."
+            if model_status == "unsupported"
+            else incoming.get("message")
+        ),
+    }
 
 
 def _advanced_input_diagnostics(identity_anchor, sigmas) -> list[str]:

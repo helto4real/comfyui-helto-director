@@ -15,6 +15,9 @@ CONTINUITY_POLICY_NONE = "none"
 CONTINUITY_POLICY_CONTINUOUS = "continuous"
 CONTINUITY_POLICY_BLEND = "blend"
 CONTINUITY_POLICY_TRANSITION = "transition"
+CONTINUITY_STATUS_NOT_REQUESTED = "not_requested"
+CONTINUITY_STATUS_AVAILABLE = "available"
+CONTINUITY_STATUS_UNAVAILABLE = "unavailable"
 
 
 class ShotExtractionError(ValueError):
@@ -126,6 +129,10 @@ def build_shot_boundary_context(timeline: Any, shot_id: str) -> dict[str, Any]:
     )
     incoming_policy = _boundary_continuity_policy(incoming_boundary)
     outgoing_policy = _boundary_continuity_policy(outgoing_boundary)
+    incoming_tail_frames = _effective_tail_frames(incoming_boundary)
+    outgoing_tail_frames = _effective_tail_frames(outgoing_boundary)
+    incoming_blend_frames = _effective_blend_frames(incoming_boundary)
+    outgoing_blend_frames = _effective_blend_frames(outgoing_boundary)
 
     return {
         "previous_shot_id": previous_shot.get("shot_id") if previous_shot else None,
@@ -139,13 +146,25 @@ def build_shot_boundary_context(timeline: Any, shot_id: str) -> dict[str, Any]:
         "incoming_continuity_policy": incoming_policy,
         "outgoing_continuity_policy": outgoing_policy,
         "continuity_policy": _combined_continuity_policy(incoming_policy, outgoing_policy),
-        "tail_frames": max(
-            _effective_tail_frames(incoming_boundary),
-            _effective_tail_frames(outgoing_boundary),
+        "tail_frames": max(incoming_tail_frames, outgoing_tail_frames),
+        "blend_frames": max(incoming_blend_frames, outgoing_blend_frames),
+        "incoming_continuity": _continuity_source_context(
+            selected_shot_id=selected_shot.get("shot_id"),
+            source_shot=previous_shot,
+            boundary=incoming_boundary,
+            policy=incoming_policy,
+            tail_frames=incoming_tail_frames,
+            blend_frames=incoming_blend_frames,
+            direction="incoming",
         ),
-        "blend_frames": max(
-            _effective_blend_frames(incoming_boundary),
-            _effective_blend_frames(outgoing_boundary),
+        "outgoing_continuity": _continuity_source_context(
+            selected_shot_id=selected_shot.get("shot_id"),
+            source_shot=selected_shot,
+            boundary=outgoing_boundary,
+            policy=outgoing_policy,
+            tail_frames=outgoing_tail_frames,
+            blend_frames=outgoing_blend_frames,
+            direction="outgoing",
         ),
     }
 
@@ -300,6 +319,93 @@ def _shot_clip_asset_id(shot: dict[str, Any] | None) -> str | None:
             continue
         asset_id = take.get("asset_id")
         return str(asset_id) if asset_id is not None else None
+    return None
+
+
+def _continuity_source_context(
+    *,
+    selected_shot_id: Any,
+    source_shot: dict[str, Any] | None,
+    boundary: dict[str, Any] | None,
+    policy: str,
+    tail_frames: int,
+    blend_frames: int,
+    direction: str,
+) -> dict[str, Any]:
+    context = {
+        "direction": direction,
+        "policy": policy,
+        "status": CONTINUITY_STATUS_NOT_REQUESTED,
+        "boundary_id": boundary.get("boundary_id") if isinstance(boundary, dict) else None,
+        "source_shot_id": source_shot.get("shot_id") if isinstance(source_shot, dict) else None,
+        "target_shot_id": selected_shot_id,
+        "tail_frames": int(tail_frames),
+        "blend_frames": int(blend_frames),
+        "clip_reference": None,
+        "warning_code": None,
+        "message": "Boundary does not request continuity context.",
+    }
+    if policy == CONTINUITY_POLICY_NONE:
+        return context
+    if not isinstance(source_shot, dict):
+        context.update(
+            {
+                "status": CONTINUITY_STATUS_UNAVAILABLE,
+                "warning_code": "SHOT_CONTINUITY_SOURCE_MISSING",
+                "message": "Boundary requests continuity context, but the source shot is missing.",
+            }
+        )
+        return context
+    clip_reference = _shot_clip_reference(source_shot)
+    if clip_reference is None:
+        context.update(
+            {
+                "status": CONTINUITY_STATUS_UNAVAILABLE,
+                "warning_code": "SHOT_CONTINUITY_PREVIOUS_CLIP_MISSING",
+                "message": "Boundary requests continuity context, but the source shot has no accepted take or enabled clip instance.",
+            }
+        )
+        return context
+    context.update(
+        {
+            "status": CONTINUITY_STATUS_AVAILABLE,
+            "clip_reference": clip_reference,
+            "message": "Continuity clip reference is available for model-specific helpers that support it.",
+        }
+    )
+    return context
+
+
+def _shot_clip_reference(shot: dict[str, Any]) -> dict[str, Any] | None:
+    accepted_take_id = _accepted_take_id(shot)
+    if accepted_take_id is not None:
+        for take in shot.get("takes", []):
+            if not isinstance(take, dict):
+                continue
+            if str(take.get("take_id") or "") != accepted_take_id:
+                continue
+            asset_id = take.get("asset_id")
+            if asset_id is None:
+                return None
+            return {
+                "source_kind": "accepted_take",
+                "shot_id": shot.get("shot_id"),
+                "take_id": accepted_take_id,
+                "asset_id": str(asset_id),
+            }
+    clip_instance = shot.get("clip_instance")
+    if isinstance(clip_instance, dict) and clip_instance.get("enabled") is not False:
+        asset_id = clip_instance.get("asset_id")
+        if asset_id is None:
+            return None
+        return {
+            "source_kind": "clip_instance",
+            "shot_id": shot.get("shot_id"),
+            "take_id": None,
+            "asset_id": str(asset_id),
+            "source_in": clip_instance.get("source_in"),
+            "source_out": clip_instance.get("source_out"),
+        }
     return None
 
 

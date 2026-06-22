@@ -8,9 +8,11 @@ import torch
 
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
+    ASSET_SOURCE_GENERATED,
     ASSET_TYPE_AUDIO,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_CONTINUOUS_SHOT,
     BOUNDARY_MODE_HARD_CUT,
     LORA_MERGE_MODE_ADD_TO_GLOBAL,
     LORA_MERGE_MODE_DISABLE_LORAS,
@@ -21,6 +23,7 @@ from shared.contracts.video_timeline import (
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
+    TAKE_STATUS_ACCEPTED,
 )
 from shared.lora import config as lora_config_module
 from shared.timeline import create_default_video_timeline
@@ -129,6 +132,51 @@ def _two_shot_text_timeline() -> dict:
             },
         ]
     )
+    return timeline
+
+
+def _two_shot_text_timeline_with_continuity() -> dict:
+    timeline = _two_shot_text_timeline()
+    timeline["assets"].append(
+        {
+            "asset_id": "asset_previous_take",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_GENERATED,
+            "path": "/tmp/previous.mp4",
+            "name": "previous.mp4",
+        }
+    )
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_section_001",
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_001"],
+            "takes": [
+                {
+                    "take_id": "take_previous",
+                    "asset_id": "asset_previous_take",
+                    "status": TAKE_STATUS_ACCEPTED,
+                }
+            ],
+            "accepted_take_id": "take_previous",
+        },
+        {
+            "shot_id": "shot_section_002",
+            "start_time": 1.0,
+            "end_time": 3.0,
+            "section_ids": ["section_002"],
+        },
+    ]
+    timeline["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_continuous",
+            "left_shot_id": "shot_section_001",
+            "right_shot_id": "shot_section_002",
+            "mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
+            "tail_frames": 6,
+        }
+    ]
     return timeline
 
 
@@ -496,7 +544,56 @@ def test_wan_planner_plans_selected_shot_timeline_with_boundary_context():
     assert debug["summary"]["shot_original_start_time"] == 1.0
     assert debug["summary"]["shot_original_end_time"] == 3.0
     assert debug["summary"]["shot_duration_seconds"] == 2.0
+    assert debug["summary"]["shot_continuity_policy"] == "none"
+    assert debug["summary"]["shot_continuity_status"] == "not_requested"
     assert debug["details"]["shot_context"] == shot_context
+
+
+def test_wan_planner_reports_available_continuity_as_unsupported():
+    timeline = _two_shot_text_timeline_with_continuity()
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        shot_id="shot_section_002",
+    )
+    wan = plan["model_specific"]["wan"]
+    continuity = wan["continuity_context"]
+
+    assert validation["is_valid"] is True
+    assert [entry["code"] for entry in validation["warnings"]] == [
+        "WAN_SHOT_CONTINUITY_UNSUPPORTED"
+    ]
+    assert continuity["policy"] == "continuous"
+    assert continuity["source_status"] == "available"
+    assert continuity["model_status"] == "unsupported"
+    assert continuity["clip_reference"]["asset_id"] == "asset_previous_take"
+    assert debug["summary"]["shot_continuity_policy"] == "continuous"
+    assert debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert debug["details"]["continuity_context"] == continuity
+
+
+def test_wan_planner_warns_when_continuity_source_is_missing():
+    timeline = _two_shot_text_timeline_with_continuity()
+    timeline["sequence"]["shots"][0]["takes"] = []
+    timeline["sequence"]["shots"][0]["accepted_take_id"] = None
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        shot_id="shot_section_002",
+    )
+    continuity = plan["model_specific"]["wan"]["continuity_context"]
+
+    assert validation["is_valid"] is True
+    assert [entry["code"] for entry in validation["warnings"]] == [
+        "WAN_SHOT_CONTINUITY_SOURCE_MISSING"
+    ]
+    assert continuity["policy"] == "continuous"
+    assert continuity["source_status"] == "unavailable"
+    assert continuity["model_status"] == "unavailable"
+    assert continuity["clip_reference"] is None
+    assert debug["summary"]["shot_continuity_status"] == "unavailable"
 
 
 def test_wan_planner_invalid_shot_id_marks_plan_invalid_without_crashing():

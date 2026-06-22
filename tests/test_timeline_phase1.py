@@ -803,16 +803,27 @@ def test_shot_boundary_context_marks_hard_cut_as_no_continuity():
     assert context["continuity_policy"] == "none"
     assert context["tail_frames"] == 0
     assert context["blend_frames"] == 0
+    assert context["incoming_continuity"]["status"] == "not_requested"
+    assert context["incoming_continuity"]["clip_reference"] is None
 
 
 def test_shot_boundary_context_allows_continuous_shot_tail():
     timeline = _shot_extraction_timeline(
+        incoming_mode=BOUNDARY_MODE_CONTINUOUS_SHOT,
         outgoing_mode=BOUNDARY_MODE_CONTINUOUS_SHOT,
         outgoing_tail_frames=9,
     )
 
     context = extract_shot_timeline(timeline, "shot_middle")["shot_context"]["boundary_context"]
 
+    assert context["incoming_boundary"]["mode"] == BOUNDARY_MODE_CONTINUOUS_SHOT
+    assert context["incoming_continuity"]["status"] == "available"
+    assert context["incoming_continuity"]["clip_reference"] == {
+        "source_kind": "accepted_take",
+        "shot_id": "shot_prev",
+        "take_id": "take_prev",
+        "asset_id": "asset_prev_take",
+    }
     assert context["outgoing_boundary"]["mode"] == BOUNDARY_MODE_CONTINUOUS_SHOT
     assert context["outgoing_continuity_policy"] == "continuous"
     assert context["continuity_policy"] == "continuous"
@@ -820,8 +831,23 @@ def test_shot_boundary_context_allows_continuous_shot_tail():
     assert context["blend_frames"] == 0
 
 
+def test_shot_boundary_context_warns_when_continuity_source_clip_is_missing():
+    timeline = _shot_extraction_timeline(incoming_mode=BOUNDARY_MODE_CONTINUOUS_SHOT)
+    timeline["sequence"]["shots"][0]["takes"] = []
+    timeline["sequence"]["shots"][0]["accepted_take_id"] = None
+
+    context = extract_shot_timeline(timeline, "shot_middle")["shot_context"]["boundary_context"]
+    incoming = context["incoming_continuity"]
+
+    assert incoming["policy"] == "continuous"
+    assert incoming["status"] == "unavailable"
+    assert incoming["warning_code"] == "SHOT_CONTINUITY_PREVIOUS_CLIP_MISSING"
+    assert incoming["clip_reference"] is None
+
+
 def test_shot_boundary_context_preserves_blend_seam_frames():
     timeline = _shot_extraction_timeline(
+        incoming_mode=BOUNDARY_MODE_BLEND_SEAM,
         outgoing_mode=BOUNDARY_MODE_BLEND_SEAM,
         outgoing_tail_frames=7,
         outgoing_blend_frames=4,
@@ -829,6 +855,7 @@ def test_shot_boundary_context_preserves_blend_seam_frames():
 
     context = extract_shot_timeline(timeline, "shot_middle")["shot_context"]["boundary_context"]
 
+    assert context["incoming_continuity"]["status"] == "available"
     assert context["outgoing_boundary"]["mode"] == BOUNDARY_MODE_BLEND_SEAM
     assert context["outgoing_boundary"]["blend_frames"] == 4
     assert context["outgoing_continuity_policy"] == "blend"

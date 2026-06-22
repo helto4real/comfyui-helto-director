@@ -807,6 +807,32 @@ def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
     assert validate_video_timeline(registered["timeline"])["is_valid"] is True
 
 
+def test_ltx_runtime_reports_shot_continuity_debug():
+    plan = _shot_text_plan(duration=2.0, prompt="continuity prompt")
+    plan["model_specific"]["ltx"]["continuity_context"] = {
+        "policy": "continuous",
+        "source_status": "available",
+        "model_status": "unsupported",
+        "boundary_id": "boundary_continuous",
+        "source_shot_id": "shot_previous",
+        "target_shot_id": "shot_section_001",
+        "tail_frames": 6,
+        "blend_frames": 0,
+        "clip_reference": {
+            "source_kind": "accepted_take",
+            "shot_id": "shot_previous",
+            "take_id": "take_previous",
+            "asset_id": "asset_previous_take",
+        },
+    }
+
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert runtime_debug["summary"]["shot_continuity_policy"] == "continuous"
+    assert runtime_debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert runtime_debug["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
+
+
 def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monkeypatch):
     def fake_apply_lora_config(*, model, clip, lora_config):
         return model, clip, list(lora_config["loras"])

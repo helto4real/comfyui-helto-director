@@ -103,6 +103,7 @@ def build_ltx_timeline_plan(
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
         *_shot_selection_validation_entries(shot_selection_error, "LTX Planner"),
+        *_shot_continuity_validation_entries(shot_context, "LTX Planner"),
         *flatten_validation_result(ltx_validation),
     ])
 
@@ -145,6 +146,7 @@ def build_ltx_timeline_plan(
     }
     if shot_context is not None:
         plan["model_specific"]["ltx"]["shot_context"] = deepcopy(shot_context)
+        plan["model_specific"]["ltx"]["continuity_context"] = _model_continuity_context(shot_context)
     debug = _build_debug(
         timeline,
         config,
@@ -398,6 +400,42 @@ def _shot_selection_validation_entries(
     ]
 
 
+def _shot_continuity_validation_entries(
+    shot_context: dict[str, Any] | None,
+    source: str,
+) -> list[dict[str, Any]]:
+    continuity = _incoming_continuity(shot_context)
+    if not continuity or continuity.get("policy") == "none":
+        return []
+    if continuity.get("status") == "unavailable":
+        return [
+            create_validation_entry(
+                "LTX_SHOT_CONTINUITY_SOURCE_MISSING",
+                SEVERITY_WARNING,
+                source,
+                "Boundary",
+                continuity.get("boundary_id"),
+                "Selected shot requests continuity, but the previous clip reference is unavailable.",
+                "Accept a take or assign an imported clip on the previous shot, or change the boundary to Hard Cut.",
+                _continuity_warning_details(continuity),
+            )
+        ]
+    if continuity.get("status") == "available":
+        return [
+            create_validation_entry(
+                "LTX_SHOT_CONTINUITY_UNSUPPORTED",
+                SEVERITY_WARNING,
+                source,
+                "Boundary",
+                continuity.get("boundary_id"),
+                "Selected shot has previous-tail continuity context, but LTX shot-level continuity consumption is not implemented yet.",
+                "Generate this shot normally; sequence assembly will still apply the boundary fallback or blend behavior.",
+                _continuity_warning_details(continuity),
+            )
+        ]
+    return []
+
+
 def _build_debug(
     timeline: dict[str, Any],
     config: dict[str, Any],
@@ -430,7 +468,10 @@ def _build_debug(
         "summary": summary,
     }
     if bool(config.get("debug_mode")) and shot_context is not None:
-        debug["details"] = {"shot_context": deepcopy(shot_context)}
+        debug["details"] = {
+            "shot_context": deepcopy(shot_context),
+            "continuity_context": _model_continuity_context(shot_context),
+        }
     return debug
 
 
@@ -444,6 +485,10 @@ def _add_shot_debug_summary(
         summary["shot_original_start_time"] = shot_context.get("original_start_time")
         summary["shot_original_end_time"] = shot_context.get("original_end_time")
         summary["shot_duration_seconds"] = shot_context.get("duration_seconds")
+        continuity = _model_continuity_context(shot_context)
+        summary["shot_continuity_policy"] = continuity.get("policy")
+        summary["shot_continuity_status"] = continuity.get("model_status")
+        summary["shot_continuity_tail_frames"] = continuity.get("tail_frames")
     elif shot_selection_error:
         summary["selected_shot_id"] = shot_selection_error.get("shot_id")
         summary["shot_selection_error"] = shot_selection_error.get("error")
@@ -500,6 +545,59 @@ def _lora_warning_details(lora_resolution: dict[str, Any]) -> dict[str, Any]:
         "section_ids": section_ids,
         "unique_signature_count": lora_resolution.get("unique_signature_count"),
         "execution_strategy": lora_resolution.get("execution_strategy"),
+    }
+
+
+def _incoming_continuity(shot_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(shot_context, dict):
+        return None
+    boundary_context = shot_context.get("boundary_context")
+    if not isinstance(boundary_context, dict):
+        return None
+    continuity = boundary_context.get("incoming_continuity")
+    return continuity if isinstance(continuity, dict) else None
+
+
+def _model_continuity_context(shot_context: dict[str, Any] | None) -> dict[str, Any]:
+    continuity = _incoming_continuity(shot_context) or {}
+    policy = continuity.get("policy") or "none"
+    status = continuity.get("status") or "not_requested"
+    if policy == "none":
+        model_status = "not_requested"
+    elif status == "available":
+        model_status = "unsupported"
+    else:
+        model_status = status
+    return {
+        "policy": policy,
+        "source_status": status,
+        "model_status": model_status,
+        "boundary_id": continuity.get("boundary_id"),
+        "source_shot_id": continuity.get("source_shot_id"),
+        "target_shot_id": continuity.get("target_shot_id"),
+        "tail_frames": int(continuity.get("tail_frames") or 0),
+        "blend_frames": int(continuity.get("blend_frames") or 0),
+        "clip_reference": deepcopy(continuity.get("clip_reference")),
+        "warning_code": continuity.get("warning_code"),
+        "message": (
+            "LTX shot-level continuity consumption is not implemented."
+            if model_status == "unsupported"
+            else continuity.get("message")
+        ),
+    }
+
+
+def _continuity_warning_details(continuity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "policy": continuity.get("policy"),
+        "status": continuity.get("status"),
+        "boundary_id": continuity.get("boundary_id"),
+        "source_shot_id": continuity.get("source_shot_id"),
+        "target_shot_id": continuity.get("target_shot_id"),
+        "tail_frames": continuity.get("tail_frames"),
+        "blend_frames": continuity.get("blend_frames"),
+        "clip_reference": deepcopy(continuity.get("clip_reference")),
+        "warning_code": continuity.get("warning_code"),
     }
 
 
