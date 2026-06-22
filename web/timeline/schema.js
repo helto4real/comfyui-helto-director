@@ -166,6 +166,7 @@ export function createDefaultVideoTimeline() {
       view_start_seconds: 0,
       view_end_seconds: Math.ceil(DEFAULT_DURATION_SECONDS),
       selected_item_id: null,
+      selected_item_ids: [],
       state_revision: 0,
     },
     assets: [],

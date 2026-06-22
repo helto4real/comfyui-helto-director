@@ -90,6 +90,7 @@ def create_default_video_timeline() -> dict:
             "view_start_seconds": 0,
             "view_end_seconds": int(DEFAULT_DURATION_SECONDS),
             "selected_item_id": None,
+            "selected_item_ids": [],
             "state_revision": 0,
         },
         "assets": [],

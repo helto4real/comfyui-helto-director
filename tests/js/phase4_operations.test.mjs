@@ -1,19 +1,27 @@
 import assert from "node:assert/strict";
 import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
+import { normalizeVideoTimeline } from "../../web/timeline/migration.js";
 import {
   addAudioClip,
   addSection,
   autoStackAudioLanes,
   canFitLastDirectorSectionToDuration,
+  deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
   fitLastDirectorSectionToDuration,
+  getSelectedItemIds,
   hasDirectorSectionOverflow,
+  isItemSelected,
+  moveSelectedItems,
   moveAudioClip,
   moveSection,
   resizeAudioClip,
   resizeSection,
+  selectItem,
+  selectItemRange,
   splitSelectedSection,
+  toggleSelectItem,
 } from "../../web/timeline/operations.js";
 import { detectDirectorGaps, validateVideoTimeline } from "../../web/timeline/validation.js";
 
@@ -83,6 +91,105 @@ function testSplitAndDuplicate() {
   assert.ok(duplicate);
   assert.equal(timeline.director_track.sections.length, 3);
   assert.equal(validateVideoTimeline(timeline).is_valid, true);
+}
+
+function testSelectionHelpersKeepPrimaryInSync() {
+  const timeline = createDefaultVideoTimeline();
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 1);
+  const third = addValidTextSection(timeline, 2);
+
+  selectItem(timeline, first.item_id);
+  assert.deepEqual(getSelectedItemIds(timeline), [first.item_id]);
+  assert.equal(timeline.ui_state.selected_item_id, first.item_id);
+
+  toggleSelectItem(timeline, second.item_id);
+  assert.deepEqual(getSelectedItemIds(timeline), [first.item_id, second.item_id]);
+  assert.equal(timeline.ui_state.selected_item_id, second.item_id);
+  assert.equal(isItemSelected(timeline, first.item_id), true);
+
+  selectItemRange(timeline, third.item_id);
+  assert.deepEqual(getSelectedItemIds(timeline), [second.item_id, third.item_id]);
+  assert.equal(timeline.ui_state.selected_item_id, third.item_id);
+}
+
+function testMigrationDerivesSelectedItemIdsFromPrimarySelection() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addValidTextSection(timeline, 0);
+  timeline.ui_state.selected_item_id = section.item_id;
+  delete timeline.ui_state.selected_item_ids;
+
+  const normalized = normalizeVideoTimeline(timeline);
+
+  assert.deepEqual(normalized.ui_state.selected_item_ids, [section.item_id]);
+  assert.equal(normalized.ui_state.selected_item_id, section.item_id);
+}
+
+function testGroupDeleteRemovesMixedSelection() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+  const section = addValidTextSection(timeline, 0);
+  const keep = addValidTextSection(timeline, 2);
+  const clip = addAudioClip(timeline, 0, 1);
+  clip.audio = "/tmp/audio.wav";
+  selectItem(timeline, section.item_id);
+  toggleSelectItem(timeline, clip.item_id);
+
+  assert.equal(getSelectedItemIds(timeline).length, 2);
+  assert.equal(validateVideoTimeline(timeline).is_valid, true);
+
+  assert.equal(deleteSelectedItem(timeline), true);
+  assert.deepEqual(timeline.director_track.sections.map((item) => item.item_id), [keep.item_id]);
+  assert.equal(timeline.audio_tracks.length, 0);
+  assert.deepEqual(getSelectedItemIds(timeline), []);
+}
+
+function testGroupMoveClampsSectionsAndMovesUnlockedAudio() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 6;
+  const first = addValidTextSection(timeline, 0);
+  const selectedSection = addValidTextSection(timeline, 2);
+  const blockedByNext = addValidTextSection(timeline, 4);
+  const clip = addAudioClip(timeline, 1, 1);
+  const locked = addAudioClip(timeline, 2, 1);
+  clip.audio = "/tmp/audio.wav";
+  locked.audio = "/tmp/locked.wav";
+  locked.locked = true;
+  selectItem(timeline, selectedSection.item_id);
+  toggleSelectItem(timeline, clip.item_id);
+  toggleSelectItem(timeline, locked.item_id);
+
+  moveSelectedItems(timeline, selectedSection.item_id, 3.5);
+
+  assert.equal(selectedSection.start_time, 3);
+  assert.equal(selectedSection.end_time, blockedByNext.start_time);
+  assert.equal(clip.start_time, 2);
+  assert.equal(clip.end_time, 3);
+  assert.equal(locked.start_time, 2);
+  assert.equal(locked.end_time, 3);
+  assert.equal(first.start_time, 0);
+  assert.equal(validateVideoTimeline(timeline).is_valid, true);
+}
+
+function testGroupDuplicatePreservesOffsetsAndSelectsCopies() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 8;
+  const section = addValidTextSection(timeline, 0);
+  const clip = addAudioClip(timeline, 0.25, 0.5);
+  selectItem(timeline, section.item_id);
+  toggleSelectItem(timeline, clip.item_id);
+
+  const ids = duplicateSelectedSection(timeline);
+
+  assert.equal(Array.isArray(ids), true);
+  assert.equal(ids.length, 2);
+  assert.deepEqual(getSelectedItemIds(timeline), ids);
+  const copiedSection = timeline.director_track.sections.find((item) => item.item_id === ids[0]);
+  const copiedClip = timeline.audio_tracks.flatMap((track) => track.clips).find((item) => item.item_id === ids[1]);
+  assert.equal(copiedSection.start_time, 1);
+  assert.equal(copiedSection.end_time, 2);
+  assert.equal(copiedClip.start_time, 1.25);
+  assert.equal(copiedClip.end_time, 1.75);
 }
 
 function testAudioAutoLanes() {
@@ -202,6 +309,11 @@ testSectionsCannotOverlapWhenMovedOrResized();
 testAddAndDuplicateReturnNullWhenNoGapFits();
 testGapsRemainAllowedAndDetected();
 testSplitAndDuplicate();
+testSelectionHelpersKeepPrimaryInSync();
+testMigrationDerivesSelectedItemIdsFromPrimarySelection();
+testGroupDeleteRemovesMixedSelection();
+testGroupMoveClampsSectionsAndMovesUnlockedAudio();
+testGroupDuplicatePreservesOffsetsAndSelectsCopies();
 testAudioAutoLanes();
 testRippleResizeMovesFollowingSections();
 testAudioMoveAndResizeKeepSourceTrim();

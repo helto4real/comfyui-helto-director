@@ -40,6 +40,7 @@ export function normalizeVideoTimeline(value) {
   normalizeProjectModelLoras(normalized);
   normalizePrivacy(normalized);
   normalizeUiStateViewRange(normalized);
+  normalizeUiStateSelection(normalized);
   return normalized;
 }
 
@@ -220,6 +221,33 @@ function normalizeUiStateViewRange(timeline) {
   end = Math.max(start + 1, Math.min(end, projectSeconds));
   uiState.view_start_seconds = start;
   uiState.view_end_seconds = end;
+}
+
+function normalizeUiStateSelection(timeline) {
+  const uiState = timeline.ui_state ??= {};
+  const existing = new Set([
+    ...(timeline.director_track?.sections ?? []).map((section) => section.item_id),
+    ...(timeline.audio_tracks ?? []).flatMap((track) => (track.clips ?? []).map((clip) => clip.item_id)),
+  ].filter(Boolean));
+  const rawIds = Array.isArray(uiState.selected_item_ids) && uiState.selected_item_ids.length
+    ? uiState.selected_item_ids
+    : (uiState.selected_item_id ? [uiState.selected_item_id] : []);
+  const selected = [];
+  for (const rawId of rawIds) {
+    const id = String(rawId ?? "");
+    if (!id || !existing.has(id) || selected.includes(id)) continue;
+    selected.push(id);
+  }
+  const primaryValue = uiState.selected_item_id == null ? null : String(uiState.selected_item_id);
+  const primary = primaryValue && existing.has(primaryValue)
+    ? primaryValue
+    : selected.at(-1);
+  if (primary && selected.includes(primary)) {
+    selected.splice(selected.indexOf(primary), 1);
+    selected.push(primary);
+  }
+  uiState.selected_item_ids = selected;
+  uiState.selected_item_id = selected.at(-1) ?? null;
 }
 
 function basename(path) {

@@ -18,46 +18,76 @@ export function addSection(timeline, type = SECTION_TYPE_TEXT, startTime = null)
   if (start == null) return null;
   const section = createSection(type, start, start + sectionDuration);
   timeline.director_track.sections.push(section);
-  timeline.ui_state.selected_item_id = section.item_id;
+  selectItem(timeline, section.item_id);
   sortDirectorSections(timeline);
   return section;
 }
 
 export function deleteSelectedItem(timeline) {
-  const id = timeline.ui_state.selected_item_id;
-  if (!id) return false;
+  const ids = new Set(getSelectedItemIds(timeline));
+  if (!ids.size) return false;
   const before = timeline.director_track.sections.length;
-  timeline.director_track.sections = timeline.director_track.sections.filter((section) => section.item_id !== id);
-  if (before !== timeline.director_track.sections.length) {
-    timeline.ui_state.selected_item_id = null;
-    return true;
-  }
+  timeline.director_track.sections = timeline.director_track.sections.filter((section) => !ids.has(section.item_id));
+  let changed = before !== timeline.director_track.sections.length;
   for (const track of timeline.audio_tracks) {
     const clipBefore = track.clips.length;
-    track.clips = track.clips.filter((clip) => clip.item_id !== id);
+    track.clips = track.clips.filter((clip) => !ids.has(clip.item_id));
     if (clipBefore !== track.clips.length) {
-      timeline.ui_state.selected_item_id = null;
+      changed = true;
       cleanupAudioTracks(timeline);
-      return true;
     }
   }
-  return false;
+  if (changed) clearSelection(timeline);
+  return changed;
 }
 
 export function duplicateSelectedSection(timeline) {
-  const section = getSelectedSection(timeline);
-  if (!section) return null;
-  const copy = deepClone(section);
-  const sectionDuration = copy.end_time - copy.start_time;
-  const preferred = section.end_time;
-  copy.item_id = makeId("section");
-  copy.start_time = findGapForDuration(timeline, sectionDuration, preferred);
-  if (copy.start_time == null) return null;
-  copy.end_time = copy.start_time + sectionDuration;
-  timeline.director_track.sections.push(copy);
-  timeline.ui_state.selected_item_id = copy.item_id;
+  const selected = selectedTimelineItems(timeline);
+  if (!selected.sections.length && !selected.audioClips.length) return null;
+  const duration = getDuration(timeline);
+  let delta = null;
+
+  if (selected.sections.length) {
+    const blockStart = Math.min(...selected.sections.map((section) => Number(section.start_time)));
+    const blockEnd = Math.max(...selected.sections.map((section) => Number(section.end_time)));
+    const copyStart = findGapForDuration(timeline, blockEnd - blockStart, blockEnd);
+    if (copyStart == null) return null;
+    delta = copyStart - blockStart;
+  } else {
+    const blockStart = Math.min(...selected.audioClips.map((clip) => Number(clip.start_time)));
+    const blockEnd = Math.max(...selected.audioClips.map((clip) => Number(clip.end_time)));
+    delta = blockEnd - blockStart;
+  }
+
+  for (const clip of selected.audioClips) {
+    if (Number(clip.start_time) + delta < 0 || Number(clip.end_time) + delta > duration) return null;
+  }
+
+  const newIds = [];
+  for (const section of selected.sections) {
+    const copy = deepClone(section);
+    copy.item_id = makeId("section");
+    copy.start_time = Number(copy.start_time) + delta;
+    copy.end_time = Number(copy.end_time) + delta;
+    timeline.director_track.sections.push(copy);
+    newIds.push(copy.item_id);
+  }
+  if (selected.audioClips.length) {
+    if (!timeline.audio_tracks.length) timeline.audio_tracks.push({ track_id: "audio_track_001", clips: [] });
+    const targetTrack = timeline.audio_tracks[0];
+    for (const clip of selected.audioClips) {
+      const copy = deepClone(clip);
+      copy.item_id = makeId("audio_clip");
+      copy.start_time = Number(copy.start_time) + delta;
+      copy.end_time = Number(copy.end_time) + delta;
+      targetTrack.clips.push(copy);
+      newIds.push(copy.item_id);
+    }
+    autoStackAudioLanes(timeline);
+  }
+  setSelection(timeline, newIds);
   sortDirectorSections(timeline);
-  return copy;
+  return newIds.length ? newIds : null;
 }
 
 export function splitSelectedSection(timeline, splitTime = null) {
@@ -80,7 +110,7 @@ export function splitSelectedSection(timeline, splitTime = null) {
   }
 
   timeline.director_track.sections.push(copy);
-  timeline.ui_state.selected_item_id = copy.item_id;
+  selectItem(timeline, copy.item_id);
   sortDirectorSections(timeline);
   return copy;
 }
@@ -114,6 +144,39 @@ export function moveAudioClip(timeline, itemId, startTime) {
   const start = clamp(snapTime(startTime, timeline), 0, Math.max(0, getDuration(timeline) - duration));
   clip.start_time = start;
   clip.end_time = start + duration;
+  autoStackAudioLanes(timeline);
+  return true;
+}
+
+export function moveSelectedItems(timeline, itemId, startTime) {
+  const dragged = findTimelineItem(timeline, itemId);
+  if (!dragged) return false;
+  if (dragged.kind === "audio" && dragged.item.locked) return false;
+  const selectedIds = new Set(getSelectedItemIds(timeline));
+  if (!selectedIds.has(itemId) || selectedIds.size <= 1) {
+    return dragged.kind === "audio"
+      ? moveAudioClip(timeline, itemId, startTime)
+      : moveSection(timeline, itemId, startTime);
+  }
+
+  const snappedStart = snapTime(startTime, timeline);
+  const requestedDelta = snappedStart - Number(dragged.item.start_time);
+  const bounds = selectedMoveDeltaBounds(timeline, selectedIds);
+  if (!bounds.movable) return false;
+  const delta = clamp(requestedDelta, bounds.min, bounds.max);
+  for (const section of timeline.director_track.sections) {
+    if (!selectedIds.has(section.item_id)) continue;
+    section.start_time = Number(section.start_time) + delta;
+    section.end_time = Number(section.end_time) + delta;
+  }
+  for (const track of timeline.audio_tracks) {
+    for (const clip of track.clips) {
+      if (!selectedIds.has(clip.item_id) || clip.locked) continue;
+      clip.start_time = Number(clip.start_time) + delta;
+      clip.end_time = Number(clip.end_time) + delta;
+    }
+  }
+  sortDirectorSections(timeline);
   autoStackAudioLanes(timeline);
   return true;
 }
@@ -219,7 +282,7 @@ export function addAudioClip(timeline, startTime = 0, duration = 1) {
   if (timeline.audio_tracks.length === 0) timeline.audio_tracks.push({ track_id: "audio_track_001", clips: [] });
   timeline.audio_tracks[0].clips.push(clip);
   autoStackAudioLanes(timeline);
-  timeline.ui_state.selected_item_id = clip.item_id;
+  selectItem(timeline, clip.item_id);
   return clip;
 }
 
@@ -290,8 +353,61 @@ export function getSelectedSection(timeline) {
 }
 
 export function selectItem(timeline, itemId) {
-  timeline.ui_state.selected_item_id = itemId;
+  setSelection(timeline, itemId ? [itemId] : []);
   return itemId;
+}
+
+export function toggleSelectItem(timeline, itemId) {
+  if (!itemId || !findTimelineItem(timeline, itemId)) return getSelectedItemIds(timeline);
+  const selected = getSelectedItemIds(timeline);
+  const index = selected.indexOf(itemId);
+  if (index >= 0) {
+    selected.splice(index, 1);
+  } else {
+    selected.push(itemId);
+  }
+  setSelection(timeline, selected);
+  return timeline.ui_state.selected_item_ids;
+}
+
+export function selectItemRange(timeline, itemId) {
+  const target = findTimelineItem(timeline, itemId);
+  if (!target) return [];
+  const ordered = timelineItemsForKind(timeline, target.kind);
+  const selected = getSelectedItemIds(timeline);
+  const anchorId = [timeline.ui_state.selected_item_id, ...[...selected].reverse()]
+    .find((id) => id && findTimelineItem(timeline, id)?.kind === target.kind) ?? itemId;
+  const anchorIndex = ordered.findIndex((item) => item.item_id === anchorId);
+  const targetIndex = ordered.findIndex((item) => item.item_id === itemId);
+  if (anchorIndex < 0 || targetIndex < 0) {
+    selectItem(timeline, itemId);
+    return timeline.ui_state.selected_item_ids;
+  }
+  const start = Math.min(anchorIndex, targetIndex);
+  const end = Math.max(anchorIndex, targetIndex);
+  setSelection(timeline, ordered.slice(start, end + 1).map((item) => item.item_id), itemId);
+  return timeline.ui_state.selected_item_ids;
+}
+
+export function clearSelection(timeline) {
+  setSelection(timeline, []);
+  return [];
+}
+
+export function collapseSelection(timeline, itemId = null) {
+  const primary = itemId ?? timeline.ui_state.selected_item_id;
+  if (primary && findTimelineItem(timeline, primary)) return selectItem(timeline, primary);
+  const selected = getSelectedItemIds(timeline);
+  return selectItem(timeline, selected.at(-1) ?? null);
+}
+
+export function getSelectedItemIds(timeline) {
+  normalizeSelection(timeline);
+  return [...(timeline.ui_state.selected_item_ids ?? [])];
+}
+
+export function isItemSelected(timeline, itemId) {
+  return getSelectedItemIds(timeline).includes(itemId);
 }
 
 export function sortDirectorSections(timeline) {
@@ -324,6 +440,88 @@ function createSection(type, start, end) {
     section.prompt = "";
   }
   return section;
+}
+
+function setSelection(timeline, ids, primaryId = null) {
+  const selected = [];
+  for (const rawId of ids ?? []) {
+    const id = String(rawId ?? "");
+    if (!id || !findTimelineItem(timeline, id) || selected.includes(id)) continue;
+    selected.push(id);
+  }
+  const primaryValue = primaryId == null ? null : String(primaryId);
+  const primary = primaryValue && selected.includes(primaryValue) ? primaryValue : selected.at(-1);
+  if (primary) {
+    selected.splice(selected.indexOf(primary), 1);
+    selected.push(primary);
+  }
+  timeline.ui_state ??= {};
+  timeline.ui_state.selected_item_ids = selected;
+  timeline.ui_state.selected_item_id = selected.at(-1) ?? null;
+  return selected;
+}
+
+function normalizeSelection(timeline) {
+  const uiState = timeline.ui_state ??= {};
+  const ids = Array.isArray(uiState.selected_item_ids) && uiState.selected_item_ids.length
+    ? uiState.selected_item_ids
+    : (uiState.selected_item_id ? [uiState.selected_item_id] : []);
+  return setSelection(timeline, ids, uiState.selected_item_id);
+}
+
+function selectedTimelineItems(timeline) {
+  const selectedIds = new Set(getSelectedItemIds(timeline));
+  return {
+    sections: timeline.director_track.sections.filter((section) => selectedIds.has(section.item_id)),
+    audioClips: timeline.audio_tracks.flatMap((track) => track.clips).filter((clip) => selectedIds.has(clip.item_id)),
+  };
+}
+
+function selectedMoveDeltaBounds(timeline, selectedIds) {
+  const duration = getDuration(timeline);
+  let min = -Infinity;
+  let max = Infinity;
+  let movable = false;
+  const unselectedSections = timeline.director_track.sections.filter((section) => !selectedIds.has(section.item_id));
+  for (const section of timeline.director_track.sections) {
+    if (!selectedIds.has(section.item_id)) continue;
+    movable = true;
+    min = Math.max(min, -Number(section.start_time));
+    max = Math.min(max, duration - Number(section.end_time));
+    for (const other of unselectedSections) {
+      if (Number(other.end_time) <= Number(section.start_time)) {
+        min = Math.max(min, Number(other.end_time) - Number(section.start_time));
+      } else if (Number(other.start_time) >= Number(section.end_time)) {
+        max = Math.min(max, Number(other.start_time) - Number(section.end_time));
+      }
+    }
+  }
+  for (const track of timeline.audio_tracks) {
+    for (const clip of track.clips) {
+      if (!selectedIds.has(clip.item_id) || clip.locked) continue;
+      movable = true;
+      min = Math.max(min, -Number(clip.start_time));
+      max = Math.min(max, duration - Number(clip.end_time));
+    }
+  }
+  return { min, max, movable };
+}
+
+function findTimelineItem(timeline, itemId) {
+  const section = findSection(timeline, itemId);
+  if (section) return { kind: "section", item: section };
+  const match = findAudioClipWithTrack(timeline, itemId);
+  if (match) return { kind: "audio", item: match.clip, track: match.track };
+  return null;
+}
+
+function timelineItemsForKind(timeline, kind) {
+  if (kind === "section") {
+    return [...timeline.director_track.sections].sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time));
+  }
+  return timeline.audio_tracks
+    .flatMap((track) => track.clips)
+    .sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.lane ?? 0) - Number(b.lane ?? 0) || Number(a.end_time) - Number(b.end_time));
 }
 
 function findGapForDuration(timeline, duration, preferredStart = 0) {

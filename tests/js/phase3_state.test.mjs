@@ -151,6 +151,7 @@ function addSelectedTextSection(controller, prompt = "selected") {
       prompt,
     });
     timeline.ui_state.selected_item_id = "section_001";
+    timeline.ui_state.selected_item_ids = ["section_001"];
   }, "add");
 }
 
@@ -306,6 +307,54 @@ async function testDeleteKeyRemovesSelectedItem() {
 
   assert.equal(getHiddenTimeline(node).director_track.sections.length, 0);
   assert.equal(getHiddenTimeline(node).ui_state.selected_item_id, null);
+  assert.deepEqual(getHiddenTimeline(node).ui_state.selected_item_ids, []);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+}
+
+async function testDeleteKeyRemovesMixedSelectedItems() {
+  const node = createNode();
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    timeline.director_track.sections.push(
+      {
+        item_id: "section_001",
+        type: "Text",
+        start_time: 0,
+        end_time: 1,
+        prompt: "delete section",
+      },
+      {
+        item_id: "section_keep",
+        type: "Text",
+        start_time: 2,
+        end_time: 3,
+        prompt: "keep section",
+      },
+    );
+    timeline.audio_tracks.push({
+      track_id: "audio_track_001",
+      clips: [{
+        item_id: "audio_001",
+        start_time: 0.5,
+        end_time: 1.5,
+        lane: 0,
+        audio: null,
+      }],
+    });
+    timeline.ui_state.selected_item_id = "audio_001";
+    timeline.ui_state.selected_item_ids = ["section_001", "audio_001"];
+  }, "add mixed selection");
+
+  const event = createKeyEvent("Backspace");
+  controller.handleKeyDown(event);
+  const hiddenTimeline = getHiddenTimeline(node);
+
+  assert.deepEqual(hiddenTimeline.director_track.sections.map((section) => section.item_id), ["section_keep"]);
+  assert.equal(hiddenTimeline.audio_tracks.length, 0);
+  assert.equal(hiddenTimeline.ui_state.selected_item_id, null);
+  assert.deepEqual(hiddenTimeline.ui_state.selected_item_ids, []);
   assert.equal(event.defaultPrevented, true);
   assert.equal(event.propagationStopped, true);
 }
@@ -444,6 +493,7 @@ async function testReplaceTimelineClearsLibraryLinkAndIsUndoable() {
   assert.equal(cleared.audio_tracks.length, 0);
   assert.equal(cleared.project.metadata.character_references.length, 0);
   assert.equal(cleared.ui_state.selected_item_id, null);
+  assert.deepEqual(cleared.ui_state.selected_item_ids, []);
 
   assert.equal(controller.undoTimelineChange(), true);
   const restored = getHiddenTimeline(node);
@@ -542,6 +592,7 @@ await testFlushBeforeSerializationWritesPendingPromptWithoutRerender();
 await testExtensionFlushesBeforeNodeSerialize();
 await testGestureMouseupCommitBoundary();
 await testDeleteKeyRemovesSelectedItem();
+await testDeleteKeyRemovesMixedSelectedItems();
 await testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused();
 await testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem();
 await testDeleteKeyIsIgnoredOnInteractiveTimelineControls();
