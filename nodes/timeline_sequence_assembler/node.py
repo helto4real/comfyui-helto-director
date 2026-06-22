@@ -44,6 +44,7 @@ class TimelineSequenceAssembler(io.ComfyNode):
                 io.Audio.Output("audio", display_name="audio"),
                 io.Float.Output("frame_rate", display_name="frame_rate"),
                 DEBUG_INFO.Output("debug_info", display_name="DEBUG_INFO"),
+                io.Boolean.Output("has_assembled_video", display_name="has_assembled_video"),
             ],
         )
 
@@ -67,7 +68,8 @@ class TimelineSequenceAssembler(io.ComfyNode):
             ),
             bit_depth=_safe_bit_depth(bit_depth),
         )
-        return io.NodeOutput(video, frames, audio, float(frame_rate), debug_info)
+        has_assembled_video = _has_assembled_video(debug_info)
+        return io.NodeOutput(video, frames, audio, float(frame_rate), debug_info, has_assembled_video)
 
 
 def _frame_rate_fraction(frame_rate: float) -> Fraction:
@@ -81,3 +83,14 @@ def _safe_bit_depth(bit_depth: int) -> int:
     except (TypeError, ValueError):
         return 8
     return 10 if value >= 10 else 8
+
+
+def _has_assembled_video(debug_info: dict) -> bool:
+    summary = debug_info.get("summary") if isinstance(debug_info, dict) else None
+    if not isinstance(summary, dict):
+        return False
+    try:
+        included_clip_count = int(summary.get("included_clip_count") or 0)
+    except (TypeError, ValueError):
+        included_clip_count = 0
+    return summary.get("status") == "assembled" and included_clip_count > 0

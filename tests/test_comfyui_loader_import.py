@@ -130,6 +130,7 @@ def test_comfyui_style_loader_includes_timeline_sequence_assembler_node():
         "AUDIO",
         "FLOAT",
         "DEBUG_INFO",
+        "BOOLEAN",
     ]
     assert [output.id for output in schema.outputs] == [
         "video",
@@ -137,6 +138,7 @@ def test_comfyui_style_loader_includes_timeline_sequence_assembler_node():
         "audio",
         "frame_rate",
         "debug_info",
+        "has_assembled_video",
     ]
     assert [input.id for input in schema.inputs] == [
         "video_timeline",
@@ -284,7 +286,11 @@ def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
     node_module = sys.modules[node.__module__]
     frames = torch.zeros((3, 4, 5, 3), dtype=torch.float32)
     audio = {"waveform": torch.zeros((1, 1, 400), dtype=torch.float32), "sample_rate": 16000}
-    debug = {"type": "DEBUG_INFO", "source": "test"}
+    debug = {
+        "type": "DEBUG_INFO",
+        "source": "test",
+        "summary": {"status": "assembled", "included_clip_count": 1},
+    }
 
     def fake_assemble(video_timeline, *, missing_take_policy):
         assert video_timeline == {"type": "VIDEO_TIMELINE"}
@@ -309,6 +315,34 @@ def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
     assert output[2] is audio
     assert output[3] == 12.5
     assert output[4] is debug
+    assert output[5] is True
+
+
+def test_timeline_sequence_assembler_node_marks_placeholder_as_not_assembled(monkeypatch):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineSequenceAssembler"]
+    node_module = sys.modules[node.__module__]
+    frames = torch.zeros((1, 16, 16, 3), dtype=torch.float32)
+    audio = {"waveform": torch.zeros((1, 1, 1), dtype=torch.float32), "sample_rate": 16000}
+    debug = {
+        "type": "DEBUG_INFO",
+        "source": "test",
+        "summary": {"status": "not_built", "included_clip_count": 0},
+    }
+
+    def fake_assemble(video_timeline, *, missing_take_policy):
+        assert missing_take_policy == "warning"
+        return frames, audio, 24.0, debug
+
+    monkeypatch.setattr(node_module, "assemble_timeline_sequence", fake_assemble)
+
+    output = node.execute({"type": "VIDEO_TIMELINE"})
+
+    assert output[1] is frames
+    assert output[2] is audio
+    assert output[3] == 24.0
+    assert output[4] is debug
+    assert output[5] is False
 
 
 def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_writes_sidecar(tmp_path):
