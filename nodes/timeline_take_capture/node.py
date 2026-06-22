@@ -6,6 +6,7 @@ import json
 import mimetypes
 from pathlib import Path
 import re
+import shutil
 from typing import Any
 
 import folder_paths
@@ -65,6 +66,13 @@ class TimelineTakeCapture(io.ComfyNode):
                     advanced=True,
                 ),
                 io.String.Input(
+                    "capture_directory",
+                    display_name="Take Directory",
+                    default="",
+                    socketless=True,
+                    advanced=True,
+                ),
+                io.String.Input(
                     "shot_id_override",
                     display_name="Shot ID Override",
                     default="",
@@ -111,6 +119,7 @@ class TimelineTakeCapture(io.ComfyNode):
         frame_rate: float = 24.0,
         take_registration_json: str = "",
         generated_asset_path: str = "",
+        capture_directory: str = "",
         shot_id_override: str = "",
         filename_prefix: str = DEFAULT_FILENAME_PREFIX,
         accept: bool = False,
@@ -132,9 +141,15 @@ class TimelineTakeCapture(io.ComfyNode):
                 video_output,
                 registration_input,
                 filename_prefix=filename_prefix,
+                capture_directory=capture_directory,
             )
         elif media_path:
-            media_payload = _media_payload_from_path(media_path)
+            media_path, saved_result, media_payload = _copy_generated_asset_path(
+                media_path,
+                registration_input,
+                filename_prefix=filename_prefix,
+                capture_directory=capture_directory,
+            )
         else:
             raise TakeRegistrationError("TAKE_CAPTURE_NO_MEDIA: Provide video, images, or Generated Asset Path.")
 
@@ -257,22 +272,17 @@ def _save_video_output(
     registration: dict[str, Any] | str,
     *,
     filename_prefix: str,
-) -> tuple[str, ui.SavedResult, dict[str, Any]]:
+    capture_directory: str,
+) -> tuple[str, ui.SavedResult | None, dict[str, Any]]:
     width, height = _video_dimensions(video)
-    shot_id, take_id = _registration_ids(registration)
-    resolved_prefix = _resolve_filename_prefix(
-        filename_prefix,
-        shot_id=shot_id,
-        take_id=take_id,
+    output_path = _capture_output_path(
+        registration,
+        filename_prefix=filename_prefix,
+        capture_directory=capture_directory,
+        extension=".mp4",
+        width=width,
+        height=height,
     )
-    full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
-        resolved_prefix,
-        folder_paths.get_output_directory(),
-        width,
-        height,
-    )
-    file = f"{filename}_{counter:05}_.mp4"
-    output_path = Path(full_output_folder) / file
     video.save_to(
         str(output_path),
         format=Types.VideoContainer.MP4,
@@ -281,14 +291,44 @@ def _save_video_output(
     media_payload = _media_payload_for_video(
         video,
         path=output_path,
-        filename=file,
-        subfolder=subfolder,
+        storage_action="saved",
     )
     return (
         str(output_path),
-        ui.SavedResult(file, subfolder, io.FolderType.output),
+        _preview_saved_result(output_path),
         media_payload,
     )
+
+
+def _copy_generated_asset_path(
+    source_path: str,
+    registration: dict[str, Any] | str,
+    *,
+    filename_prefix: str,
+    capture_directory: str,
+) -> tuple[str, ui.SavedResult | None, dict[str, Any]]:
+    source = Path(source_path)
+    if not source.is_file():
+        raise TakeRegistrationError(f"TAKE_CAPTURE_SOURCE_NOT_FOUND: Generated Asset Path does not exist: {source_path}")
+    extension = source.suffix or ".mp4"
+    output_path = _capture_output_path(
+        registration,
+        filename_prefix=filename_prefix,
+        capture_directory=capture_directory,
+        extension=extension,
+    )
+    shutil.copy2(source, output_path)
+    media_payload = _media_payload_from_path(str(output_path))
+    media_payload.update(
+        {
+            "storage_action": "copied",
+            "path": str(output_path),
+            "filename": output_path.name,
+            "folder": "output" if _preview_saved_result(output_path) is not None else "external",
+            "subfolder": _preview_subfolder(output_path),
+        }
+    )
+    return str(output_path), _preview_saved_result(output_path), media_payload
 
 
 def _write_capture_sidecar(
@@ -323,6 +363,62 @@ def _write_capture_sidecar(
         encoding="utf-8",
     )
     return str(sidecar_path)
+
+
+def _capture_output_path(
+    registration: dict[str, Any] | str,
+    *,
+    filename_prefix: str,
+    capture_directory: str,
+    extension: str,
+    width: int = 0,
+    height: int = 0,
+) -> Path:
+    shot_id, take_id = _registration_ids(registration)
+    resolved_prefix = _resolve_filename_prefix(
+        filename_prefix,
+        shot_id=shot_id,
+        take_id=take_id,
+    )
+    capture_root = _capture_root(capture_directory)
+    full_output_folder, filename, counter, _subfolder, _ = folder_paths.get_save_image_path(
+        resolved_prefix,
+        str(capture_root),
+        width,
+        height,
+    )
+    suffix = extension if str(extension).startswith(".") else f".{extension}"
+    return Path(full_output_folder) / f"{filename}_{counter:05}_{suffix}"
+
+
+def _capture_root(capture_directory: str) -> Path:
+    text = _safe_string(capture_directory)
+    if not text:
+        return Path(folder_paths.get_output_directory()).resolve()
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise TakeRegistrationError("TAKE_CAPTURE_DIRECTORY_NOT_ABSOLUTE: Take Directory must be an absolute path.")
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
+
+
+def _preview_saved_result(path: Path) -> ui.SavedResult | None:
+    subfolder = _preview_subfolder(path)
+    if subfolder is None:
+        return None
+    return ui.SavedResult(path.name, subfolder, io.FolderType.output)
+
+
+def _preview_subfolder(path: Path) -> str | None:
+    try:
+        output_root = Path(folder_paths.get_output_directory()).resolve()
+        parent = path.parent.resolve()
+        relative = parent.relative_to(output_root)
+    except ValueError:
+        return None
+    except Exception:
+        return None
+    return "" if str(relative) == "." else relative.as_posix()
 
 
 def _merge_media_metadata_into_registration(
@@ -364,6 +460,8 @@ def _debug_info(
             "media_type": media_payload.get("type") or ASSET_TYPE_VIDEO,
             "filename": media_payload.get("filename"),
             "subfolder": media_payload.get("subfolder"),
+            "path": media_payload.get("path"),
+            "storage_action": media_payload.get("storage_action"),
             "sidecar_filename": Path(sidecar_path).name if sidecar_path else None,
         },
         "ui": (
@@ -382,15 +480,17 @@ def _media_payload_for_video(
     video,
     *,
     path: Path,
-    filename: str,
-    subfolder: str,
+    storage_action: str,
 ) -> dict[str, Any]:
     width, height = _video_dimensions(video)
+    preview_subfolder = _preview_subfolder(path)
     return {
         **_media_payload_from_path(str(path)),
-        "folder": "output",
-        "subfolder": subfolder,
-        "filename": filename,
+        "folder": "output" if preview_subfolder is not None else "external",
+        "subfolder": preview_subfolder,
+        "filename": path.name,
+        "path": str(path),
+        "storage_action": storage_action,
         "width": width,
         "height": height,
         "frame_rate": _safe_float(_call_video_method(video, "get_frame_rate")),
