@@ -103,6 +103,25 @@ export async function fetchProjectTakeCaptures(timeline, shotId, privacyMode = f
   return payload;
 }
 
+export async function deleteProjectTakeCapture(timeline, shotId, path, options = {}) {
+  const response = await fetch(`${MEDIA_BROWSER_ROUTE_PREFIX}/project_takes/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project: timeline?.project ?? {},
+      shot_id: shotId,
+      path,
+      take_id: options.takeId ?? "",
+      privacy: Boolean(options.privacyMode),
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || "Failed to delete project take.");
+  }
+  return payload;
+}
+
 export function registerGeneratedTakePayload(timeline, shotId, payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const registration = registrationFromPayload(payload);

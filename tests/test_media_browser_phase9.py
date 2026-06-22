@@ -208,6 +208,100 @@ def test_project_take_capture_discovery_filters_by_shot_and_ignores_malformed_si
     assert payload["captures"][0]["take_capture"]["registration"]["take"]["take_id"] == "take_match"
 
 
+def test_delete_project_take_capture_removes_media_sidecar_and_discovery_entry(tmp_path):
+    project = project_storage_payload(tmp_path)
+    take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
+    take_dir.mkdir(parents=True)
+    media_path = take_dir / "matching.mp4"
+    media_path.write_text("video", encoding="utf-8")
+    media_path.with_suffix(".helto_take.json").write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {
+                    "shot_id": "shot_001",
+                    "shot_ids": ["shot_001"],
+                    "take": {"take_id": "take_match"},
+                },
+                media={"type": ASSET_TYPE_VIDEO, "filename": media_path.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = media_browser.delete_project_take_capture(project, "shot_001", str(media_path), take_id="take_match")
+
+    assert result["ok"] is True
+    assert result["deleted"] is True
+    assert result["files_deleted"] == 2
+    assert result["take_id"] == "take_match"
+    assert not media_path.exists()
+    assert not media_path.with_suffix(".helto_take.json").exists()
+    assert media_browser.list_project_take_captures(project, "shot_001")["captures"] == []
+
+
+def test_delete_project_take_capture_rejects_outside_paths_and_mismatched_sidecars(tmp_path):
+    project = project_storage_payload(tmp_path)
+    take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
+    take_dir.mkdir(parents=True)
+    outside_path = tmp_path / "outside.mp4"
+    outside_path.write_text("video", encoding="utf-8")
+    shot_mismatch = take_dir / "shot_mismatch.mp4"
+    take_mismatch = take_dir / "take_mismatch.mp4"
+    shot_mismatch.write_text("video", encoding="utf-8")
+    take_mismatch.write_text("video", encoding="utf-8")
+    shot_mismatch.with_suffix(".helto_take.json").write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {"shot_id": "shot_other", "take": {"take_id": "take_match"}},
+                media={"type": ASSET_TYPE_VIDEO, "filename": shot_mismatch.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+    take_mismatch.with_suffix(".helto_take.json").write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {"shot_id": "shot_001", "take": {"take_id": "take_other"}},
+                media={"type": ASSET_TYPE_VIDEO, "filename": take_mismatch.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="TAKE_DELETE_PATH_OUTSIDE_PROJECT"):
+        media_browser.delete_project_take_capture(project, "shot_001", str(outside_path))
+    with pytest.raises(ValueError, match="TAKE_DELETE_SHOT_MISMATCH"):
+        media_browser.delete_project_take_capture(project, "shot_001", str(shot_mismatch), take_id="take_match")
+    with pytest.raises(ValueError, match="TAKE_DELETE_TAKE_MISMATCH"):
+        media_browser.delete_project_take_capture(project, "shot_001", str(take_mismatch), take_id="take_match")
+
+    assert outside_path.exists()
+    assert shot_mismatch.exists()
+    assert take_mismatch.exists()
+
+
+def test_delete_project_take_capture_privacy_redacts_paths(tmp_path):
+    project = project_storage_payload(tmp_path)
+    take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
+    take_dir.mkdir(parents=True)
+    media_path = take_dir / "private.mp4"
+    media_path.write_text("video", encoding="utf-8")
+    media_path.with_suffix(".helto_take.json").write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {"shot_id": "shot_001", "take": {"take_id": "take_private"}},
+                media={"type": ASSET_TYPE_VIDEO, "filename": media_path.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = media_browser.delete_project_take_capture(project, "shot_001", str(media_path), privacy_mode=True)
+
+    assert result["path"] == "Private path"
+    assert result["deleted_paths"] == ["Private path", "Private path"]
+
+
 def test_media_browser_rejects_wrong_extension_and_traversal(tmp_path, monkeypatch):
     monkeypatch.setattr(media_browser, "CONFIG_DIR", tmp_path / "config")
     original_input = folder_paths.get_input_directory()
@@ -270,6 +364,17 @@ def test_image_browser_thumbnail_privacy_returns_bytes_and_encrypted_cache(tmp_p
     finally:
         folder_paths.set_input_directory(original_input)
         folder_paths.set_temp_directory(original_temp)
+
+
+def project_storage_payload(tmp_path):
+    return {
+        "identity": {"project_id": "proj_capturetest", "name": "Capture Test"},
+        "storage": {
+            "schema_version": 1,
+            "asset_root_directory": str(tmp_path),
+            "project_directory_name": "capture_test_proj_capturetest",
+        },
+    }
 
 
 def write_test_wav(path):

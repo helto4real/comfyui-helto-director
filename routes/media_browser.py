@@ -10,6 +10,7 @@ from aiohttp import web
 try:
     from ..shared.media_browser import (
         add_folder,
+        delete_project_take_capture,
         folder_by_alias,
         folder_payload,
         list_media,
@@ -23,6 +24,7 @@ try:
 except Exception:
     from shared.media_browser import (
         add_folder,
+        delete_project_take_capture,
         folder_by_alias,
         folder_payload,
         list_media,
@@ -152,6 +154,23 @@ def register_media_browser_routes() -> bool:
                 payload["take_directory"] = "Private path"
                 payload["storage"]["asset_root_directory"] = "Private path"
                 payload["storage"]["project_directory"] = "Private path"
+            return web.json_response(payload)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    @routes.post(f"{ROUTE_PREFIX}/project_takes/delete")
+    async def post_project_take_delete(request):
+        try:
+            data = await request.json()
+            privacy_value = data.get("privacy")
+            privacy_mode = privacy_value if isinstance(privacy_value, bool) else query_bool(str(privacy_value or ""))
+            payload = delete_project_take_capture(
+                data.get("project") if isinstance(data.get("project"), dict) else {},
+                data.get("shot_id", ""),
+                data.get("path", ""),
+                take_id=data.get("take_id"),
+                privacy_mode=privacy_mode,
+            )
             return web.json_response(payload)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)

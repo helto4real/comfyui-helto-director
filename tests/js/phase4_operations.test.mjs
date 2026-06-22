@@ -26,6 +26,7 @@ import {
   clearShotLoraTargetStack,
   createOrUpdateBoundaryBetweenShots,
   createShot,
+  deleteTake,
   deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
@@ -434,6 +435,50 @@ function testTakeAndClipInstanceOperations() {
   assert.equal(setTakeStatus(timeline, shot.shot_id, take.take_id, "Rejected"), true);
   assert.equal(shot.accepted_take_id, null);
   assert.equal(take.status, "Rejected");
+}
+
+function testDeleteTakeClearsAcceptedClipAndPrunesOnlyUnreferencedGeneratedAsset() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addValidTextSection(timeline, 0);
+  const shot = findShotForSection(timeline, section.item_id);
+  timeline.assets.push({
+    asset_id: "asset_generated_001",
+    type: ASSET_TYPE_VIDEO,
+    source_kind: ASSET_SOURCE_GENERATED,
+    path: "/tmp/generated-take.mp4",
+    name: "generated-take.mp4",
+  }, {
+    asset_id: "asset_generated_shared",
+    type: ASSET_TYPE_VIDEO,
+    source_kind: ASSET_SOURCE_GENERATED,
+    path: "/tmp/shared-take.mp4",
+    name: "shared-take.mp4",
+  });
+  const accepted = addTakeMetadata(timeline, shot.shot_id, {
+    take_id: "take_delete",
+    asset_id: "asset_generated_001",
+    status: "Accepted",
+  });
+  const shared = addTakeMetadata(timeline, shot.shot_id, {
+    take_id: "take_shared",
+    asset_id: "asset_generated_shared",
+  });
+  shot.clip_instance = { asset_id: accepted.asset_id, source_in: 0, source_out: null, speed: 1, enabled: true };
+  shot.accepted_take_id = accepted.take_id;
+  const secondShot = createShot(timeline, { shot_id: "shot_second", start_time: 1, end_time: 2 });
+  addTakeMetadata(timeline, secondShot.shot_id, {
+    take_id: "take_still_references_shared_asset",
+    asset_id: shared.asset_id,
+  });
+
+  assert.equal(deleteTake(timeline, shot.shot_id, accepted.take_id), true);
+  assert.equal(shot.accepted_take_id, null);
+  assert.equal(shot.clip_instance, null);
+  assert.equal(shot.takes.some((take) => take.take_id === accepted.take_id), false);
+  assert.equal(timeline.assets.some((asset) => asset.asset_id === accepted.asset_id), false);
+
+  assert.equal(deleteTake(timeline, shot.shot_id, shared.take_id), true);
+  assert.equal(timeline.assets.some((asset) => asset.asset_id === shared.asset_id), true);
 }
 
 function testAttachGeneratedAssetAsTakePreservesGeneratedShotType() {
@@ -862,6 +907,7 @@ testShotOperationsCreateAssignBoundaryAndDelete();
 testAddSectionTargetsSelectedCompatibleShot();
 testStandaloneSectionCreationStillCreatesWrapperShot();
 testTakeAndClipInstanceOperations();
+testDeleteTakeClearsAcceptedClipAndPrunesOnlyUnreferencedGeneratedAsset();
 testAttachGeneratedAssetAsTakePreservesGeneratedShotType();
 testProjectAndShotLoraOperations();
 testValidationReportsGenericShotStructureIssues();

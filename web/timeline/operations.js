@@ -1,4 +1,5 @@
 import {
+  ASSET_SOURCE_GENERATED,
   ASSET_TYPE_VIDEO,
   BOUNDARY_MODES,
   LORA_MERGE_MODES,
@@ -457,6 +458,18 @@ export function setTakeStatus(timeline, shotId, takeId, status) {
     shot.accepted_take_id = null;
     clearClipInstanceForTake(shot, take);
   }
+  return true;
+}
+
+export function deleteTake(timeline, shotId, takeId) {
+  const shot = findShot(timeline, shotId);
+  if (!shot) return false;
+  const takeIndex = (shot.takes ?? []).findIndex((candidate) => candidate.take_id === takeId);
+  if (takeIndex < 0) return false;
+  const [take] = shot.takes.splice(takeIndex, 1);
+  if (shot.accepted_take_id === take.take_id) shot.accepted_take_id = null;
+  clearClipInstanceForTake(shot, take);
+  pruneUnreferencedGeneratedAsset(timeline, take.asset_id);
   return true;
 }
 
@@ -921,10 +934,7 @@ function deleteBoundary(timeline, boundaryId) {
 
 function deleteTakeById(timeline, takeId) {
   for (const shot of ensureSequence(timeline).shots) {
-    const before = shot.takes?.length ?? 0;
-    shot.takes = (shot.takes ?? []).filter((take) => take.take_id !== takeId);
-    if (shot.accepted_take_id === takeId) shot.accepted_take_id = null;
-    if (before !== shot.takes.length) return true;
+    if (deleteTake(timeline, shot.shot_id, takeId)) return true;
   }
   return false;
 }
@@ -993,6 +1003,39 @@ function clearClipInstanceForTake(shot, take) {
   ) {
     shot.clip_instance = null;
   }
+}
+
+function pruneUnreferencedGeneratedAsset(timeline, assetId) {
+  if (!assetId || !Array.isArray(timeline.assets)) return false;
+  const asset = timeline.assets.find((candidate) => candidate.asset_id === assetId);
+  if (!asset || !isGeneratedAsset(asset) || assetReferenced(timeline, assetId)) return false;
+  timeline.assets = timeline.assets.filter((candidate) => candidate.asset_id !== assetId);
+  return true;
+}
+
+function isGeneratedAsset(asset) {
+  return asset?.source_kind === ASSET_SOURCE_GENERATED || asset?.metadata?.source_kind === ASSET_SOURCE_GENERATED;
+}
+
+function assetReferenced(timeline, assetId) {
+  const id = String(assetId);
+  for (const section of timeline.director_track?.sections ?? []) {
+    if (mediaReferenceAssetId(section.image) === id || mediaReferenceAssetId(section.video) === id) return true;
+  }
+  for (const track of timeline.audio_tracks ?? []) {
+    for (const clip of track.clips ?? []) {
+      if (mediaReferenceAssetId(clip.audio) === id) return true;
+    }
+  }
+  for (const shot of ensureSequence(timeline).shots) {
+    if (shot.clip_instance?.asset_id === id) return true;
+    if ((shot.takes ?? []).some((take) => take.asset_id === id)) return true;
+  }
+  return false;
+}
+
+function mediaReferenceAssetId(reference) {
+  return reference?.asset_id == null ? null : String(reference.asset_id);
 }
 
 function isValidLoraTarget(modelKey, targetKey) {

@@ -30,6 +30,7 @@ import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, mediaViewUrl, thumbnailUrl } fr
 import {
   addPickedMediaItem,
   attachPickedGeneratedVideoAsTake,
+  deleteProjectTakeCapture,
   fetchProjectTakeCaptures,
   replacePickedSectionMedia,
 } from "./media_actions.js";
@@ -82,6 +83,7 @@ import {
   clearShotLoraTargetStack,
   createOrUpdateBoundaryBetweenShots,
   createShot,
+  deleteTake,
   deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
@@ -964,6 +966,10 @@ export class TimelineRenderer {
       const preview = previewData
         ? iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData))
         : null;
+      const remove = iconButton("delete", "Delete Take Files", () => {
+        this.deleteProjectTakeCaptureFromItem(shot, item, { takeId, label: label.textContent });
+      });
+      remove.classList.add("is-danger");
       const attach = button(existing ? "Attached" : "Attach", "Attach Project Capture As Take", () => {
         this.commitMutation((currentTimeline) => {
           attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
@@ -981,7 +987,7 @@ export class TimelineRenderer {
       accept.disabled = existing?.status === "Accepted";
       row.append(label);
       if (preview) row.append(preview);
-      row.append(attach, accept);
+      row.append(remove, attach, accept);
       block.append(row);
     }
     return block;
@@ -1015,6 +1021,10 @@ export class TimelineRenderer {
       const preview = previewData
         ? iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData))
         : null;
+      const remove = iconButton("delete", "Delete Take Files", () => {
+        this.deleteProjectTakeFromTimelineTake(shot, take, asset, { label: label.textContent });
+      });
+      remove.classList.add("is-danger");
       const status = iconMenuControl({
         id: `take-status-${take.take_id}`,
         title: "Take Status",
@@ -1048,7 +1058,7 @@ export class TimelineRenderer {
       restore.disabled = take.status === "Candidate";
       row.append(label, assetSummary);
       if (preview) row.append(preview);
-      row.append(status, accept, reject, restore);
+      row.append(remove, status, accept, reject, restore);
       block.append(row);
     }
     return block;
@@ -2232,6 +2242,48 @@ export class TimelineRenderer {
     return true;
   }
 
+  async deleteProjectTakeCaptureFromItem(shot, item, options = {}) {
+    const path = String(item?.path ?? item?.file_path ?? item?.take_capture?.registration?.asset?.path ?? item?.take_capture?.registration?.asset?.file_path ?? "").trim();
+    await this.deleteProjectTakePath(shot?.shot_id, path, {
+      takeId: options.takeId || captureTakeId(item),
+      label: options.label || captureSummaryLabel(item, this.isPrivacyRevealed(this.controller.timeline)),
+    });
+  }
+
+  async deleteProjectTakeFromTimelineTake(shot, take, asset, options = {}) {
+    const path = String(asset?.path ?? asset?.file_path ?? "").trim();
+    await this.deleteProjectTakePath(shot?.shot_id, path, {
+      takeId: take?.take_id,
+      label: options.label || takeStatusLabel(take),
+    });
+  }
+
+  async deleteProjectTakePath(shotId, path, options = {}) {
+    const timeline = this.controller.timeline;
+    const privacyRevealed = this.isPrivacyRevealed(timeline);
+    const label = privacyRevealed ? (options.label || "this take") : "this private take";
+    const confirmFn = this.container.ownerDocument.defaultView?.confirm ?? globalThis.confirm;
+    if (!confirmFn?.(`Delete ${label} from the timeline and permanently remove its project take files?`)) return false;
+    try {
+      await deleteProjectTakeCapture(timeline, shotId, path, {
+        takeId: options.takeId,
+        privacyMode: Boolean(timeline?.project?.privacy?.mode && !privacyRevealed),
+      });
+      if (options.takeId) {
+        this.commitMutation((currentTimeline) => {
+          deleteTake(currentTimeline, shotId, options.takeId);
+        }, "delete take");
+      }
+      const liveShot = findShot(this.controller.timeline, shotId) ?? { shot_id: shotId };
+      this.requestAvailableCaptures(this.controller.timeline, liveShot, { force: true, rerender: true });
+      return true;
+    } catch (error) {
+      const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
+      alertFn?.(error?.message || "Could not delete project take files.");
+      return false;
+    }
+  }
+
   closeContextMenu(options = {}) {
     const hadMenu = Boolean(this.contextMenuElement);
     this.contextMenuDocument?.removeEventListener?.("pointerdown", this.onContextMenuPointerDown, true);
@@ -3381,8 +3433,8 @@ function installStyles(documentRef) {
     .htd-shot-subheader .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-shot-takes, .htd-shot-loras { min-width: 0; display: grid; gap: 4px; }
     .htd-shot-empty { color: #8d98ab; font-size: 11px; }
-    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(82px, 0.45fr) auto auto auto auto auto; align-items: center; gap: 6px; }
-    .htd-capture-row { grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 0.45fr) auto; }
+    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(82px, 0.45fr) auto auto auto auto auto auto; align-items: center; gap: 6px; }
+    .htd-capture-row { grid-template-columns: minmax(120px, 1fr) auto auto minmax(120px, 0.45fr) auto; }
     .htd-take-label, .htd-take-asset-summary, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-take-asset-summary { color: #aab4c4; }
     .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }

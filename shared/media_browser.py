@@ -284,6 +284,62 @@ def list_project_take_captures(
     }
 
 
+def delete_project_take_capture(
+    project: dict[str, Any],
+    shot_id: str,
+    path: str,
+    *,
+    take_id: str | None = None,
+    privacy_mode: bool = False,
+) -> dict[str, Any]:
+    shot_id = str(shot_id or "").strip()
+    if not shot_id:
+        raise ValueError("shot_id is required.")
+    path_value = str(path or "").strip()
+    if not path_value:
+        raise ValueError("TAKE_DELETE_PATH_REQUIRED: Take media path is required.")
+
+    take_directory = resolve_project_take_directory(project, shot_id, create=False).resolve()
+    candidate = Path(path_value).expanduser().resolve(strict=False)
+    _ensure_project_take_path(take_directory, candidate)
+    if candidate.suffix.lower() not in VIDEO_EXTENSIONS:
+        raise ValueError(f"TAKE_DELETE_UNSUPPORTED_EXTENSION: Unsupported take media extension: {candidate.suffix}")
+    if not candidate.is_file():
+        raise FileNotFoundError(f"TAKE_DELETE_MEDIA_NOT_FOUND: Take media was not found: {candidate}")
+
+    sidecar_path = generated_take_sidecar_path(candidate)
+    if sidecar_path is None:
+        raise ValueError("TAKE_DELETE_SIDECAR_REQUIRED: Take media must have a Helto take sidecar.")
+    sidecar = _load_take_sidecar_for_delete(sidecar_path)
+    if not _capture_registration_matches_shot(sidecar.get("registration"), shot_id):
+        raise ValueError("TAKE_DELETE_SHOT_MISMATCH: Take sidecar does not match the selected shot.")
+    sidecar_take_id = _sidecar_take_id(sidecar)
+    requested_take_id = str(take_id or "").strip()
+    if requested_take_id and requested_take_id != sidecar_take_id:
+        raise ValueError("TAKE_DELETE_TAKE_MISMATCH: Take sidecar does not match the selected take.")
+
+    sidecar_candidates = _take_sidecar_candidates(candidate)
+    files_deleted = 0
+    deleted_paths: list[str] = []
+    for file_path in [candidate, *sidecar_candidates]:
+        if not file_path.is_file():
+            continue
+        file_path.unlink()
+        files_deleted += 1
+        deleted_paths.append(str(file_path))
+
+    _prune_empty_take_subdirectories(take_directory, candidate.parent)
+    return {
+        "ok": True,
+        "deleted": files_deleted > 0,
+        "files_deleted": files_deleted,
+        "shot_id": shot_id,
+        "take_id": requested_take_id or sidecar_take_id,
+        "path": "Private path" if privacy_mode else str(candidate),
+        "deleted_paths": ["Private path"] * len(deleted_paths) if privacy_mode else deleted_paths,
+    }
+
+
 def folder_payload(media_type: str) -> list[dict[str, Any]]:
     count_key = media_definition(media_type)["count_key"]
     folders = []
@@ -343,14 +399,17 @@ def generated_take_capture_metadata(path: Path, *, privacy_mode: bool = False) -
 
 
 def generated_take_sidecar_path(path: Path) -> Path | None:
-    candidates = [
-        path.with_suffix(".helto_take.json"),
-        Path(f"{path}.helto_take.json"),
-    ]
-    for candidate in candidates:
+    for candidate in _take_sidecar_candidates(path):
         if candidate.is_file():
             return candidate
     return None
+
+
+def _take_sidecar_candidates(path: Path) -> list[Path]:
+    return [
+        path.with_suffix(".helto_take.json"),
+        Path(f"{path}.helto_take.json"),
+    ]
 
 
 def _capture_matches_shot(item: dict[str, Any], shot_id: str) -> bool:
@@ -358,6 +417,12 @@ def _capture_matches_shot(item: dict[str, Any], shot_id: str) -> bool:
     if not isinstance(capture, dict):
         return False
     registration = capture.get("registration")
+    if not isinstance(registration, dict):
+        return False
+    return _capture_registration_matches_shot(registration, shot_id)
+
+
+def _capture_registration_matches_shot(registration: dict[str, Any] | None, shot_id: str) -> bool:
     if not isinstance(registration, dict):
         return False
     shot_ids = [
@@ -369,6 +434,38 @@ def _capture_matches_shot(item: dict[str, Any], shot_id: str) -> bool:
     if direct is not None:
         shot_ids.append(str(direct))
     return shot_id in set(shot_ids)
+
+
+def _load_take_sidecar_for_delete(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8") or "{}")
+        return normalize_generated_take_capture_sidecar(payload)
+    except (GeneratedCaptureError, OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"TAKE_DELETE_SIDECAR_INVALID: {exc}") from exc
+
+
+def _sidecar_take_id(sidecar: dict[str, Any]) -> str:
+    take = sidecar.get("registration", {}).get("take")
+    if isinstance(take, dict):
+        value = take.get("take_id")
+        if value is not None:
+            return str(value)
+    return ""
+
+
+def _ensure_project_take_path(take_directory: Path, candidate: Path) -> None:
+    if take_directory != candidate and take_directory not in candidate.parents:
+        raise ValueError("TAKE_DELETE_PATH_OUTSIDE_PROJECT: Take media must be inside the selected project take folder.")
+
+
+def _prune_empty_take_subdirectories(take_directory: Path, start: Path) -> None:
+    current = start
+    while current != take_directory and take_directory in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 def make_browser_thumbnail(media_type: str, alias: str, filename: str, max_size: int = 320, privacy_mode: bool = False) -> Path | bytes:
