@@ -15,6 +15,11 @@ from comfy_api.latest import InputImpl, Types, io, ui
 from ...shared.contracts.socket_types import DEBUG_INFO, VIDEO_TIMELINE
 from ...shared.contracts.video_timeline import ASSET_TYPE_VIDEO
 from ...shared.timeline.generated_capture import build_generated_take_capture_sidecar
+from ...shared.timeline.normalize import normalize_video_timeline
+from ...shared.timeline.project_storage import (
+    resolve_project_take_directory,
+    resolved_project_storage_summary,
+)
 from ...shared.timeline.take_registration import (
     TakeRegistrationError,
     prepare_take_registration,
@@ -22,7 +27,8 @@ from ...shared.timeline.take_registration import (
 )
 
 
-DEFAULT_FILENAME_PREFIX = "helto_director/%shot_id%_%take_id%"
+DEFAULT_FILENAME_PREFIX = "%shot_id%_%take_id%"
+_MISSING = object()
 
 
 class TimelineTakeCapture(io.ComfyNode):
@@ -35,10 +41,10 @@ class TimelineTakeCapture(io.ComfyNode):
             description="Register generated media as a VIDEO_TIMELINE shot take and write a sidecar for Director UI attachment.",
             inputs=[
                 VIDEO_TIMELINE.Input("video_timeline", display_name="VIDEO_TIMELINE"),
-                DEBUG_INFO.Input("runtime_debug", display_name="runtime_debug", optional=True),
-                io.Video.Input("video", display_name="video", optional=True),
-                io.Image.Input("images", display_name="images", optional=True),
-                io.Audio.Input("audio", display_name="audio", optional=True),
+                DEBUG_INFO.Input("runtime_debug", display_name="runtime_debug", optional=True, lazy=True),
+                io.Video.Input("video", display_name="video", optional=True, lazy=True),
+                io.Image.Input("images", display_name="images", optional=True, lazy=True),
+                io.Audio.Input("audio", display_name="audio", optional=True, lazy=True),
                 io.Float.Input(
                     "frame_rate",
                     display_name="Frame Rate",
@@ -61,13 +67,6 @@ class TimelineTakeCapture(io.ComfyNode):
                 io.String.Input(
                     "generated_asset_path",
                     display_name="Generated Asset Path",
-                    default="",
-                    socketless=True,
-                    advanced=True,
-                ),
-                io.String.Input(
-                    "capture_directory",
-                    display_name="Take Directory",
                     default="",
                     socketless=True,
                     advanced=True,
@@ -109,22 +108,82 @@ class TimelineTakeCapture(io.ComfyNode):
         )
 
     @classmethod
+    def check_lazy_status(
+        cls,
+        video_timeline: dict,
+        runtime_debug=_MISSING,
+        video=_MISSING,
+        images=_MISSING,
+        audio=_MISSING,
+        take_registration_json: str = "",
+        generated_asset_path: str = "",
+        shot_id_override: str = "",
+        **kwargs,
+    ) -> list[str]:
+        if runtime_debug is None:
+            return ["runtime_debug"]
+        if _runtime_generation_skipped(runtime_debug):
+            return []
+        if (
+            runtime_debug is not _MISSING
+            and not _safe_string(take_registration_json)
+            and not _safe_string(shot_id_override)
+            and not _runtime_take_registration_status(runtime_debug)["ready"]
+        ):
+            return []
+        if _safe_string(generated_asset_path):
+            return []
+        requested = []
+        for name, value in (("video", video), ("images", images), ("audio", audio)):
+            if value is None:
+                requested.append(name)
+        return requested
+
+    @classmethod
     def execute(
         cls,
         video_timeline: dict,
-        runtime_debug: dict | None = None,
-        video=None,
-        images=None,
-        audio=None,
+        runtime_debug: dict | None = _MISSING,
+        video=_MISSING,
+        images=_MISSING,
+        audio=_MISSING,
         frame_rate: float = 24.0,
         take_registration_json: str = "",
         generated_asset_path: str = "",
-        capture_directory: str = "",
         shot_id_override: str = "",
         filename_prefix: str = DEFAULT_FILENAME_PREFIX,
         accept: bool = False,
         update_clip_instance: bool = True,
     ) -> io.NodeOutput:
+        video_timeline = normalize_video_timeline(video_timeline)
+        runtime_debug = None if runtime_debug is _MISSING else runtime_debug
+        video = None if video is _MISSING else video
+        images = None if images is _MISSING else images
+        audio = None if audio is _MISSING else audio
+        if _runtime_generation_skipped(runtime_debug):
+            return io.NodeOutput(
+                video_timeline,
+                None,
+                "",
+                "",
+                _skipped_debug_info(video_timeline, runtime_debug),
+                ui=None,
+            )
+        if (
+            runtime_debug is not None
+            and not _safe_string(take_registration_json)
+            and not _safe_string(shot_id_override)
+        ):
+            registration_status = _runtime_take_registration_status(runtime_debug)
+            if not registration_status["ready"]:
+                return io.NodeOutput(
+                    video_timeline,
+                    None,
+                    "",
+                    "",
+                    _registration_not_ready_debug_info(video_timeline, runtime_debug, registration_status),
+                    ui=None,
+                )
         registration_input = _registration_from_inputs(
             runtime_debug=runtime_debug,
             take_registration_json=take_registration_json,
@@ -139,16 +198,16 @@ class TimelineTakeCapture(io.ComfyNode):
         if video_output is not None:
             media_path, saved_result, media_payload = _save_video_output(
                 video_output,
+                video_timeline,
                 registration_input,
                 filename_prefix=filename_prefix,
-                capture_directory=capture_directory,
             )
         elif media_path:
             media_path, saved_result, media_payload = _copy_generated_asset_path(
                 media_path,
+                video_timeline,
                 registration_input,
                 filename_prefix=filename_prefix,
-                capture_directory=capture_directory,
             )
         else:
             raise TakeRegistrationError("TAKE_CAPTURE_NO_MEDIA: Provide video, images, or Generated Asset Path.")
@@ -167,6 +226,7 @@ class TimelineTakeCapture(io.ComfyNode):
             media_payload=media_payload,
             asset_id=result["asset_id"],
             take_id=result["take_id"],
+            timeline=result["timeline"],
         )
         debug_info = _debug_info(
             result,
@@ -216,20 +276,164 @@ def _registration_from_inputs(
     }
 
 
-def _runtime_take_registration(runtime_debug: dict | None) -> dict[str, Any] | None:
+def _runtime_generation_skipped(runtime_debug: Any) -> bool:
     if not isinstance(runtime_debug, dict):
-        return None
+        return False
+    summary = runtime_debug.get("summary") if isinstance(runtime_debug.get("summary"), dict) else {}
+    if summary.get("generation_required") is False:
+        return True
+    if summary.get("generation_status") == "skipped":
+        return True
+    policy = runtime_debug.get("generation_policy") if isinstance(runtime_debug.get("generation_policy"), dict) else {}
+    return policy.get("status") == "skipped"
+
+
+def _runtime_take_registration_status(runtime_debug: Any) -> dict[str, Any]:
+    if not isinstance(runtime_debug, dict):
+        return {
+            "ready": False,
+            "registration": None,
+            "capture_blockers": ["TAKE_CAPTURE_NO_RUNTIME_REGISTRATION"],
+            "shot_ids": [],
+            "message": "Runtime debug did not contain take registration metadata.",
+        }
+
+    registrations = _runtime_take_registration_candidates(runtime_debug)
+    summary = runtime_debug.get("summary") if isinstance(runtime_debug.get("summary"), dict) else {}
+    if summary.get("take_registration_ready") is False and not registrations:
+        return {
+            "ready": False,
+            "registration": None,
+            "capture_blockers": ["TAKE_CAPTURE_NO_SHOT_ID"],
+            "shot_ids": list(summary.get("take_registration_shot_ids") or []),
+            "message": "Runtime reported that take registration is not ready.",
+        }
+    if len(registrations) != 1:
+        blockers = ["TAKE_CAPTURE_NO_RUNTIME_REGISTRATION"] if not registrations else ["TAKE_CAPTURE_MULTIPLE_RUNTIME_REGISTRATIONS"]
+        return {
+            "ready": False,
+            "registration": None,
+            "capture_blockers": blockers,
+            "shot_ids": _runtime_registration_shot_ids(registrations),
+            "message": "Runtime did not provide exactly one take registration.",
+        }
+
+    registration = registrations[0]
+    blockers = list(registration.get("capture_blockers") or [])
+    shot_ids = [
+        str(shot_id)
+        for shot_id in registration.get("shot_ids") or []
+        if shot_id is not None
+    ]
+    shot_id = _safe_string(registration.get("shot_id"))
+    ready = registration.get("registration_ready") is True and bool(shot_id)
+    if ready:
+        return {
+            "ready": True,
+            "registration": registration,
+            "capture_blockers": [],
+            "shot_ids": shot_ids or [shot_id],
+            "message": "Runtime take registration is ready.",
+        }
+    if not blockers:
+        blockers = ["TAKE_CAPTURE_NO_SHOT_ID"]
+    return {
+        "ready": False,
+        "registration": registration,
+        "capture_blockers": blockers,
+        "shot_ids": shot_ids,
+        "message": "Runtime take registration does not identify exactly one target shot.",
+    }
+
+
+def _runtime_take_registration_candidates(runtime_debug: dict[str, Any]) -> list[dict[str, Any]]:
     direct = runtime_debug.get("take_registration")
     if isinstance(direct, dict):
-        return deepcopy(direct)
-    segment_registrations = [
+        return [deepcopy(direct)]
+    return [
         deepcopy(segment["take_registration"])
         for segment in runtime_debug.get("segments") or []
         if isinstance(segment, dict) and isinstance(segment.get("take_registration"), dict)
     ]
-    if len(segment_registrations) == 1:
-        return segment_registrations[0]
-    return None
+
+
+def _runtime_registration_shot_ids(registrations: list[dict[str, Any]]) -> list[str]:
+    shot_ids: list[str] = []
+    for registration in registrations:
+        candidates = list(registration.get("shot_ids") or [])
+        if registration.get("shot_id") is not None:
+            candidates.insert(0, registration.get("shot_id"))
+        for shot_id in candidates:
+            text = _safe_string(shot_id)
+            if text and text not in shot_ids:
+                shot_ids.append(text)
+    return shot_ids
+
+
+def _skipped_debug_info(video_timeline: dict, runtime_debug: dict | None) -> dict[str, Any]:
+    project = video_timeline.get("project") if isinstance(video_timeline.get("project"), dict) else {}
+    privacy_mode = bool(_raw_dict(project.get("privacy")).get("mode"))
+    storage_summary = resolved_project_storage_summary(project) if project else {}
+    summary = runtime_debug.get("summary") if isinstance(runtime_debug, dict) and isinstance(runtime_debug.get("summary"), dict) else {}
+    return {
+        "type": "DEBUG_INFO",
+        "ok": True,
+        "code": "TAKE_CAPTURE_SKIPPED_NO_GENERATION_REQUIRED",
+        "summary": {
+            "generation_required": False,
+            "generation_status": summary.get("generation_status") or "skipped",
+            "generation_skip_reason": summary.get("generation_skip_reason"),
+            "generation_mode": summary.get("generation_mode"),
+            "asset_id": "",
+            "take_id": "",
+            "shot_id": summary.get("generation_target_shot_id"),
+            "storage_action": "skipped",
+            "sidecar_filename": None,
+            "path": None,
+            "project_id": storage_summary.get("project_id"),
+            "project_directory": "Private path" if privacy_mode else storage_summary.get("project_directory"),
+        },
+        "ui": None,
+    }
+
+
+def _registration_not_ready_debug_info(
+    video_timeline: dict,
+    runtime_debug: dict | None,
+    registration_status: dict[str, Any],
+) -> dict[str, Any]:
+    project = video_timeline.get("project") if isinstance(video_timeline.get("project"), dict) else {}
+    privacy_mode = bool(_raw_dict(project.get("privacy")).get("mode"))
+    storage_summary = resolved_project_storage_summary(project) if project else {}
+    summary = runtime_debug.get("summary") if isinstance(runtime_debug, dict) and isinstance(runtime_debug.get("summary"), dict) else {}
+    return {
+        "type": "DEBUG_INFO",
+        "ok": True,
+        "code": "TAKE_CAPTURE_SKIPPED_REGISTRATION_NOT_READY",
+        "summary": {
+            "message": registration_status.get("message"),
+            "generation_required": summary.get("generation_required"),
+            "generation_status": summary.get("generation_status"),
+            "generation_skip_reason": summary.get("generation_skip_reason"),
+            "generation_mode": summary.get("generation_mode"),
+            "capture_blockers": list(registration_status.get("capture_blockers") or []),
+            "shot_ids": list(registration_status.get("shot_ids") or []),
+            "asset_id": "",
+            "take_id": "",
+            "shot_id": None,
+            "storage_action": "skipped",
+            "sidecar_filename": None,
+            "path": None,
+            "project_id": storage_summary.get("project_id"),
+            "project_directory": "Private path" if privacy_mode else storage_summary.get("project_directory"),
+        },
+        "ui": None,
+    }
+
+
+def _runtime_take_registration(runtime_debug: dict | None) -> dict[str, Any] | None:
+    status = _runtime_take_registration_status(runtime_debug)
+    return deepcopy(status["registration"]) if status["ready"] and isinstance(status.get("registration"), dict) else None
 
 
 def _apply_shot_override(
@@ -269,16 +473,16 @@ def _video_from_inputs(video, images, audio, frame_rate: float):
 
 def _save_video_output(
     video,
+    video_timeline: dict,
     registration: dict[str, Any] | str,
     *,
     filename_prefix: str,
-    capture_directory: str,
 ) -> tuple[str, ui.SavedResult | None, dict[str, Any]]:
     width, height = _video_dimensions(video)
     output_path = _capture_output_path(
+        video_timeline,
         registration,
         filename_prefix=filename_prefix,
-        capture_directory=capture_directory,
         extension=".mp4",
         width=width,
         height=height,
@@ -302,19 +506,19 @@ def _save_video_output(
 
 def _copy_generated_asset_path(
     source_path: str,
+    video_timeline: dict,
     registration: dict[str, Any] | str,
     *,
     filename_prefix: str,
-    capture_directory: str,
 ) -> tuple[str, ui.SavedResult | None, dict[str, Any]]:
     source = Path(source_path)
     if not source.is_file():
         raise TakeRegistrationError(f"TAKE_CAPTURE_SOURCE_NOT_FOUND: Generated Asset Path does not exist: {source_path}")
     extension = source.suffix or ".mp4"
     output_path = _capture_output_path(
+        video_timeline,
         registration,
         filename_prefix=filename_prefix,
-        capture_directory=capture_directory,
         extension=extension,
     )
     shutil.copy2(source, output_path)
@@ -338,6 +542,7 @@ def _write_capture_sidecar(
     media_payload: dict[str, Any],
     asset_id: str,
     take_id: str,
+    timeline: dict,
 ) -> str | None:
     path = Path(media_path)
     if not path.name:
@@ -349,6 +554,15 @@ def _write_capture_sidecar(
     take = _raw_dict(sidecar_registration.get("take"))
     take["take_id"] = take_id
     sidecar_registration["take"] = take
+    project = timeline.get("project") if isinstance(timeline, dict) else {}
+    if isinstance(project, dict):
+        identity = project.get("identity") if isinstance(project.get("identity"), dict) else {}
+        storage = project.get("storage") if isinstance(project.get("storage"), dict) else {}
+        sidecar_registration["project_context"] = {
+            "project_id": identity.get("project_id"),
+            "project_name": identity.get("name"),
+            "project_directory_name": storage.get("project_directory_name"),
+        }
     sidecar = build_generated_take_capture_sidecar(
         sidecar_registration,
         media={
@@ -366,10 +580,10 @@ def _write_capture_sidecar(
 
 
 def _capture_output_path(
+    video_timeline: dict,
     registration: dict[str, Any] | str,
     *,
     filename_prefix: str,
-    capture_directory: str,
     extension: str,
     width: int = 0,
     height: int = 0,
@@ -380,7 +594,11 @@ def _capture_output_path(
         shot_id=shot_id,
         take_id=take_id,
     )
-    capture_root = _capture_root(capture_directory)
+    capture_root = resolve_project_take_directory(
+        video_timeline.get("project", {}),
+        shot_id,
+        create=True,
+    )
     full_output_folder, filename, counter, _subfolder, _ = folder_paths.get_save_image_path(
         resolved_prefix,
         str(capture_root),
@@ -389,17 +607,6 @@ def _capture_output_path(
     )
     suffix = extension if str(extension).startswith(".") else f".{extension}"
     return Path(full_output_folder) / f"{filename}_{counter:05}_{suffix}"
-
-
-def _capture_root(capture_directory: str) -> Path:
-    text = _safe_string(capture_directory)
-    if not text:
-        return Path(folder_paths.get_output_directory()).resolve()
-    path = Path(text).expanduser()
-    if not path.is_absolute():
-        raise TakeRegistrationError("TAKE_CAPTURE_DIRECTORY_NOT_ABSOLUTE: Take Directory must be an absolute path.")
-    path.mkdir(parents=True, exist_ok=True)
-    return path.resolve()
 
 
 def _preview_saved_result(path: Path) -> ui.SavedResult | None:
@@ -448,6 +655,10 @@ def _debug_info(
     sidecar_path: str | None,
     saved_result: ui.SavedResult | None,
 ) -> dict[str, Any]:
+    timeline = result.get("timeline") if isinstance(result.get("timeline"), dict) else {}
+    project = timeline.get("project") if isinstance(timeline.get("project"), dict) else {}
+    privacy_mode = bool(_raw_dict(project.get("privacy")).get("mode"))
+    storage_summary = resolved_project_storage_summary(project) if project else {}
     return {
         "type": "DEBUG_INFO",
         "ok": True,
@@ -458,11 +669,13 @@ def _debug_info(
             "take_id": result.get("take_id"),
             "accepted": bool(result.get("accepted")),
             "media_type": media_payload.get("type") or ASSET_TYPE_VIDEO,
-            "filename": media_payload.get("filename"),
-            "subfolder": media_payload.get("subfolder"),
-            "path": media_payload.get("path"),
+            "filename": "Generated video" if privacy_mode else media_payload.get("filename"),
+            "subfolder": None if privacy_mode else media_payload.get("subfolder"),
+            "path": "Private path" if privacy_mode else media_payload.get("path"),
             "storage_action": media_payload.get("storage_action"),
-            "sidecar_filename": Path(sidecar_path).name if sidecar_path else None,
+            "sidecar_filename": "Private sidecar" if privacy_mode and sidecar_path else (Path(sidecar_path).name if sidecar_path else None),
+            "project_id": storage_summary.get("project_id"),
+            "project_directory": "Private path" if privacy_mode else storage_summary.get("project_directory"),
         },
         "ui": (
             {

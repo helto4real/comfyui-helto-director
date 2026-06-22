@@ -111,7 +111,6 @@ def test_comfyui_style_loader_includes_timeline_take_capture_node():
         "frame_rate",
         "take_registration_json",
         "generated_asset_path",
-        "capture_directory",
         "shot_id_override",
         "filename_prefix",
         "accept",
@@ -144,6 +143,139 @@ def test_comfyui_style_loader_includes_timeline_sequence_assembler_node():
         "missing_take_policy",
         "bit_depth",
     ]
+
+
+def test_timeline_take_capture_skips_media_when_runtime_reports_no_generation(tmp_path):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    timeline_input = _timeline_with_shot()
+    timeline_input["project"]["storage"]["asset_root_directory"] = str(tmp_path / "takes")
+    runtime_debug = {
+        "type": "DEBUG_INFO",
+        "source": "LTX Runtime",
+        "summary": {
+            "generation_required": False,
+            "generation_status": "skipped",
+            "generation_skip_reason": "all_shots_ready",
+            "generation_mode": "Missing Only",
+        },
+        "generation_policy": {
+            "status": "skipped",
+            "skip_reason": "all_shots_ready",
+            "mode": "Missing Only",
+        },
+    }
+
+    assert node.check_lazy_status(timeline_input, runtime_debug=None, video=None, images=None) == ["runtime_debug"]
+    assert node.check_lazy_status(timeline_input, runtime_debug=runtime_debug, video=None, images=None) == []
+
+    output = node.execute(
+        timeline_input,
+        runtime_debug=runtime_debug,
+        video=FakeVideo(),
+        filename_prefix="should_not_write/%shot_id%/%take_id%",
+    )
+
+    timeline = output[0]
+    assert output[1] is None
+    assert output[2] == ""
+    assert output[3] == ""
+    assert output[4]["code"] == "TAKE_CAPTURE_SKIPPED_NO_GENERATION_REQUIRED"
+    assert output[4]["summary"]["storage_action"] == "skipped"
+    assert timeline["assets"] == []
+    assert timeline["sequence"]["shots"][0].get("takes", []) == []
+    assert not (tmp_path / "takes").exists()
+
+
+def test_timeline_take_capture_skips_non_ready_runtime_registration_without_writing(tmp_path):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    timeline_input = _timeline_with_shot()
+    timeline_input["project"]["storage"]["asset_root_directory"] = str(tmp_path / "takes")
+    runtime_debug = {
+        "type": "DEBUG_INFO",
+        "source": "LTX Runtime",
+        "summary": {
+            "take_registration_ready": False,
+            "take_registration_shot_ids": ["shot_001", "shot_002"],
+            "generation_status": "targeted",
+            "generation_mode": "Force Full Timeline",
+        },
+        "take_registration": {
+            "type": "TAKE_REGISTRATION_ENVELOPE",
+            "shot_id": None,
+            "shot_ids": ["shot_001", "shot_002"],
+            "registration_ready": False,
+            "capture_blockers": ["TAKE_CAPTURE_MULTIPLE_SHOTS"],
+            "asset": {"type": ASSET_TYPE_VIDEO},
+            "take": {"take_id": "take_multi"},
+        },
+    }
+
+    assert node.check_lazy_status(timeline_input, runtime_debug=runtime_debug, video=None, images=None) == []
+
+    output = node.execute(
+        timeline_input,
+        runtime_debug=runtime_debug,
+        video=FakeVideo(),
+        filename_prefix="should_not_write/%shot_id%/%take_id%",
+    )
+
+    timeline = output[0]
+    assert output[1] is None
+    assert output[2] == ""
+    assert output[3] == ""
+    assert output[4]["code"] == "TAKE_CAPTURE_SKIPPED_REGISTRATION_NOT_READY"
+    assert output[4]["summary"]["capture_blockers"] == ["TAKE_CAPTURE_MULTIPLE_SHOTS"]
+    assert output[4]["summary"]["shot_ids"] == ["shot_001", "shot_002"]
+    assert output[4]["summary"]["storage_action"] == "skipped"
+    assert timeline["assets"] == []
+    assert timeline["sequence"]["shots"][0].get("takes", []) == []
+    assert not (tmp_path / "takes").exists()
+
+
+def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_registration_is_not_ready(tmp_path):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    timeline_input = _timeline_with_shot()
+    timeline_input["project"]["storage"]["asset_root_directory"] = str(tmp_path / "takes")
+    runtime_debug = {
+        "type": "DEBUG_INFO",
+        "source": "WAN Runtime",
+        "summary": {"take_registration_ready": False},
+        "take_registration": {
+            "type": "TAKE_REGISTRATION_ENVELOPE",
+            "shot_id": None,
+            "registration_ready": False,
+            "capture_blockers": ["TAKE_CAPTURE_NO_SHOT_ID"],
+            "asset": {"type": ASSET_TYPE_VIDEO},
+            "take": {"take_id": "take_manual"},
+        },
+    }
+
+    assert node.check_lazy_status(
+        timeline_input,
+        runtime_debug=runtime_debug,
+        shot_id_override="shot_001",
+        video=None,
+        images=None,
+    ) == ["video", "images"]
+
+    output = node.execute(
+        timeline_input,
+        runtime_debug=runtime_debug,
+        shot_id_override="shot_001",
+        video=FakeVideo(),
+        filename_prefix="manual/%shot_id%/%take_id%",
+    )
+
+    timeline = output[0]
+    saved_path = Path(timeline["assets"][0]["path"])
+    assert output[2] == "asset_generated_001"
+    assert output[3] == "take_001"
+    assert saved_path.is_file()
+    assert saved_path.with_suffix(".helto_take.json").is_file()
+    assert timeline["sequence"]["shots"][0]["takes"][0]["take_id"] == "take_001"
 
 
 def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
@@ -179,16 +311,19 @@ def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
     assert output[4] is debug
 
 
-def test_timeline_take_capture_node_copies_asset_path_to_capture_directory_and_writes_sidecar(tmp_path):
+def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_writes_sidecar(tmp_path):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     media_path = tmp_path / "source" / "generated.mov"
     media_path.parent.mkdir()
     media_path.write_bytes(b"source video")
-    capture_directory = tmp_path / "takes"
+    timeline_input = _timeline_with_shot()
+    capture_root = tmp_path / "takes"
+    timeline_input["project"]["storage"]["asset_root_directory"] = str(capture_root)
+    project_directory = capture_root / timeline_input["project"]["storage"]["project_directory_name"]
 
     output = node.execute(
-        _timeline_with_shot(),
+        timeline_input,
         take_registration_json=json.dumps(
             {
                 "type": "TAKE_REGISTRATION_ENVELOPE",
@@ -205,7 +340,6 @@ def test_timeline_take_capture_node_copies_asset_path_to_capture_directory_and_w
             }
         ),
         generated_asset_path=str(media_path),
-        capture_directory=str(capture_directory),
         filename_prefix="copied/%shot_id%/%take_id%",
         accept=True,
     )
@@ -217,7 +351,7 @@ def test_timeline_take_capture_node_copies_asset_path_to_capture_directory_and_w
     assert output[4]["code"] == "TAKE_CAPTURE_REGISTERED"
     saved_path = Path(timeline["assets"][0]["path"])
     assert media_path.read_bytes() == b"source video"
-    assert saved_path.parent == capture_directory / "copied" / "shot_001"
+    assert saved_path.parent == project_directory / "takes" / "shot_001" / "copied" / "shot_001"
     assert saved_path.name.startswith("take_capture_path_")
     assert saved_path.suffix == ".mov"
     assert saved_path.read_bytes() == b"source video"
@@ -260,8 +394,10 @@ def test_timeline_take_capture_node_saves_video_and_registers_sidecar(tmp_path, 
 
     timeline = output[0]
     saved_path = Path(timeline["assets"][0]["path"])
+    project_directory = tmp_path / "helto_director_projects" / timeline["project"]["storage"]["project_directory_name"]
     assert output[1] is video
     assert saved_path.is_file()
+    assert saved_path.parent == project_directory / "takes" / "shot_001" / "helto_test" / "shot_001"
     assert saved_path.name.startswith("take_capture_video_")
     assert saved_path.with_suffix(".helto_take.json").is_file()
     assert output[4]["summary"]["sidecar_filename"] == saved_path.with_suffix(".helto_take.json").name
@@ -270,17 +406,20 @@ def test_timeline_take_capture_node_saves_video_and_registers_sidecar(tmp_path, 
     assert validate_video_timeline(timeline)["is_valid"] is True
 
 
-def test_timeline_take_capture_node_saves_video_to_absolute_capture_directory(tmp_path, monkeypatch):
+def test_timeline_take_capture_node_saves_video_to_absolute_project_root(tmp_path, monkeypatch):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     node_module = sys.modules[node.__module__]
     comfy_output = tmp_path / "comfy_output"
-    capture_directory = tmp_path / "external_takes"
+    capture_root = tmp_path / "external_takes"
+    timeline_input = _timeline_with_shot()
+    timeline_input["project"]["storage"]["asset_root_directory"] = str(capture_root)
+    project_directory = capture_root / timeline_input["project"]["storage"]["project_directory_name"]
     monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(comfy_output))
     video = FakeVideo()
 
     output = node.execute(
-        _timeline_with_shot(),
+        timeline_input,
         take_registration_json=json.dumps(
             {
                 "type": "TAKE_REGISTRATION_ENVELOPE",
@@ -295,13 +434,12 @@ def test_timeline_take_capture_node_saves_video_to_absolute_capture_directory(tm
             }
         ),
         video=video,
-        capture_directory=str(capture_directory),
         filename_prefix="nested/%shot_id%/%take_id%",
     )
 
     timeline = output[0]
     saved_path = Path(timeline["assets"][0]["path"])
-    assert saved_path.parent == capture_directory / "nested" / "shot_001"
+    assert saved_path.parent == project_directory / "takes" / "shot_001" / "nested" / "shot_001"
     assert saved_path.name.startswith("take_capture_external_")
     assert saved_path.suffix == ".mp4"
     assert saved_path.is_file()
@@ -311,14 +449,16 @@ def test_timeline_take_capture_node_saves_video_to_absolute_capture_directory(tm
     assert output.ui is None
 
 
-def test_timeline_take_capture_node_rejects_relative_capture_directory(tmp_path):
+def test_timeline_take_capture_node_rejects_relative_project_asset_root(tmp_path):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    timeline_input = _timeline_with_shot()
+    timeline_input["project"]["storage"]["asset_root_directory"] = "relative/takes"
     video = FakeVideo()
 
-    with pytest.raises(Exception, match="TAKE_CAPTURE_DIRECTORY_NOT_ABSOLUTE"):
+    with pytest.raises(Exception, match="PROJECT_STORAGE_ROOT_NOT_ABSOLUTE"):
         node.execute(
-            _timeline_with_shot(),
+            timeline_input,
             take_registration_json=json.dumps(
                 {
                     "type": "TAKE_REGISTRATION_ENVELOPE",
@@ -327,7 +467,6 @@ def test_timeline_take_capture_node_rejects_relative_capture_directory(tmp_path)
                 }
             ),
             video=video,
-            capture_directory="relative/takes",
         )
 
 
