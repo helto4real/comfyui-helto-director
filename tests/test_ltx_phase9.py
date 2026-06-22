@@ -21,6 +21,7 @@ from shared.contracts.video_timeline import (
     ASSET_TYPE_AUDIO,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    MODEL_LORA_TARGET_MAIN,
     QUALITY_PRESET_QUICK_DRAFT,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
@@ -37,7 +38,7 @@ from shared.ltx.runtime import runtime as ltx_runtime
 from shared.lora import config as lora_config_module
 from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
-from shared.timeline import create_default_video_timeline
+from shared.timeline import create_default_video_timeline, create_resolved_lora_snapshot, validate_video_timeline
 
 
 def _registered_node(node_id):
@@ -184,6 +185,21 @@ def _runtime_args(plan, **overrides):
     }
     args.update(overrides)
     return args
+
+
+def _lora_stack(name: str, strength_model: float = 0.8, strength_clip: float = 0.8) -> dict:
+    return {
+        "version": 1,
+        "loras": [
+            {
+                "enabled": True,
+                "name": name,
+                "strength_model": strength_model,
+                "strength_clip": strength_clip,
+            }
+        ],
+        "ui": {"show_strengths": "single", "match": ""},
+    }
 
 
 def _text_plan(duration=1.0, prompt="wide shot"):
@@ -689,7 +705,7 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
     assert any("No audio_vae connected" in entry for entry in runtime_debug["diagnostics"])
 
 
-def test_ltx_runtime_applies_one_timeline_lora_config(monkeypatch):
+def test_ltx_runtime_applies_resolved_main_lora_stack(monkeypatch):
     calls = []
 
     def fake_apply_lora_config(*, model, clip, lora_config):
@@ -699,20 +715,22 @@ def test_ltx_runtime_applies_one_timeline_lora_config(monkeypatch):
     monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["style.safetensors"])
     monkeypatch.setattr(ltx_runtime, "apply_lora_config", fake_apply_lora_config)
     plan = _text_plan()
-    plan["project"]["model_loras"]["lora_config_hi"] = {
-        "version": 1,
-        "loras": [{"enabled": True, "name": "style.safetensors", "strength_model": 0.8, "strength_clip": 0.8}],
-        "ui": {"show_strengths": "single", "match": ""},
+    resolved_stack = _lora_stack("style.safetensors")
+    plan["model_specific"]["ltx"]["lora_resolution"]["single_generation_loras"] = {
+        MODEL_LORA_TARGET_MAIN: resolved_stack,
     }
 
     *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
 
-    assert calls == [plan["project"]["model_loras"]["lora_config_hi"]]
-    assert runtime_debug["loras"] == [{"name": "style.safetensors", "strength_model": 0.8, "strength_clip": 0.8}]
+    assert calls == [resolved_stack]
+    assert runtime_debug["loras"]["source_scope"] == "single_generation_loras"
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applies_to"] == ["model", "clip"]
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"][0]["name"] == "style.safetensors"
+    assert runtime_debug["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_MAIN][0]["name"] == "style.safetensors"
     assert runtime_debug["summary"]["lora_count"] == 1
 
 
-def test_ltx_runtime_errors_when_both_timeline_lora_configs_are_populated(monkeypatch):
+def test_ltx_runtime_ignores_legacy_timeline_lora_fields(monkeypatch):
     monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["hi.safetensors", "low.safetensors"])
     monkeypatch.setattr(ltx_runtime, "apply_lora_config", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not apply")))
     plan = _text_plan()
@@ -727,8 +745,65 @@ def test_ltx_runtime_errors_when_both_timeline_lora_configs_are_populated(monkey
         "ui": {"show_strengths": "single", "match": ""},
     }
 
-    with pytest.raises(ValueError, match="Connect either lora_config_hi or lora_config_low"):
-        build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert runtime_debug["summary"]["lora_count"] == 0
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["resolved_count"] == 0
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"] == []
+
+
+def test_ltx_runtime_missing_lora_resolution_fields_are_noop(monkeypatch):
+    monkeypatch.setattr(ltx_runtime, "apply_lora_config", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not apply")))
+    plan = _text_plan()
+    plan["model_specific"]["ltx"].pop("lora_resolution", None)
+
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert runtime_debug["loras"]["source_scope"] == "missing_lora_resolution"
+    assert runtime_debug["summary"]["lora_count"] == 0
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["resolved_count"] == 0
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied_count"] == 0
+
+
+def test_take_resolved_lora_snapshot_helper_builds_valid_snapshot():
+    snapshot = create_resolved_lora_snapshot(
+        model_family="LTX",
+        model_version="2.3",
+        targets={MODEL_LORA_TARGET_MAIN: _lora_stack("style.safetensors")},
+        source_scope="single_generation_loras",
+    )
+    timeline = create_default_video_timeline()
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "wide shot",
+        }
+    )
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_001"],
+            "takes": [
+                {
+                    "take_id": "take_001",
+                    "model_family": "LTX",
+                    "model_version": "2.3",
+                    "resolved_loras": snapshot,
+                }
+            ],
+        }
+    ]
+
+    validation = validate_video_timeline(timeline)
+
+    assert snapshot["targets"][MODEL_LORA_TARGET_MAIN][0]["name"] == "style.safetensors"
+    assert snapshot["source_scope"] == "single_generation_loras"
+    assert validation["errors"] == []
 
 
 def test_planner_validation_errors_fail_clearly():

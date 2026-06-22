@@ -5,6 +5,11 @@ from typing import Any
 
 import torch
 
+from ...contracts.video_timeline import (
+    MODEL_LORA_MODEL_WAN_2_2,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
+)
 from ..config import WAN_MODEL_FAMILY, WAN_MODEL_VERSION
 from ..planner import WAN_PLAN_TYPE
 from ..bernini import BERNINI_MODEL_MODE
@@ -23,7 +28,11 @@ from .fmlf import build_fmlf_advanced_i2v_payload
 from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
 from .visual import apply_comfy_core_visual_keyframes
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
-from ...lora import apply_lora_config_model_only, normalize_lora_config
+from ...lora import apply_lora_config_model_only
+from ...timeline.planner_context import (
+    create_resolved_lora_snapshot,
+    resolve_runtime_lora_targets,
+)
 
 
 def build_wan_runtime_outputs(
@@ -74,10 +83,14 @@ def build_wan_runtime_outputs(
     validation_entries = [_runtime_entry(entry) for entry in backend_entries]
     validation_entries.extend(_visual_validation_entries(visual, resolved_backend))
     diagnostics: list[str] = []
-    applied_loras: dict[str, list[dict[str, Any]]] = {
-        "lora_config_hi": [],
-        "lora_config_low": [],
-    }
+    runtime_loras, lora_diagnostics = _resolve_wan_loras(plan)
+    diagnostics.extend(lora_diagnostics)
+    lora_report = _build_wan_lora_report(
+        runtime_loras,
+        applied_by_target={},
+        high_noise_model=high_noise_model,
+        low_noise_model=low_noise_model,
+    )
     media_decisions: list[dict[str, Any]] = []
     prompt_debug: dict[str, Any] = {"status": "not_built", "patched": False}
     model_patch_status: dict[str, Any] = {
@@ -125,7 +138,7 @@ def build_wan_runtime_outputs(
             model_patch_status=model_patch_status,
             status_events=status_reporter.snapshot(),
         )
-        runtime_debug["loras"] = applied_loras
+        _attach_wan_lora_debug(runtime_debug, lora_report)
         if complete_status:
             status_reporter.done("WAN Runtime: ready")
             runtime_debug["status_events"] = status_reporter.snapshot()
@@ -149,12 +162,12 @@ def build_wan_runtime_outputs(
 
     runtime_high_model = high_noise_model
     runtime_low_model = low_noise_model
-    runtime_high_model, runtime_low_model, applied_loras, lora_diagnostics = _apply_wan_timeline_loras(
-        plan,
+    runtime_high_model, runtime_low_model, lora_report, lora_apply_diagnostics = _apply_wan_timeline_loras(
+        runtime_loras,
         high_noise_model=runtime_high_model,
         low_noise_model=runtime_low_model,
     )
-    diagnostics.extend(lora_diagnostics)
+    diagnostics.extend(lora_apply_diagnostics)
     status_reporter.report("timeline.prompt", "WAN Runtime: building prompt relay")
     prompt_debug, positive, runtime_high_model, runtime_low_model = _build_prompt_payload_and_patch_models(
         clip,
@@ -281,7 +294,7 @@ def build_wan_runtime_outputs(
         status_events=status_reporter.snapshot(),
         fmlf_debug=fmlf_debug,
     )
-    runtime_debug["loras"] = applied_loras
+    _attach_wan_lora_debug(runtime_debug, lora_report)
     if complete_status:
         status_reporter.done("WAN Runtime: ready")
         runtime_debug["status_events"] = status_reporter.snapshot()
@@ -643,41 +656,127 @@ def _resolve_negative_conditioning(negative, positive):
     return negative if negative is not None else zero_out_conditioning(positive)
 
 
+def _resolve_wan_loras(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    lora_resolution = plan.get("model_specific", {}).get("wan", {}).get("lora_resolution")
+    resolved = resolve_runtime_lora_targets(
+        lora_resolution,
+        target_keys=[MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE],
+    )
+    return resolved, list(resolved.get("warnings") or [])
+
+
 def _apply_wan_timeline_loras(
-    plan: dict[str, Any],
+    runtime_loras: dict[str, Any],
     *,
     high_noise_model=None,
     low_noise_model=None,
-) -> tuple[Any, Any, dict[str, list[dict[str, Any]]], list[str]]:
-    model_loras = plan.get("project", {}).get("model_loras", {})
-    if not isinstance(model_loras, dict):
-        model_loras = {}
-    hi_config = normalize_lora_config(model_loras.get("lora_config_hi"))
-    low_config = normalize_lora_config(model_loras.get("lora_config_low"))
-    applied = {
-        "lora_config_hi": [],
-        "lora_config_low": [],
+) -> tuple[Any, Any, dict[str, Any], list[str]]:
+    targets = runtime_loras.get("targets") if isinstance(runtime_loras.get("targets"), dict) else {}
+    high_config = targets.get(MODEL_LORA_TARGET_HIGH_NOISE, {"version": 1, "loras": [], "ui": {}})
+    low_config = targets.get(MODEL_LORA_TARGET_LOW_NOISE, {"version": 1, "loras": [], "ui": {}})
+    applied_by_target = {
+        MODEL_LORA_TARGET_HIGH_NOISE: [],
+        MODEL_LORA_TARGET_LOW_NOISE: [],
     }
     diagnostics: list[str] = []
-    if hi_config["loras"]:
+    if high_config.get("loras"):
         if high_noise_model is None:
-            diagnostics.append("Timeline lora_config_hi is configured, but high_noise_model is not connected.")
+            diagnostics.append("Resolved WAN high_noise LoRA stack is configured, but high_noise_model is not connected.")
         else:
-            high_noise_model, applied["lora_config_hi"] = apply_lora_config_model_only(
+            high_noise_model, applied_by_target[MODEL_LORA_TARGET_HIGH_NOISE] = apply_lora_config_model_only(
                 model=high_noise_model,
-                lora_config=hi_config,
+                lora_config=high_config,
             )
-            diagnostics.append("WAN runtime applied timeline LoRAs from lora_config_hi to high_noise_model.")
-    if low_config["loras"]:
+            diagnostics.append("WAN runtime applied resolved high_noise LoRAs to high_noise_model.")
+    if low_config.get("loras"):
         if low_noise_model is None:
-            diagnostics.append("Timeline lora_config_low is configured, but low_noise_model is not connected.")
+            diagnostics.append("Resolved WAN low_noise LoRA stack is configured, but low_noise_model is not connected.")
         else:
-            low_noise_model, applied["lora_config_low"] = apply_lora_config_model_only(
+            low_noise_model, applied_by_target[MODEL_LORA_TARGET_LOW_NOISE] = apply_lora_config_model_only(
                 model=low_noise_model,
                 lora_config=low_config,
             )
-            diagnostics.append("WAN runtime applied timeline LoRAs from lora_config_low to low_noise_model.")
-    return high_noise_model, low_noise_model, applied, diagnostics
+            diagnostics.append("WAN runtime applied resolved low_noise LoRAs to low_noise_model.")
+    return (
+        high_noise_model,
+        low_noise_model,
+        _build_wan_lora_report(
+            runtime_loras,
+            applied_by_target=applied_by_target,
+            high_noise_model=high_noise_model,
+            low_noise_model=low_noise_model,
+        ),
+        diagnostics,
+    )
+
+
+def _build_wan_lora_report(
+    runtime_loras: dict[str, Any],
+    *,
+    applied_by_target: dict[str, list[dict[str, Any]]],
+    high_noise_model=None,
+    low_noise_model=None,
+) -> dict[str, Any]:
+    targets = runtime_loras.get("targets") if isinstance(runtime_loras.get("targets"), dict) else {}
+    target_inputs = {
+        MODEL_LORA_TARGET_HIGH_NOISE: ("high_noise_model", high_noise_model is not None),
+        MODEL_LORA_TARGET_LOW_NOISE: ("low_noise_model", low_noise_model is not None),
+    }
+    target_reports = {}
+    warnings = list(runtime_loras.get("warnings") or [])
+    for target_key in (MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE):
+        stack = deepcopy(targets.get(target_key, {"version": 1, "loras": [], "ui": {}}))
+        applied = [dict(row) for row in applied_by_target.get(target_key, [])]
+        input_name, is_connected = target_inputs[target_key]
+        target_warnings = []
+        if stack.get("loras") and not is_connected:
+            target_warnings.append(f"{input_name} is not connected; resolved {target_key} LoRAs were not applied.")
+        warnings.extend(target_warnings)
+        target_reports[target_key] = {
+            "applies_to": [input_name],
+            "model_input": input_name,
+            "model_connected": is_connected,
+            "resolved": stack,
+            "resolved_count": len(stack.get("loras") or []),
+            "applied": applied,
+            "applied_count": len(applied),
+            "applied_names": [row.get("name") for row in applied],
+            "warnings": target_warnings,
+        }
+    return {
+        "model": runtime_loras.get("model") or MODEL_LORA_MODEL_WAN_2_2,
+        "source_scope": runtime_loras.get("source_scope"),
+        "resolved_targets": [MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE],
+        "requires_per_shot_execution": bool(runtime_loras.get("requires_per_shot_execution")),
+        "warnings": warnings,
+        "targets": target_reports,
+        "take_snapshot": create_resolved_lora_snapshot(
+            model_family=WAN_MODEL_FAMILY,
+            model_version=WAN_MODEL_VERSION,
+            targets={
+                MODEL_LORA_TARGET_HIGH_NOISE: target_reports[MODEL_LORA_TARGET_HIGH_NOISE]["resolved"],
+                MODEL_LORA_TARGET_LOW_NOISE: target_reports[MODEL_LORA_TARGET_LOW_NOISE]["resolved"],
+            },
+            source_scope=str(runtime_loras.get("source_scope") or ""),
+        ),
+    }
+
+
+def _attach_wan_lora_debug(runtime_debug: dict[str, Any], lora_report: dict[str, Any]) -> None:
+    runtime_debug["loras"] = lora_report
+    targets = lora_report.get("targets") if isinstance(lora_report.get("targets"), dict) else {}
+    runtime_debug.setdefault("summary", {})
+    runtime_debug["summary"]["lora_target_count"] = len(targets)
+    runtime_debug["summary"]["lora_resolved_count"] = sum(
+        int(target.get("resolved_count") or 0)
+        for target in targets.values()
+        if isinstance(target, dict)
+    )
+    runtime_debug["summary"]["lora_applied_count"] = sum(
+        int(target.get("applied_count") or 0)
+        for target in targets.values()
+        if isinstance(target, dict)
+    )
 
 
 def _call_or_value(obj, name: str, fallback):

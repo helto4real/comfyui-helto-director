@@ -11,7 +11,14 @@ import pytest
 import torch
 from PIL import Image
 
-from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_IMAGE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
+from shared.contracts.video_timeline import (
+    ASSET_SOURCE_FILE_PATH,
+    ASSET_TYPE_IMAGE,
+    MODEL_LORA_TARGET_HIGH_NOISE,
+    MODEL_LORA_TARGET_LOW_NOISE,
+    SECTION_TYPE_IMAGE,
+    SECTION_TYPE_TEXT,
+)
 from shared.timeline import create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.runtime import runtime as wan_runtime
@@ -118,7 +125,7 @@ def test_comfyui_core_patches_both_models_when_connected(tmp_path):
     }
 
 
-def test_wan_runtime_applies_hi_low_loras_to_models_and_not_clip(tmp_path, monkeypatch):
+def test_wan_runtime_applies_resolved_high_low_loras_to_models_and_not_clip(tmp_path, monkeypatch):
     calls = []
 
     def fake_apply_model_lora(*, model, lora_config):
@@ -131,15 +138,9 @@ def test_wan_runtime_applies_hi_low_loras_to_models_and_not_clip(tmp_path, monke
         _image_timeline(tmp_path, count=2),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
     )
-    plan["project"]["model_loras"]["lora_config_hi"] = {
-        "version": 1,
-        "loras": [{"enabled": True, "name": "hi.safetensors", "strength_model": 0.9, "strength_clip": 0.2}],
-        "ui": {"show_strengths": "separate", "match": ""},
-    }
-    plan["project"]["model_loras"]["lora_config_low"] = {
-        "version": 1,
-        "loras": [{"enabled": True, "name": "low.safetensors", "strength_model": 0.4, "strength_clip": 0.1}],
-        "ui": {"show_strengths": "separate", "match": ""},
+    plan["model_specific"]["wan"]["lora_resolution"]["single_generation_loras"] = {
+        MODEL_LORA_TARGET_HIGH_NOISE: _lora_stack("hi.safetensors", 0.9, 0.2),
+        MODEL_LORA_TARGET_LOW_NOISE: _lora_stack("low.safetensors", 0.4, 0.1),
     }
     clip = FakeClip()
 
@@ -155,8 +156,43 @@ def test_wan_runtime_applies_hi_low_loras_to_models_and_not_clip(tmp_path, monke
     assert high_model.label == "high+hi.safetensors"
     assert low_model.label == "low+low.safetensors"
     assert not hasattr(clip, "lora_applied")
-    assert runtime_debug["loras"]["lora_config_hi"][0]["name"] == "hi.safetensors"
-    assert runtime_debug["loras"]["lora_config_low"][0]["name"] == "low.safetensors"
+    assert runtime_debug["loras"]["source_scope"] == "single_generation_loras"
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE]["applied"][0]["name"] == "hi.safetensors"
+    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE]["applied"][0]["name"] == "low.safetensors"
+    assert runtime_debug["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE][0]["name"] == "hi.safetensors"
+    assert runtime_debug["summary"]["lora_applied_count"] == 2
+
+
+def test_wan_runtime_reports_missing_model_for_resolved_lora_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["low.safetensors"])
+    monkeypatch.setattr(
+        wan_runtime,
+        "apply_lora_config_model_only",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("low model is missing")),
+    )
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _image_timeline(tmp_path, count=1),
+        create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
+    )
+    plan["model_specific"]["wan"]["lora_resolution"]["single_generation_loras"] = {
+        MODEL_LORA_TARGET_HIGH_NOISE: {"version": 1, "loras": [], "ui": {"show_strengths": "single", "match": ""}},
+        MODEL_LORA_TARGET_LOW_NOISE: _lora_stack("low.safetensors"),
+    }
+
+    _high, low_model, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel("high"),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert low_model is None
+    low_report = runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE]
+    assert low_report["resolved_count"] == 1
+    assert low_report["applied_count"] == 0
+    assert low_report["model_connected"] is False
+    assert any("low_noise_model is not connected" in entry for entry in runtime_debug["diagnostics"])
+    assert any("low_noise_model is not connected" in entry for entry in low_report["warnings"])
 
 
 def test_comfyui_core_patches_one_model_and_warns_when_other_missing(tmp_path):
@@ -305,6 +341,21 @@ def _load_nodepack():
 
 def _item_names(items):
     return [getattr(item, "name", getattr(item, "id", None)) for item in items]
+
+
+def _lora_stack(name: str, strength_model: float = 0.8, strength_clip: float = 0.8) -> dict:
+    return {
+        "version": 1,
+        "loras": [
+            {
+                "enabled": True,
+                "name": name,
+                "strength_model": strength_model,
+                "strength_clip": strength_clip,
+            }
+        ],
+        "ui": {"show_strengths": "single", "match": ""},
+    }
 
 
 def _validation_codes(runtime_debug: dict, bucket: str) -> list[str]:

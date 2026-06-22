@@ -194,6 +194,75 @@ def lora_targets_signature(targets: dict[str, Any]) -> str:
     return json.dumps(targets, sort_keys=True, separators=(",", ":"))
 
 
+def resolve_runtime_lora_targets(
+    lora_resolution: Any,
+    *,
+    target_keys: list[str],
+) -> dict[str, Any]:
+    empty_targets = {
+        target_key: create_default_lora_stack()
+        for target_key in target_keys
+    }
+    if not isinstance(lora_resolution, dict):
+        return {
+            "model": None,
+            "targets": empty_targets,
+            "source_scope": "missing_lora_resolution",
+            "requires_per_shot_execution": False,
+            "warnings": [],
+        }
+    single_generation = lora_resolution.get("single_generation_loras")
+    if isinstance(single_generation, dict):
+        return {
+            "model": lora_resolution.get("model"),
+            "targets": {
+                target_key: _copy_lora_stack(single_generation.get(target_key))
+                for target_key in target_keys
+            },
+            "source_scope": "single_generation_loras",
+            "requires_per_shot_execution": False,
+            "warnings": [],
+        }
+    warnings = []
+    if lora_resolution.get("requires_per_shot_execution"):
+        warnings.append(
+            "Per-shot LoRA execution is deferred because this runtime generation does not switch LoRA stacks inside one generation."
+        )
+    return {
+        "model": lora_resolution.get("model"),
+        "targets": empty_targets,
+        "source_scope": str(lora_resolution.get("execution_strategy") or "unavailable_lora_resolution"),
+        "requires_per_shot_execution": bool(lora_resolution.get("requires_per_shot_execution")),
+        "warnings": warnings,
+    }
+
+
+def create_resolved_lora_snapshot(
+    *,
+    model_family: str,
+    model_version: str,
+    targets: dict[str, Any],
+    source_scope: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = {
+        "model_family": str(model_family or ""),
+        "model_version": str(model_version or ""),
+        "targets": {
+            str(target_key): [
+                deepcopy(row)
+                for row in _copy_lora_stack(stack).get("loras", [])
+            ]
+            for target_key, stack in (targets if isinstance(targets, dict) else {}).items()
+        },
+    }
+    if source_scope:
+        snapshot["source_scope"] = str(source_scope)
+    if isinstance(metadata, dict) and metadata:
+        snapshot["metadata"] = deepcopy(metadata)
+    return snapshot
+
+
 def _project_lora_stack(model_loras: dict[str, Any], model_key: str, target_key: str) -> dict[str, Any]:
     global_loras = _raw_dict(model_loras.get("global"))
     model_targets = _raw_dict(global_loras.get(model_key))
