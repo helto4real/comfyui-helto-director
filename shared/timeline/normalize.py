@@ -46,6 +46,7 @@ from .defaults import (
     create_default_video_timeline,
 )
 from .migration import migrate_video_timeline
+from .project_storage import normalize_project_identity_and_storage
 from .references import normalize_character_references
 from ..lora.config import normalize_lora_config
 
@@ -66,6 +67,7 @@ def normalize_video_timeline(timeline: Any) -> dict:
         normalized.get("sequence"),
         normalized["director_track"]["sections"],
     )
+    _normalize_project_identity_storage(normalized)
     _normalize_project_metadata(normalized)
     _normalize_project_model_loras(normalized)
     _normalize_privacy(normalized)
@@ -108,6 +110,11 @@ def _normalize_project_metadata(timeline: dict) -> None:
         metadata.get("character_references")
     )
     project["metadata"] = metadata
+
+
+def _normalize_project_identity_storage(timeline: dict) -> None:
+    project = timeline.setdefault("project", {})
+    normalize_project_identity_and_storage(project)
 
 
 def _normalize_project_model_loras(timeline: dict) -> None:

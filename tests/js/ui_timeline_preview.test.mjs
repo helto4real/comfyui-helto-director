@@ -39,6 +39,18 @@ function testClearTimelineButtonEnablementHelper() {
 
   assert.equal(isDefaultEmptyTimeline(timeline), true);
 
+  timeline.project.identity.project_id = "proj_other";
+  timeline.project.storage.project_directory_name = "untitled_project_proj_other";
+  assert.equal(isDefaultEmptyTimeline(timeline), true);
+
+  timeline.project.identity.name = "Real Project";
+  assert.equal(isDefaultEmptyTimeline(timeline), false);
+  timeline.project.identity.name = "Untitled Project";
+
+  timeline.project.storage.asset_root_directory = "/tmp/assets";
+  assert.equal(isDefaultEmptyTimeline(timeline), false);
+  timeline.project.storage.asset_root_directory = "";
+
   timeline.project.metadata.library_item_id = "timeline_123";
   assert.equal(isDefaultEmptyTimeline(timeline), false);
   delete timeline.project.metadata.library_item_id;
@@ -166,12 +178,25 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("aria-label"), true);
   assert.equal(rendererSource.includes("renderShotBoundaryContext(timeline, shot)"), true);
   assert.equal(rendererSource.includes("renderAssemblyReadiness(timeline, shot)"), true);
-  assert.equal(rendererSource.includes("renderRegisterTakeFromMetadata(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("renderAvailableCaptures(timeline, shot)"), true);
   assert.equal(rendererSource.includes("Copy Shot ID For Planner Input"), true);
-  assert.equal(rendererSource.includes("Attach Generated Video As Take"), true);
-  assert.equal(rendererSource.includes("Register Take From Metadata"), true);
+  assert.equal(rendererSource.includes("renderAdvancedTakeAttachment(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("Manual Take"), true);
+  assert.equal(rendererSource.includes("Choose generated asset"), true);
+  assert.equal(rendererSource.includes("Attach Existing Generated Asset As Candidate Take"), true);
+  assert.equal(rendererSource.includes("Pick Existing Generated Asset As Candidate Take"), true);
+  assert.equal(rendererSource.includes("Attach Generated Video As Take"), false);
+  assert.equal(rendererSource.includes("Available Captures"), true);
+  assert.equal(rendererSource.includes("Register Take From Metadata"), false);
   assert.equal(rendererSource.includes("attachPickedGeneratedVideoAsTake(timeline, options.shotId, item)"), true);
-  assert.equal(rendererSource.includes("addTakeMetadata(currentTimeline, liveShot.shot_id, nextTake)"), true);
+  assert.equal(rendererSource.includes("fetchProjectTakeCaptures(timeline, shot.shot_id"), true);
+  assert.equal(rendererSource.includes("Attach Project Capture As Take"), true);
+  assert.equal(rendererSource.includes("Attach And Accept Project Capture"), true);
+  assert.equal(rendererSource.includes("Project Name"), true);
+  assert.equal(rendererSource.includes("Project ID"), true);
+  assert.equal(rendererSource.includes("Asset Root Directory"), true);
+  assert.equal(rendererSource.includes("Project Folder"), true);
+  assert.equal(rendererSource.includes("projectFolderDisplay(timeline"), true);
   assert.equal(rendererSource.includes("entry.code === \"BOUNDARY_LORA_STACK_MISMATCH\""), true);
   assert.equal(rendererSource.includes("assetDisplayLabel(asset, privacyRevealed"), true);
   assert.equal(rendererSource.includes("assetSummaryLabel(asset, privacyRevealed)"), true);
@@ -306,8 +331,9 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selected.image, "Image")'), false);
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selected.video, "Video")'), false);
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selectedAudio.audio, "Audio")'), true);
-  assert.equal(rendererSource.includes("Attach Generated Video As Take"), true);
-  assert.equal(rendererSource.includes("Choose generated video"), true);
+  assert.equal(rendererSource.includes("Attach Existing Generated Asset As Candidate Take"), true);
+  assert.equal(rendererSource.includes("Choose generated asset"), true);
+  assert.equal(rendererSource.includes("Choose generated video"), false);
   assert.equal(rendererSource.includes("Clear Media"), false);
 
   const migrationSource = readFileSync(new URL("../../web/timeline/migration.js", import.meta.url), "utf8");

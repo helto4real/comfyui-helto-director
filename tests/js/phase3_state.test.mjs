@@ -174,6 +174,16 @@ function addSelectedTextSection(controller, prompt = "selected") {
   }, "add");
 }
 
+async function testDefaultTimelineProjectIdentityStorage() {
+  const timeline = createDefaultVideoTimeline();
+
+  assert.equal(timeline.project.identity.project_id.startsWith("proj_"), true);
+  assert.equal(timeline.project.identity.name, "Untitled Project");
+  assert.equal(timeline.project.storage.schema_version, 1);
+  assert.equal(timeline.project.storage.asset_root_directory, "");
+  assert.equal(timeline.project.storage.project_directory_name.includes(timeline.project.identity.project_id), true);
+}
+
 async function testCommitUpdatesHiddenWidgetAndMarksGraphDirty() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
@@ -751,6 +761,7 @@ async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
   }
 }
 
+await testDefaultTimelineProjectIdentityStorage();
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();
 await testLongMultilinePromptSurvivesCommit();
 await testUndoRedoUpdatesStateAndWidget();

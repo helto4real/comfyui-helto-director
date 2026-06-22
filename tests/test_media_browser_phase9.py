@@ -152,6 +152,62 @@ def test_video_browser_reads_generated_take_sidecar_and_privacy_redacts(tmp_path
     assert row["name"] == "lora_001"
 
 
+def test_project_take_capture_discovery_filters_by_shot_and_ignores_malformed_sidecars(tmp_path):
+    project = {
+        "identity": {"project_id": "proj_capturetest", "name": "Capture Test"},
+        "storage": {
+            "schema_version": 1,
+            "asset_root_directory": str(tmp_path),
+            "project_directory_name": "capture_test_proj_capturetest",
+        },
+    }
+    take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
+    take_dir.mkdir(parents=True)
+    matching = take_dir / "matching.mp4"
+    mismatched = take_dir / "mismatched.mp4"
+    malformed = take_dir / "malformed.mp4"
+    matching.write_bytes(b"video")
+    mismatched.write_bytes(b"video")
+    malformed.write_bytes(b"video")
+    matching.write_text("video", encoding="utf-8")
+    mismatched.write_text("video", encoding="utf-8")
+    malformed.write_text("video", encoding="utf-8")
+    matching.with_suffix(".helto_take.json").write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {
+                    "shot_id": "shot_001",
+                    "shot_ids": ["shot_001"],
+                    "take": {"take_id": "take_match"},
+                },
+                media={"type": ASSET_TYPE_VIDEO, "filename": matching.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+    mismatched.with_suffix(".helto_take.json").write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {
+                    "shot_id": "shot_002",
+                    "shot_ids": ["shot_002"],
+                    "take": {"take_id": "take_other"},
+                },
+                media={"type": ASSET_TYPE_VIDEO, "filename": mismatched.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+    malformed.with_suffix(".helto_take.json").write_text("{bad json", encoding="utf-8")
+
+    payload = media_browser.list_project_take_captures(project, "shot_001")
+
+    assert payload["shot_id"] == "shot_001"
+    assert payload["take_directory"] == str(take_dir)
+    assert [item["filename"] for item in payload["captures"]] == ["matching.mp4"]
+    assert payload["captures"][0]["take_capture"]["registration"]["take"]["take_id"] == "take_match"
+
+
 def test_media_browser_rejects_wrong_extension_and_traversal(tmp_path, monkeypatch):
     monkeypatch.setattr(media_browser, "CONFIG_DIR", tmp_path / "config")
     original_input = folder_paths.get_input_directory()

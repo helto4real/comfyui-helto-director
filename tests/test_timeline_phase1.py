@@ -227,6 +227,11 @@ def test_create_default_video_timeline_shape():
     assert timeline["project"]["audio"]["use_native_audio"] is False
     assert timeline["project"]["privacy"] == {"mode": False}
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
+    assert timeline["project"]["identity"]["project_id"].startswith("proj_")
+    assert timeline["project"]["identity"]["name"] == "Untitled Project"
+    assert timeline["project"]["storage"]["schema_version"] == 1
+    assert timeline["project"]["storage"]["asset_root_directory"] == ""
+    assert timeline["project"]["identity"]["project_id"] in timeline["project"]["storage"]["project_directory_name"]
     assert timeline["project"]["metadata"]["character_references_enabled"] is True
     assert timeline["project"]["metadata"]["character_references"] == []
     assert timeline["ui_state"]["view_start_seconds"] == 0
@@ -316,6 +321,52 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
     assert section["custom_note"] == "keep me"
     assert section["image"] is None
     assert section["guide_strength"] == 1.0
+    assert normalized["project"]["identity"]["project_id"].startswith("proj_")
+    assert normalized["project"]["identity"]["project_id"] in normalized["project"]["storage"]["project_directory_name"]
+
+
+def test_project_identity_storage_normalizes_and_preserves_stable_directory_name():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {
+            "identity": {"project_id": "proj_custom123", "name": "First Name"},
+            "storage": {
+                "schema_version": 1,
+                "asset_root_directory": "/tmp/timeline_assets",
+                "project_directory_name": "first_name_proj_custom123",
+            },
+        },
+    }
+
+    normalized = normalize_video_timeline(timeline)
+    assert normalized["project"]["identity"] == {
+        "project_id": "proj_custom123",
+        "name": "First Name",
+    }
+    assert normalized["project"]["storage"] == {
+        "schema_version": 1,
+        "asset_root_directory": "/tmp/timeline_assets",
+        "project_directory_name": "first_name_proj_custom123",
+    }
+
+    normalized["project"]["identity"]["name"] = "Renamed Project"
+    renamed = normalize_video_timeline(normalized)
+    assert renamed["project"]["identity"]["name"] == "Renamed Project"
+    assert renamed["project"]["storage"]["project_directory_name"] == "first_name_proj_custom123"
+
+
+def test_project_storage_directory_regenerates_when_missing_or_mismatched():
+    normalized = normalize_video_timeline(
+        {
+            "type": VIDEO_TIMELINE_TYPE,
+            "project": {
+                "identity": {"project_id": "proj_realid", "name": "My Scene"},
+                "storage": {"project_directory_name": "wrong_proj_other"},
+            },
+        }
+    )
+
+    assert normalized["project"]["storage"]["project_directory_name"] == "my_scene_proj_realid"
 
 
 def test_normalization_fills_sequence_shot_boundary_and_take_defaults():

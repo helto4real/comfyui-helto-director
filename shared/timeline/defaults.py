@@ -35,6 +35,10 @@ from ..contracts.video_timeline import (
     TIMELINE_DISPLAY_MODE_DEFAULT,
     VIDEO_TIMELINE_TYPE,
 )
+from .project_storage import (
+    create_default_project_identity,
+    create_default_project_storage,
+)
 
 
 def create_default_lora_stack() -> dict:
@@ -46,10 +50,12 @@ def create_default_lora_stack() -> dict:
 
 
 def create_default_video_timeline() -> dict:
+    project_identity = create_default_project_identity()
     timeline = {
         "schema_version": SCHEMA_VERSION,
         "type": VIDEO_TIMELINE_TYPE,
         "project": {
+            "identity": project_identity,
             "duration_seconds": DEFAULT_DURATION_SECONDS,
             "frame_rate": DEFAULT_FRAME_RATE,
             "aspect_ratio": DEFAULT_ASPECT_RATIO,
@@ -90,6 +96,10 @@ def create_default_video_timeline() -> dict:
                 "character_references_enabled": True,
                 "character_references": [],
             },
+            "storage": create_default_project_storage(
+                project_id=project_identity["project_id"],
+                name=project_identity["name"],
+            ),
             "model_loras": create_default_project_model_loras(),
         },
         "ui_state": {

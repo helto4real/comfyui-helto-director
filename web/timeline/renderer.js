@@ -30,6 +30,7 @@ import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, mediaViewUrl, thumbnailUrl } fr
 import {
   addPickedMediaItem,
   attachPickedGeneratedVideoAsTake,
+  fetchProjectTakeCaptures,
   replacePickedSectionMedia,
 } from "./media_actions.js";
 import {
@@ -71,7 +72,6 @@ import {
 } from "./geometry.js";
 import {
   acceptTake,
-  addTakeMetadata,
   attachVideoAssetAsTake,
   addSection,
   adjacentShotPairs,
@@ -209,6 +209,12 @@ export class TimelineRenderer {
     this.contentHeight = getTimelineWidgetHeight(controller.timeline);
     this.privacyRevealActive = false;
     this.privacyExternalModalOpen = false;
+    this.availableCaptures = {
+      key: "",
+      loading: false,
+      error: "",
+      items: [],
+    };
     this.onContextMenuPointerDown = (event) => this.handleContextMenuPointerDown(event);
     this.onContextMenuKeyDown = (event) => this.handleContextMenuKeyDown(event);
     this.onPrivacyPointerEnter = () => this.setPrivacyRevealActive(true);
@@ -710,6 +716,7 @@ export class TimelineRenderer {
   }
 
   renderShotInspector(timeline, shot, options = {}) {
+    this.requestAvailableCaptures(timeline, shot);
     const wrapper = el("div", `htd-shot-inspector${options.standalone ? " is-standalone" : ""}`);
     const title = inspectorTitle(options.standalone ? "Shot" : "Shot Details");
     const shotIdInput = el("input", "htd-field htd-shot-id");
@@ -742,8 +749,8 @@ export class TimelineRenderer {
       this.renderAssemblyReadiness(timeline, shot),
       this.renderShotBoundaryContext(timeline, shot),
       this.renderShotClipField(timeline, shot),
-      this.renderAttachTakeField(timeline, shot),
-      this.renderRegisterTakeFromMetadata(timeline, shot),
+      this.renderAdvancedTakeAttachment(timeline, shot),
+      this.renderAvailableCaptures(timeline, shot),
       this.renderShotTakes(timeline, shot),
       this.renderShotLoraTargets(timeline, shot),
     );
@@ -835,16 +842,26 @@ export class TimelineRenderer {
     return row;
   }
 
-  renderAttachTakeField(timeline, shot) {
+  renderAdvancedTakeAttachment(timeline, shot) {
+    const details = el("details", "htd-shot-advanced");
+    const summary = el("summary", "htd-shot-advanced-summary");
+    summary.textContent = "Advanced";
+    summary.title = "Advanced Shot Actions";
+    details.append(summary, this.renderManualTakeAttachmentField(timeline, shot));
+    return details;
+  }
+
+  renderManualTakeAttachmentField(timeline, shot) {
     const row = el("div", "htd-shot-row htd-shot-attach-take");
     const label = el("span", "htd-shot-row-label");
-    label.textContent = "Generated";
+    label.textContent = "Manual Take";
     const privacyRevealed = this.isPrivacyRevealed(timeline);
     const generatedVideos = (timeline.assets ?? []).filter((asset) => asset.type === ASSET_TYPE_VIDEO && asset.source_kind === "Generated");
     const select = el("select", "htd-select htd-generated-take-select");
     const none = el("option");
     none.value = "";
-    none.textContent = generatedVideos.length ? "Choose generated video" : "No generated videos";
+    none.textContent = generatedVideos.length ? "Choose generated asset" : "No generated assets";
+    select.title = "Existing Generated Asset";
     select.append(none);
     for (const asset of generatedVideos) {
       const option = el("option");
@@ -852,45 +869,109 @@ export class TimelineRenderer {
       option.textContent = assetDisplayLabel(asset, privacyRevealed, "Generated Video");
       select.append(option);
     }
-    const attach = button("Attach", "Attach Generated Video As Take", () => {
+    const attach = button("Attach", "Attach Existing Generated Asset As Candidate Take", () => {
       if (!select.value) return;
       this.commitMutation((currentTimeline) => attachVideoAssetAsTake(currentTimeline, shot.shot_id, select.value), "attach take");
     });
     attach.disabled = !generatedVideos.length;
-    const pick = button("Pick", "Pick Generated Video As Take", () => {
+    const pick = button("Pick", "Pick Existing Generated Asset As Candidate Take", () => {
       this.openMediaPicker(ASSET_TYPE_VIDEO, { mode: "attach-generated-take", shotId: shot.shot_id });
     });
     row.append(label, select, attach, pick);
     return row;
   }
 
-  renderRegisterTakeFromMetadata(timeline, shot) {
-    const row = el("div", "htd-shot-row htd-register-take");
-    const label = el("span", "htd-shot-row-label");
-    label.textContent = "Metadata";
-    const input = el("input", "htd-field htd-register-take-input");
-    input.placeholder = "Take metadata JSON";
-    input.title = "Register Take From Metadata";
-    input.setAttribute("aria-label", "Register Take From Metadata JSON");
-    const register = button("Register", "Register Take From Metadata", () => {
-      const payload = parseTakeRegistrationInput(input.value);
-      if (!payload) return;
-      this.commitMutation((currentTimeline) => {
-        const liveShot = findShot(currentTimeline, shot.shot_id);
-        const registration = payload.registration && typeof payload.registration === "object" ? payload.registration : payload;
-        const takeData = registration.take && typeof registration.take === "object" ? registration.take : registration;
-        const registrationAsset = registration.asset && typeof registration.asset === "object" ? registration.asset : null;
-        const assetId = registration.asset_id ?? takeData.asset_id ?? registrationAsset?.asset_id;
-        const nextTake = {
-          ...takeData,
-          asset_id: assetId == null ? takeData.asset_id : String(assetId),
+  requestAvailableCaptures(timeline, shot, options = {}) {
+    if (!shot?.shot_id) return;
+    const key = availableCapturesKey(timeline, shot, this.isPrivacyRevealed(timeline));
+    if (!options.force && this.availableCaptures.key === key) return;
+    this.availableCaptures = {
+      key,
+      loading: true,
+      error: "",
+      items: [],
+    };
+    if (options.rerender) this.render();
+    const privacyMode = Boolean(timeline?.project?.privacy?.mode && !this.isPrivacyRevealed(timeline));
+    fetchProjectTakeCaptures(timeline, shot.shot_id, privacyMode)
+      .then((payload) => {
+        if (this.availableCaptures.key !== key) return;
+        this.availableCaptures = {
+          key,
+          loading: false,
+          error: "",
+          items: Array.isArray(payload?.captures) ? payload.captures : [],
         };
-        if (liveShot) addTakeMetadata(currentTimeline, liveShot.shot_id, nextTake);
-      }, "register take metadata");
-      input.value = "";
-    });
-    row.append(label, input, register);
-    return row;
+        this.render();
+      })
+      .catch((error) => {
+        if (this.availableCaptures.key !== key) return;
+        this.availableCaptures = {
+          key,
+          loading: false,
+          error: error?.message || "Failed to load captures.",
+          items: [],
+        };
+        this.render();
+      });
+  }
+
+  renderAvailableCaptures(timeline, shot) {
+    const block = el("div", "htd-available-captures");
+    const header = el("div", "htd-shot-subheader");
+    const title = el("span");
+    title.textContent = "Available Captures";
+    header.append(title, button("Refresh", "Refresh Project Take Captures", () => {
+      this.requestAvailableCaptures(this.controller.timeline, shot, { force: true, rerender: true });
+    }));
+    block.append(header);
+    const key = availableCapturesKey(timeline, shot, this.isPrivacyRevealed(timeline));
+    const state = this.availableCaptures.key === key ? this.availableCaptures : { loading: true, error: "", items: [] };
+    if (state.loading) {
+      const loading = el("div", "htd-shot-empty");
+      loading.textContent = "Loading captures...";
+      block.append(loading);
+      return block;
+    }
+    if (state.error) {
+      const error = el("div", "htd-shot-empty htd-capture-error");
+      error.textContent = state.error;
+      block.append(error);
+      return block;
+    }
+    if (!state.items.length) {
+      const empty = el("div", "htd-shot-empty");
+      empty.textContent = "No captured takes found.";
+      block.append(empty);
+      return block;
+    }
+    const privacyRevealed = this.isPrivacyRevealed(timeline);
+    for (const item of state.items) {
+      const row = el("div", "htd-take-row htd-capture-row");
+      const label = el("span", "htd-take-label");
+      label.textContent = captureSummaryLabel(item, privacyRevealed);
+      label.title = privacyRevealed ? (item.path || item.filename || label.textContent) : "Captured video";
+      const takeId = captureTakeId(item);
+      const existing = takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) : null;
+      const attach = button(existing ? "Attached" : "Attach", "Attach Project Capture As Take", () => {
+        this.commitMutation((currentTimeline) => {
+          attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
+        }, "attach project capture");
+      });
+      attach.disabled = Boolean(existing);
+      const accept = button(existing?.status === "Accepted" ? "Accepted" : "Accept", "Attach And Accept Project Capture", () => {
+        this.commitMutation((currentTimeline) => {
+          const liveShot = findShot(currentTimeline, shot.shot_id);
+          const liveExisting = takeId ? liveShot?.takes?.find((take) => take.take_id === takeId) : null;
+          const result = liveExisting ? { take: liveExisting } : attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
+          if (result?.take) acceptTake(currentTimeline, shot.shot_id, result.take.take_id);
+        }, "accept project capture");
+      });
+      accept.disabled = existing?.status === "Accepted";
+      row.append(label, attach, accept);
+      block.append(row);
+    }
+    return block;
   }
 
   renderShotTakes(timeline, shot) {
@@ -1329,6 +1410,10 @@ export class TimelineRenderer {
 
     const body = el("div", "htd-settings-body");
     body.append(
+      this.renderProjectNameSetting(timeline),
+      this.renderSettingReadonly("Project ID", timeline.project.identity?.project_id ?? ""),
+      this.renderProjectAssetRootSetting(timeline),
+      this.renderSettingReadonly("Project Folder", projectFolderDisplay(timeline, this.isPrivacyRevealed(timeline))),
       this.renderSettingSelect("Default Crop Mode", ["project", "default_crop_mode"], CROP_MODES),
       this.renderSettingCheckbox("Show Resolved Model Output", ["project", "settings", "show_resolved_model_output"]),
       this.renderSettingCheckbox("Allow Gaps", ["project", "settings", "allow_gaps"]),
@@ -1665,6 +1750,30 @@ export class TimelineRenderer {
     row.append(selectControl(title, getPath(this.controller.timeline, path), options, (value) => {
       this.commitMutation((timeline) => setPath(timeline, path, value), "settings change");
     }));
+    return row;
+  }
+
+  renderProjectNameSetting(timeline) {
+    if (timeline.project?.privacy?.mode && !this.isPrivacyRevealed(timeline)) {
+      return this.renderSettingReadonly("Project Name", "Private project");
+    }
+    return this.renderSettingText("Project Name", ["project", "identity", "name"]);
+  }
+
+  renderProjectAssetRootSetting(timeline) {
+    if (timeline.project?.privacy?.mode && !this.isPrivacyRevealed(timeline)) {
+      return this.renderSettingReadonly("Asset Root Directory", "Private path");
+    }
+    return this.renderSettingText("Asset Root Directory", ["project", "storage", "asset_root_directory"]);
+  }
+
+  renderSettingReadonly(title, value) {
+    const row = settingRow(title);
+    const output = el("input", "htd-setting-text htd-setting-readonly");
+    output.value = String(value ?? "");
+    output.readOnly = true;
+    output.title = title;
+    row.append(output);
     return row;
   }
 
@@ -2340,23 +2449,50 @@ function assetSummaryLabel(asset, privacyRevealed) {
   return assetDisplayLabel(asset, true, asset.source_kind === "Generated" ? "Generated Video" : "Video Asset");
 }
 
+function availableCapturesKey(timeline, shot, privacyRevealed) {
+  const project = timeline?.project ?? {};
+  const identity = project.identity ?? {};
+  const storage = project.storage ?? {};
+  return [
+    shot?.shot_id ?? "",
+    identity.project_id ?? "",
+    storage.asset_root_directory ?? "",
+    storage.project_directory_name ?? "",
+    privacyRevealed ? "reveal" : "private",
+  ].join("|");
+}
+
+function captureSummaryLabel(item, privacyRevealed) {
+  if (!privacyRevealed) return "Captured video";
+  const registration = item?.take_capture?.registration ?? {};
+  const take = registration.take ?? {};
+  const parts = [
+    take.take_id || item?.filename || item?.name || "Captured video",
+  ];
+  const model = [take.model_family, take.model_version].filter(Boolean).join(" ");
+  if (model) parts.push(model);
+  if (take.seed != null) parts.push(`seed ${take.seed}`);
+  return parts.join(" · ");
+}
+
+function captureTakeId(item) {
+  const value = item?.take_capture?.registration?.take?.take_id;
+  return value == null ? "" : String(value);
+}
+
+function projectFolderDisplay(timeline, privacyRevealed) {
+  if (timeline?.project?.privacy?.mode && !privacyRevealed) return "Private path";
+  const storage = timeline?.project?.storage ?? {};
+  const root = String(storage.asset_root_directory ?? "").trim() || "ComfyUI output/helto_director_projects";
+  const directory = String(storage.project_directory_name ?? "").trim();
+  return directory ? `${root.replace(/[\\/]+$/, "")}/${directory}` : root;
+}
+
 function resolvedLoraCount(resolvedLoras) {
   const targets = resolvedLoras?.targets && typeof resolvedLoras.targets === "object" && !Array.isArray(resolvedLoras.targets)
     ? resolvedLoras.targets
     : {};
   return Object.values(targets).reduce((count, stack) => count + (Array.isArray(stack) ? stack.length : 0), 0);
-}
-
-function parseTakeRegistrationInput(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return null;
-  try {
-    const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    return parsed;
-  } catch (_error) {
-    return null;
-  }
 }
 
 function copyTextToClipboard(documentRef, text) {
@@ -2419,6 +2555,12 @@ function timelineComparisonPayload(timeline) {
   const copy = JSON.parse(JSON.stringify(timeline ?? {}));
   delete copy.validation;
   if (copy.ui_state && typeof copy.ui_state === "object") copy.ui_state.state_revision = 0;
+  if (copy.project?.identity && typeof copy.project.identity === "object") {
+    copy.project.identity.project_id = "__project_id__";
+  }
+  if (copy.project?.storage && typeof copy.project.storage === "object") {
+    copy.project.storage.project_directory_name = "__project_directory__";
+  }
   return JSON.stringify(copy);
 }
 
@@ -3088,6 +3230,9 @@ function installStyles(documentRef) {
     .htd-boundary-warning { padding: 2px 6px; border: 1px solid #7a5e28; border-radius: 4px; background: #332711; color: #ffe3a3; white-space: nowrap; }
     .htd-shot-row, .htd-lora-summary-row { min-width: 0; min-height: 24px; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
     .htd-shot-row-label { flex: 0 0 74px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
+    .htd-shot-advanced { min-width: 0; display: grid; gap: 4px; color: #c7d0df; }
+    .htd-shot-advanced-summary { width: max-content; cursor: pointer; color: #9ba8bd; font-weight: 600; }
+    .htd-shot-advanced-summary:hover { color: #eef2f7; }
     .htd-shot-clip-select { max-width: 220px; }
     .htd-generated-take-select { max-width: 220px; }
     .htd-register-take-input { max-width: 240px; }

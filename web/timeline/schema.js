@@ -1,5 +1,7 @@
 export const SCHEMA_VERSION = "2.0";
 export const VIDEO_TIMELINE_TYPE = "VIDEO_TIMELINE";
+export const PROJECT_STORAGE_SCHEMA_VERSION = 1;
+export const DEFAULT_PROJECT_NAME = "Untitled Project";
 
 export const SECTION_TYPE_IMAGE = "Image";
 export const SECTION_TYPE_TEXT = "Text";
@@ -231,11 +233,28 @@ export function createDefaultClipInstance() {
   };
 }
 
+export function createDefaultProjectIdentity() {
+  return {
+    project_id: createProjectId(),
+    name: DEFAULT_PROJECT_NAME,
+  };
+}
+
+export function createDefaultProjectStorage(identity = createDefaultProjectIdentity()) {
+  return {
+    schema_version: PROJECT_STORAGE_SCHEMA_VERSION,
+    asset_root_directory: "",
+    project_directory_name: projectDirectoryName(identity.name, identity.project_id),
+  };
+}
+
 export function createDefaultVideoTimeline() {
+  const identity = createDefaultProjectIdentity();
   return {
     schema_version: SCHEMA_VERSION,
     type: VIDEO_TIMELINE_TYPE,
     project: {
+      identity,
       duration_seconds: DEFAULT_DURATION_SECONDS,
       frame_rate: DEFAULT_FRAME_RATE,
       aspect_ratio: DEFAULT_ASPECT_RATIO,
@@ -276,6 +295,7 @@ export function createDefaultVideoTimeline() {
         character_references_enabled: true,
         character_references: [],
       },
+      storage: createDefaultProjectStorage(identity),
       model_loras: createDefaultProjectModelLoras(),
     },
     ui_state: {
@@ -307,4 +327,29 @@ export function createDefaultVideoTimeline() {
 
 export function deepClone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+export function createProjectId() {
+  const random = Math.random().toString(16).slice(2, 10);
+  const time = Date.now().toString(16).slice(-4);
+  return `proj_${random}${time}`.slice(0, 17);
+}
+
+export function projectDirectoryName(name, projectId) {
+  const base = safePathPart(name).toLowerCase() || "project";
+  const id = safeProjectId(projectId) || createProjectId();
+  return safePathPart(`${base}_${id}`).toLowerCase();
+}
+
+export function safeProjectId(value) {
+  const text = String(value ?? "").trim();
+  return /^[A-Za-z0-9_.-]{3,80}$/.test(text) ? text : "";
+}
+
+function safePathPart(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 96);
 }

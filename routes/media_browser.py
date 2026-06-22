@@ -13,6 +13,7 @@ try:
         folder_by_alias,
         folder_payload,
         list_media,
+        list_project_take_captures,
         media_definition,
         normalize_media_type,
         remove_folder,
@@ -25,6 +26,7 @@ except Exception:
         folder_by_alias,
         folder_payload,
         list_media,
+        list_project_take_captures,
         media_definition,
         normalize_media_type,
         remove_folder,
@@ -34,6 +36,7 @@ except Exception:
 
 
 ROUTE_PREFIX = "/helto_director/media_browser"
+MEDIA_ROUTE_PREFIX = "/helto_director/media"
 PREVIEW_JOB_CONCURRENCY = 2
 _PREVIEW_JOB_SEMAPHORE = asyncio.Semaphore(PREVIEW_JOB_CONCURRENCY)
 _ROUTES_REGISTERED = False
@@ -119,6 +122,37 @@ def register_media_browser_routes() -> bool:
                         thumb_params["privacy"] = "1"
                     item["thumb_url"] = f"{ROUTE_PREFIX}/{media_type}/thumb?{urllib.parse.urlencode(thumb_params)}"
             return web.json_response({items_key: items})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    @routes.post(f"{ROUTE_PREFIX}/project_takes")
+    async def post_project_takes(request):
+        try:
+            data = await request.json()
+            privacy_value = data.get("privacy")
+            privacy_mode = privacy_value if isinstance(privacy_value, bool) else query_bool(str(privacy_value or ""))
+            payload = list_project_take_captures(
+                data.get("project") if isinstance(data.get("project"), dict) else {},
+                data.get("shot_id", ""),
+                privacy_mode=privacy_mode,
+            )
+            for item in payload["captures"]:
+                params = {
+                    "path": item.get("path", ""),
+                    "type": "Video",
+                    "t": int(item.get("mtime") or 0),
+                }
+                encoded = urllib.parse.urlencode(params)
+                item["view_url"] = f"{MEDIA_ROUTE_PREFIX}/view?{encoded}"
+                thumb_params = dict(params)
+                if privacy_mode:
+                    thumb_params["privacy"] = "1"
+                item["thumb_url"] = f"{MEDIA_ROUTE_PREFIX}/thumbnail?{urllib.parse.urlencode(thumb_params)}"
+            if privacy_mode:
+                payload["take_directory"] = "Private path"
+                payload["storage"]["asset_root_directory"] = "Private path"
+                payload["storage"]["project_directory"] = "Private path"
+            return web.json_response(payload)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
 

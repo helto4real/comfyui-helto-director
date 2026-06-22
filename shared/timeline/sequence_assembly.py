@@ -40,6 +40,7 @@ def assemble_timeline_sequence(
         "type": "DEBUG_INFO",
         "source": "Sequence Assembly",
         "summary": {
+            "status": "pending",
             "shot_count": 0,
             "included_clip_count": 0,
             "missing_accepted_take_count": 0,
@@ -47,6 +48,7 @@ def assemble_timeline_sequence(
             "warning_count": 0,
             "error_count": 0,
             "output_frame_count": 0,
+            "placeholder_output_frame_count": 0,
             "frame_rate": frame_rate,
         },
         "shots": [],
@@ -75,16 +77,43 @@ def assemble_timeline_sequence(
         debug,
     )
     if not clip_entries:
-        _add_error(debug, "SEQUENCE_ASSEMBLY_NO_CLIPS", "No accepted or imported video clips were available for assembly.")
-        raise SequenceAssemblyError("SEQUENCE_ASSEMBLY_NO_CLIPS: No accepted or imported video clips were available for assembly.")
+        return _empty_sequence_result(frame_rate, debug)
 
     frames = _assemble_clip_frames(clip_entries, timeline, debug)
     audio = _assemble_audio(timeline, frames, frame_rate, debug)
+    debug["summary"]["status"] = "assembled"
     debug["summary"]["included_clip_count"] = len(clip_entries)
     debug["summary"]["output_frame_count"] = int(frames.shape[0])
     debug["summary"]["warning_count"] = len(debug["warnings"])
     debug["summary"]["error_count"] = len(debug["errors"])
     return frames, audio, frame_rate, debug
+
+
+def _empty_sequence_result(
+    frame_rate: float,
+    debug: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, Any], float, dict[str, Any]]:
+    from ..ltx.runtime.audio import empty_audio
+
+    frames = torch.zeros((1, 16, 16, 3), dtype=torch.float32)
+    duration = 1.0 / frame_rate if frame_rate > 0 else 0.0
+    debug["summary"]["status"] = "not_built"
+    debug["summary"]["included_clip_count"] = 0
+    debug["summary"]["output_frame_count"] = 0
+    debug["summary"]["placeholder_output_frame_count"] = int(frames.shape[0])
+    debug["resolution"]["policy"] = "placeholder_no_clips"
+    debug["resolution"]["width"] = int(frames.shape[2])
+    debug["resolution"]["height"] = int(frames.shape[1])
+    debug["audio"]["status"] = "empty"
+    debug["audio"]["diagnostics"].append("No accepted or imported video clips were present; returned a silent placeholder output.")
+    _add_warning(
+        debug,
+        "SEQUENCE_ASSEMBLY_NO_CLIPS",
+        "No accepted or imported video clips were available for assembly; returned a placeholder output.",
+    )
+    debug["summary"]["warning_count"] = len(debug["warnings"])
+    debug["summary"]["error_count"] = len(debug["errors"])
+    return frames, empty_audio(duration), frame_rate, debug
 
 
 def _decode_sequence_clips(

@@ -16,6 +16,7 @@ import {
   MODEL_LORA_TARGET_HIGH_NOISE,
   MODEL_LORA_TARGET_LOW_NOISE,
   MODEL_LORA_TARGET_MAIN,
+  PROJECT_STORAGE_SCHEMA_VERSION,
   SEQUENCE_ID_MAIN,
   SEQUENCE_NAME_MAIN,
   SHOT_TYPES,
@@ -24,11 +25,14 @@ import {
   createDefaultClipInstance,
   createDefaultLoraStack,
   createDefaultProjectModelLoras,
+  createDefaultProjectIdentity,
   createDefaultSequence,
   createDefaultShot,
   createDefaultTake,
   createDefaultVideoTimeline,
   deepClone,
+  projectDirectoryName,
+  safeProjectId,
 } from "./schema.js";
 import { normalizeCharacterReferences } from "./references.js";
 
@@ -56,6 +60,7 @@ export function normalizeVideoTimeline(value) {
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
   normalized.sequence = normalizeSequence(normalized.sequence, normalized.director_track.sections);
+  normalizeProjectIdentityStorage(normalized);
   normalizeProjectMetadata(normalized);
   normalizeProjectModelLoras(normalized);
   normalizePrivacy(normalized);
@@ -116,6 +121,31 @@ function normalizeProjectMetadata(timeline) {
     : {};
   project.metadata.character_references_enabled = project.metadata.character_references_enabled !== false;
   project.metadata.character_references = normalizeCharacterReferences(project.metadata.character_references);
+}
+
+function normalizeProjectIdentityStorage(timeline) {
+  const project = timeline.project ??= {};
+  const identity = project.identity && typeof project.identity === "object" && !Array.isArray(project.identity)
+    ? project.identity
+    : {};
+  const projectId = safeProjectId(identity.project_id) || createDefaultProjectIdentity().project_id;
+  const name = String(identity.name ?? "").trim() || "Untitled Project";
+  project.identity = {
+    project_id: projectId,
+    name,
+  };
+  const storage = project.storage && typeof project.storage === "object" && !Array.isArray(project.storage)
+    ? project.storage
+    : {};
+  let directoryName = safePathPart(storage.project_directory_name);
+  if (!directoryName || !directoryName.toLowerCase().includes(projectId.toLowerCase())) {
+    directoryName = projectDirectoryName(name, projectId);
+  }
+  project.storage = {
+    schema_version: PROJECT_STORAGE_SCHEMA_VERSION,
+    asset_root_directory: String(storage.asset_root_directory ?? "").trim(),
+    project_directory_name: directoryName,
+  };
 }
 
 function normalizeProjectModelLoras(timeline) {
@@ -497,4 +527,12 @@ function asInteger(value, fallback) {
 
 function basename(path) {
   return String(path ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+function safePathPart(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 96);
 }

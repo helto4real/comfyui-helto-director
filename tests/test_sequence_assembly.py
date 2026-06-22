@@ -109,6 +109,33 @@ def test_missing_accepted_take_warns_and_skips_when_policy_allows(tmp_path):
     assert "SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING" in _warning_codes(debug)
 
 
+def test_sequence_assembly_without_ready_clips_returns_placeholder():
+    timeline = _timeline_with_assets(
+        [],
+        [
+            {
+                "shot_id": "shot_missing",
+                "type": SHOT_TYPE_GENERATED,
+                "start_time": 0.0,
+                "end_time": 1.0,
+            },
+        ],
+    )
+
+    frames, audio, frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert tuple(frames.shape) == (1, 16, 16, 3)
+    assert float(frames.sum()) == 0.0
+    assert frame_rate == 4.0
+    assert torch.is_tensor(audio["waveform"])
+    assert debug["summary"]["status"] == "not_built"
+    assert debug["summary"]["included_clip_count"] == 0
+    assert debug["summary"]["output_frame_count"] == 0
+    assert debug["summary"]["placeholder_output_frame_count"] == 1
+    assert debug["errors"] == []
+    assert "SEQUENCE_ASSEMBLY_NO_CLIPS" in _warning_codes(debug)
+
+
 def test_missing_accepted_take_errors_when_policy_requires_it(tmp_path):
     timeline = _timeline_with_assets(
         [],

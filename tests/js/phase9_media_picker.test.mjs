@@ -11,6 +11,7 @@ import {
 import {
   addPickedMediaItem,
   attachPickedGeneratedVideoAsTake,
+  registerGeneratedTakePayload,
   replacePickedSectionMedia,
 } from "../../web/timeline/media_actions.js";
 import { addSection } from "../../web/timeline/operations.js";
@@ -181,12 +182,47 @@ function testGeneratedVideoPickerFallbackStillCreatesCandidateTake() {
   assert.equal(result.take.asset_id, result.asset.asset_id);
 }
 
+function testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Text", 0);
+  const shot = timeline.sequence.shots.find((candidate) => candidate.section_ids.includes(section.item_id));
+  const result = registerGeneratedTakePayload(timeline, shot.shot_id, {
+    code: "TAKE_CAPTURE_REGISTERED",
+    ok: true,
+    summary: {
+      accepted: false,
+      asset_id: "asset_generated_001",
+      filename: "shot_001_take_001.mp4",
+      media_type: "Video",
+      path: "/captures/shot_001_take_001.mp4",
+      shot_id: shot.shot_id,
+      sidecar_filename: "shot_001_take_001.helto_take.json",
+      storage_action: "saved",
+      take_id: "take_ltx_shot_001_generated",
+    },
+    type: "DEBUG_INFO",
+  });
+
+  assert.ok(result);
+  assert.equal(result.asset.asset_id, "asset_generated_001");
+  assert.equal(result.asset.path, "/captures/shot_001_take_001.mp4");
+  assert.equal(result.asset.source_kind, ASSET_SOURCE_GENERATED);
+  assert.equal(result.take.take_id, "take_ltx_shot_001_generated");
+  assert.equal(result.take.status, "Candidate");
+  assert.equal(result.take.asset_id, "asset_generated_001");
+  assert.equal(shot.takes.length, 1);
+  assert.equal(shot.accepted_take_id, null);
+}
+
 function testInspectorNoLongerRendersPathEntryClearControls() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
   assert.equal(rendererSource.includes("renderMediaControls"), false);
-  assert.equal(rendererSource.includes("Attach Generated Video As Take"), true);
-  assert.equal(rendererSource.includes("Choose generated video"), true);
+  assert.equal(rendererSource.includes("renderAdvancedTakeAttachment(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("Attach Existing Generated Asset As Candidate Take"), true);
+  assert.equal(rendererSource.includes("Choose generated asset"), true);
+  assert.equal(rendererSource.includes("Attach Generated Video As Take"), false);
+  assert.equal(rendererSource.includes("Choose generated video"), false);
   assert.equal(rendererSource.includes("Clear Media"), false);
   assert.equal(rendererSource.includes("htd-media-path"), false);
 }
@@ -225,6 +261,7 @@ testCancelOrEmptySelectionDoesNotCreateBlankSection();
 testReplaceModePreservesTiming();
 testGeneratedVideoPickerSidecarCreatesMetadataRichTake();
 testGeneratedVideoPickerFallbackStillCreatesCandidateTake();
+testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake();
 testInspectorNoLongerRendersPathEntryClearControls();
 testMediaPickerPrivacyUsesSingleDirectorMode();
 

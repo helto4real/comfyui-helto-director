@@ -165,7 +165,7 @@ def _normalize_registration(
         "asset": asset,
         "take": take,
     }
-    for key in ("shot_context", "segment_context", "model_specific"):
+    for key in ("shot_context", "segment_context", "model_specific", "project_context"):
         if key in registration:
             normalized[key] = _sanitize_value(registration.get(key), privacy_mode=privacy_mode)
     return normalized

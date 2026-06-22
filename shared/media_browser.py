@@ -23,6 +23,10 @@ from .timeline.generated_capture import (
     build_generated_take_capture_sidecar,
     normalize_generated_take_capture_sidecar,
 )
+from .timeline.project_storage import (
+    resolve_project_take_directory,
+    resolved_project_storage_summary,
+)
 
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
@@ -256,6 +260,30 @@ def list_media(
     return sorted(results, key=lambda item: item["filename"].lower())
 
 
+def list_project_take_captures(
+    project: dict[str, Any],
+    shot_id: str,
+    *,
+    privacy_mode: bool = False,
+) -> dict[str, Any]:
+    shot_id = str(shot_id or "").strip()
+    if not shot_id:
+        raise ValueError("shot_id is required.")
+    take_directory = resolve_project_take_directory(project, shot_id, create=False)
+    captures = [
+        item
+        for item in list_media("video", take_directory, recursive=True, privacy_mode=privacy_mode)
+        if _capture_matches_shot(item, shot_id)
+    ]
+    captures.sort(key=lambda item: (-(float(item.get("mtime") or 0)), str(item.get("filename") or "")))
+    return {
+        "shot_id": shot_id,
+        "take_directory": str(take_directory),
+        "storage": resolved_project_storage_summary(project),
+        "captures": captures,
+    }
+
+
 def folder_payload(media_type: str) -> list[dict[str, Any]]:
     count_key = media_definition(media_type)["count_key"]
     folders = []
@@ -323,6 +351,24 @@ def generated_take_sidecar_path(path: Path) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _capture_matches_shot(item: dict[str, Any], shot_id: str) -> bool:
+    capture = item.get("take_capture")
+    if not isinstance(capture, dict):
+        return False
+    registration = capture.get("registration")
+    if not isinstance(registration, dict):
+        return False
+    shot_ids = [
+        str(candidate)
+        for candidate in registration.get("shot_ids") or []
+        if candidate is not None
+    ]
+    direct = registration.get("shot_id")
+    if direct is not None:
+        shot_ids.append(str(direct))
+    return shot_id in set(shot_ids)
 
 
 def make_browser_thumbnail(media_type: str, alias: str, filename: str, max_size: int = 320, privacy_mode: bool = False) -> Path | bytes:
