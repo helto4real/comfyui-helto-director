@@ -10,10 +10,19 @@ from .shot_extraction import (
     extract_shot_timeline,
     select_shot_timeline_for_planning,
 )
+from .take_registration import (
+    TakeRegistrationError,
+    accept_take,
+    register_generated_take,
+    register_take_for_asset,
+    reject_take,
+    set_take_status,
+)
 from .time_mapping import frame_to_seconds, seconds_to_frame, time_range_to_frames
 from .validate import validate_video_timeline
 
 __all__ = [
+    "accept_take",
     "create_default_video_timeline",
     "create_resolved_lora_snapshot",
     "detect_director_gaps",
@@ -23,10 +32,15 @@ __all__ = [
     "merge_prompts",
     "migrate_video_timeline",
     "normalize_video_timeline",
+    "register_generated_take",
+    "register_take_for_asset",
+    "reject_take",
     "resolve_runtime_lora_targets",
     "seconds_to_frame",
     "select_shot_timeline_for_planning",
+    "set_take_status",
     "ShotExtractionError",
+    "TakeRegistrationError",
     "time_range_to_frames",
     "validate_video_timeline",
 ]
