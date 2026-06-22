@@ -210,6 +210,20 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("takeSummaryLabel(timeline, take, privacyRevealed)"), true);
   assert.equal(rendererSource.includes("privacyRevealed ? take.take_id : takeStatusLabel(take)"), true);
   assert.equal(rendererSource.includes("privacyRevealed ? `seed ${take.seed}` : \"Seeded\""), true);
+  assert.equal(rendererSource.includes("const previewData = this.captureVideoPreviewData(timeline, item, privacyRevealed)"), true);
+  assert.equal(rendererSource.includes("const previewData = this.takeVideoPreviewData(timeline, take, asset, privacyRevealed)"), true);
+  assert.equal((rendererSource.match(/iconButton\("preview-video", "Preview Take Video"/g) ?? []).length, 2);
+  assert.equal(rendererSource.includes("row.append(attach, accept)"), true);
+  assert.equal(rendererSource.includes("row.append(label, assetSummary)"), true);
+  assert.equal(rendererSource.includes("if (preview) row.append(preview)"), true);
+  assert.equal(rendererSource.includes("takeVideoPreviewData(timeline, take, asset = null"), true);
+  assert.equal(rendererSource.includes("captureVideoPreviewData(timeline, item"), true);
+  assert.equal(rendererSource.includes("caption: assetDisplayLabel(resolvedAsset, privacyRevealed, \"Video Take\")"), true);
+  assert.equal(rendererSource.includes("caption: captureSummaryLabel(item, privacyRevealed)"), true);
+  assert.equal(rendererSource.includes("privacyMode: Boolean(timeline?.project?.privacy?.mode)"), true);
+  assert.equal(rendererSource.includes("openTakeVideoPreviewData(previewData)"), true);
+  assert.equal(rendererSource.includes('"preview-video": `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes(".htd-capture-row { grid-template-columns:"), true);
   assert.equal(rendererSource.includes("assemblyReadinessStatus(timeline, shot)"), true);
   assert.equal(rendererSource.includes("shotIdInput.readOnly = true"), true);
   assert.equal(rendererSource.includes("shotIdInput.setAttribute(\"aria-label\", \"Shot ID\")"), true);
@@ -358,6 +372,12 @@ function testSharedMediaPreviewSupportsVideoControls() {
   assert.equal(previewSource.includes("video.muted = true"), true);
   assert.equal(previewSource.includes("video.currentTime = 0"), true);
   assert.equal(previewSource.includes("Muted"), true);
+  assert.equal(previewSource.includes("Audio On"), true);
+  assert.equal(previewSource.includes("pr-image-large-preview-close"), true);
+  assert.equal(previewSource.includes("event.target === overlay"), true);
+  assert.equal(previewSource.includes("options.privacyMode ? \" privacy-mode\" : \"\""), true);
+  assert.equal(previewSource.includes(".pr-image-large-preview.privacy-mode .pr-image-large-preview-panel video"), true);
+  assert.equal(previewSource.includes(".pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover video"), true);
 }
 
 function testDeleteContextMenuIsAvailableOnTimelineItems() {

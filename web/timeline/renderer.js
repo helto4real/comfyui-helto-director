@@ -960,6 +960,10 @@ export class TimelineRenderer {
       label.title = privacyRevealed ? (item.path || item.filename || label.textContent) : "Captured video";
       const takeId = captureTakeId(item);
       const existing = takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) : null;
+      const previewData = this.captureVideoPreviewData(timeline, item, privacyRevealed);
+      const preview = previewData
+        ? iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData))
+        : null;
       const attach = button(existing ? "Attached" : "Attach", "Attach Project Capture As Take", () => {
         this.commitMutation((currentTimeline) => {
           attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
@@ -975,7 +979,9 @@ export class TimelineRenderer {
         }, "accept project capture");
       });
       accept.disabled = existing?.status === "Accepted";
-      row.append(label, attach, accept);
+      row.append(label);
+      if (preview) row.append(preview);
+      row.append(attach, accept);
       block.append(row);
     }
     return block;
@@ -1005,6 +1011,10 @@ export class TimelineRenderer {
       const assetSummary = el("span", "htd-take-asset-summary");
       assetSummary.textContent = assetSummaryLabel(asset, privacyRevealed);
       assetSummary.title = privacyRevealed ? (asset?.path || asset?.name || asset?.asset_id || assetSummary.textContent) : assetSummary.textContent;
+      const previewData = this.takeVideoPreviewData(timeline, take, asset, privacyRevealed);
+      const preview = previewData
+        ? iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData))
+        : null;
       const status = iconMenuControl({
         id: `take-status-${take.take_id}`,
         title: "Take Status",
@@ -1036,7 +1046,9 @@ export class TimelineRenderer {
         this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, take.take_id, "Candidate"), "take change");
       });
       restore.disabled = take.status === "Candidate";
-      row.append(label, assetSummary, status, accept, reject, restore);
+      row.append(label, assetSummary);
+      if (preview) row.append(preview);
+      row.append(status, accept, reject, restore);
       block.append(row);
     }
     return block;
@@ -2168,6 +2180,40 @@ export class TimelineRenderer {
     };
   }
 
+  takeVideoPreviewData(timeline, take, asset = null, privacyRevealed = this.isPrivacyRevealed(timeline)) {
+    const resolvedAsset = asset ?? assetForId(timeline, take?.asset_id);
+    if (!resolvedAsset || resolvedAsset.type !== ASSET_TYPE_VIDEO) return null;
+    const url = mediaViewUrl(resolvedAsset);
+    if (!url) return null;
+    return {
+      type: ASSET_TYPE_VIDEO,
+      url,
+      caption: assetDisplayLabel(resolvedAsset, privacyRevealed, "Video Take"),
+      privacyMode: Boolean(timeline?.project?.privacy?.mode),
+    };
+  }
+
+  captureVideoPreviewData(timeline, item, privacyRevealed = this.isPrivacyRevealed(timeline)) {
+    const registrationAsset = item?.take_capture?.registration?.asset ?? {};
+    const path = String(item?.path ?? item?.file_path ?? registrationAsset.path ?? registrationAsset.file_path ?? "").trim();
+    if (!path) return null;
+    const asset = {
+      ...registrationAsset,
+      type: ASSET_TYPE_VIDEO,
+      path,
+      name: item?.name ?? item?.filename ?? registrationAsset.name ?? "Captured video",
+      source_type: item?.source_type ?? registrationAsset.source_type ?? "",
+    };
+    const url = mediaViewUrl(asset);
+    if (!url) return null;
+    return {
+      type: ASSET_TYPE_VIDEO,
+      url,
+      caption: captureSummaryLabel(item, privacyRevealed),
+      privacyMode: Boolean(timeline?.project?.privacy?.mode),
+    };
+  }
+
   openSectionMediaPreview(section) {
     const previewData = this.sectionImagePreviewData(section);
     if (!previewData) return false;
@@ -2175,6 +2221,12 @@ export class TimelineRenderer {
   }
 
   openSectionMediaPreviewData(previewData) {
+    if (!previewData?.url) return false;
+    showMediaPreview(this.container.ownerDocument ?? globalThis.document, previewData);
+    return true;
+  }
+
+  openTakeVideoPreviewData(previewData) {
     if (!previewData?.url) return false;
     showMediaPreview(this.container.ownerDocument ?? globalThis.document, previewData);
     return true;
@@ -3109,6 +3161,7 @@ const ICONS = {
   text: `<svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v12M8 18h8"/></svg>`,
   image: `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m7 16 4-4 3 3 2-2 3 3"/><circle cx="15.5" cy="9.5" r="1.5"/></svg>`,
   video: `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="12" rx="2"/><path d="m16 10 4-2v8l-4-2z"/></svg>`,
+  "preview-video": `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m10 8 6 4-6 4z"/></svg>`,
   audio: `<svg viewBox="0 0 24 24"><path d="M6 15V9M10 18V6M14 16V8M18 14v-4"/></svg>`,
   shot: `<svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M8 7V5M16 7V5M8 19v-2M16 19v-2"/><path d="M9 12h6"/></svg>`,
   boundary: `<svg viewBox="0 0 24 24"><path d="M12 4v16"/><path d="M6 8h4M14 8h4M6 16h4M14 16h4"/></svg>`,
@@ -3328,10 +3381,12 @@ function installStyles(documentRef) {
     .htd-shot-subheader .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-shot-takes, .htd-shot-loras { min-width: 0; display: grid; gap: 4px; }
     .htd-shot-empty { color: #8d98ab; font-size: 11px; }
-    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(82px, 0.45fr) auto auto auto auto; align-items: center; gap: 6px; }
+    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(82px, 0.45fr) auto auto auto auto auto; align-items: center; gap: 6px; }
+    .htd-capture-row { grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 0.45fr) auto; }
     .htd-take-label, .htd-take-asset-summary, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-take-asset-summary { color: #aab4c4; }
     .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
+    .htd-take-row .htd-icon-button { width: 24px; min-width: 24px; padding: 0; }
     .htd-project-loras { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 7px; padding-top: 7px; border-top: 1px solid #30394c; }
     .htd-project-loras-title { grid-column: 1 / -1; color: #eef2f7; font-weight: 600; }
     .htd-project-lora-row { min-width: 0; display: grid; grid-template-columns: 70px minmax(66px, 1fr) auto; align-items: center; gap: 6px; color: #c7d0df; }

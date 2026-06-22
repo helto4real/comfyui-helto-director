@@ -12,7 +12,7 @@ export function showMediaPreview(documentRef = globalThis.document, options = {}
   closeMediaPreview(documentRef);
 
   const overlay = documentRef.createElement("div");
-  overlay.className = PREVIEW_CLASS;
+  overlay.className = `${PREVIEW_CLASS}${options.privacyMode ? " privacy-mode" : ""}`;
   const panel = documentRef.createElement("div");
   panel.className = "pr-image-large-preview-panel";
 
@@ -154,6 +154,10 @@ function installMediaPreviewStyles(documentRef) {
     .pr-image-large-preview-panel { position: relative; max-width: calc(100vw - 64px); max-height: calc(100vh - 64px); background: #111; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
     .pr-image-large-preview-panel img, .pr-image-large-preview-panel video { max-width: 100%; max-height: calc(100vh - 132px); object-fit: contain; background: #050505; }
     .pr-image-large-preview-panel video { min-width: min(720px, calc(100vw - 96px)); }
+    .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel img,
+    .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel video { opacity: 0; transition: opacity 120ms ease; }
+    .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover img,
+    .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover video { opacity: 1; }
     .pr-image-large-preview-close { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #555; background: #1e1e1e; color: #eee; cursor: pointer; z-index: 1; }
     .pr-image-large-preview-caption { color: #ddd; font-size: 12px; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pr-image-large-preview-controls { display: flex; justify-content: center; gap: 8px; }
