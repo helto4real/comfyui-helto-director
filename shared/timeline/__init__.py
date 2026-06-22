@@ -5,6 +5,10 @@ from .normalize import normalize_video_timeline
 from .planner_context import create_resolved_lora_snapshot, resolve_runtime_lora_targets
 from .prompt_merge import merge_prompts
 from .segmentation import build_generation_segments
+from .sequence_assembly import (
+    SequenceAssemblyError,
+    assemble_timeline_sequence,
+)
 from .shot_extraction import (
     ShotExtractionError,
     extract_shot_timeline,
@@ -24,6 +28,7 @@ from .validate import validate_video_timeline
 
 __all__ = [
     "accept_take",
+    "assemble_timeline_sequence",
     "create_default_video_timeline",
     "create_resolved_lora_snapshot",
     "detect_director_gaps",
@@ -41,6 +46,7 @@ __all__ = [
     "seconds_to_frame",
     "select_shot_timeline_for_planning",
     "set_take_status",
+    "SequenceAssemblyError",
     "ShotExtractionError",
     "TakeRegistrationError",
     "time_range_to_frames",
