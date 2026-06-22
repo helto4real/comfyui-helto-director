@@ -111,6 +111,7 @@ const INSPECTOR_HEIGHT = 34;
 const INSPECTOR_EDITOR_HEIGHT = 260;
 const ROOT_GAP = 6;
 const NODE_BODY_HORIZONTAL_PADDING = 20;
+const NODE_BODY_BOTTOM_PADDING = NODE_BODY_HORIZONTAL_PADDING;
 const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";
 const CLEAR_TIMELINE_CONFIRMATION = "Clear current timeline? This will replace the current timeline with a new blank timeline and remove its Director Library link. Saved library items and media files will not be deleted.";
 const DELETE_MENU_LABELS = {
@@ -132,6 +133,34 @@ const REPLACE_MENU_LABELS = {
 
 export function getTimelineWidgetHeight(timeline) {
   return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
+}
+
+export function getTimelineWidgetRenderedHeight(node, widget, timeline, contentHeight = getTimelineWidgetHeight(timeline)) {
+  return Math.max(contentHeight, timelineWidgetAvailableHeight(node, widget));
+}
+
+export function getTimelineNodeMinimumHeight(node, widget, timeline, contentHeight = getTimelineWidgetHeight(timeline)) {
+  const widgetY = timelineWidgetY(widget);
+  if (!widgetY) return contentHeight;
+  return widgetY + contentHeight + NODE_BODY_BOTTOM_PADDING;
+}
+
+export function ensureTimelineNodeFitsContent(node, widget, timeline, contentHeight = getTimelineWidgetHeight(timeline), appRef = null) {
+  const currentHeight = positiveNumber(node?.size?.[1]);
+  const minimumHeight = getTimelineNodeMinimumHeight(node, widget, timeline, contentHeight);
+  if (!currentHeight || currentHeight + 1 >= minimumHeight) return false;
+
+  const currentWidth = positiveNumber(node?.size?.[0]) || TIMELINE_WIDTH + NODE_BODY_HORIZONTAL_PADDING;
+  const nextSize = [currentWidth, Math.ceil(minimumHeight)];
+  if (typeof node?.setSize === "function") {
+    node.setSize(nextSize);
+  } else if (Array.isArray(node?.size)) {
+    node.size[0] = nextSize[0];
+    node.size[1] = nextSize[1];
+  }
+  appRef?.graph?.setDirtyCanvas?.(true, true);
+  node?.graph?.setDirtyCanvas?.(true, true);
+  return true;
 }
 
 export function measureStableTimelineViewportWidth(node, container) {
@@ -160,11 +189,12 @@ export function isDefaultEmptyTimeline(timeline) {
 }
 
 export class TimelineRenderer {
-  constructor(node, app, controller, container) {
+  constructor(node, app, controller, container, widget = null) {
     this.node = node;
     this.app = app;
     this.controller = controller;
     this.container = container;
+    this.widget = widget;
     this.drag = null;
     this.settingsOpen = false;
     this.referencesOpen = false;
@@ -175,6 +205,8 @@ export class TimelineRenderer {
     this.resizeObserver = null;
     this.observedWidth = null;
     this.viewportWidth = TIMELINE_WIDTH;
+    this.renderedHeight = 0;
+    this.contentHeight = getTimelineWidgetHeight(controller.timeline);
     this.privacyRevealActive = false;
     this.privacyExternalModalOpen = false;
     this.onContextMenuPointerDown = (event) => this.handleContextMenuPointerDown(event);
@@ -204,9 +236,12 @@ export class TimelineRenderer {
 
   render(timeline = this.controller.timeline) {
     this.closeContextMenu({ rerender: false });
+    this.contentHeight = getTimelineWidgetHeight(timeline);
+    this.ensureNodeFitsContent(timeline);
     this.viewportWidth = this.measureViewportWidth();
     this.applyViewportContainerWidth(this.viewportWidth);
-    this.container.style.height = `${getTimelineWidgetHeight(timeline)}px`;
+    const renderedHeight = this.getRenderedHeight(timeline);
+    this.applyWidgetContainerHeight(renderedHeight, this.contentHeight);
     this.container.replaceChildren();
     const root = el("div", "htd-root");
     root.style.width = `${this.viewportWidth}px`;
@@ -215,7 +250,12 @@ export class TimelineRenderer {
     root.classList.toggle("is-private", privacyMode);
     root.classList.toggle("is-privacy-modal-open", this.privacyExternalModalOpen);
     root.classList.toggle("is-privacy-revealed", privacyRevealed);
-    root.append(this.renderToolbar(), this.renderRangeControl(timeline), this.renderTimeline(timeline), this.renderInspector(timeline));
+    root.append(
+      this.renderToolbar(),
+      this.renderRangeControl(timeline),
+      this.renderTimeline(timeline),
+      this.renderInspector(timeline, getRenderedInspectorHeight(timeline, renderedHeight)),
+    );
     if (this.controller.privacyError) {
       const status = el("div", "htd-privacy-status");
       status.textContent = this.controller.privacyError;
@@ -224,6 +264,7 @@ export class TimelineRenderer {
     if (this.settingsOpen) root.append(this.renderProjectSettings(timeline));
     if (this.referencesOpen) root.append(this.renderReferenceManager(timeline));
     this.container.append(root);
+    this.updateMeasuredContentHeight(timeline);
     this.scheduleViewportRemeasure();
   }
 
@@ -597,8 +638,9 @@ export class TimelineRenderer {
     return item;
   }
 
-  renderInspector(timeline) {
+  renderInspector(timeline, renderedHeight = getInspectorHeight(timeline)) {
     const inspector = el("div", "htd-inspector");
+    inspector.style.height = `${Math.max(getInspectorHeight(timeline), renderedHeight)}px`;
     const selected = timeline.director_track.sections.find((section) => section.item_id === timeline.ui_state.selected_item_id);
     const selectedAudio = findAudioClip(timeline, timeline.ui_state.selected_item_id);
     const selectedShot = findShot(timeline, timeline.ui_state.selected_item_id);
@@ -2077,7 +2119,14 @@ export class TimelineRenderer {
   handleNodeResize() {
     const measuredWidth = this.measureViewportWidth();
     this.applyViewportContainerWidth(measuredWidth);
-    if (Math.abs(measuredWidth - this.viewportWidth) < 1) return;
+    this.ensureNodeFitsContent(this.controller.timeline);
+    const measuredHeight = this.getRenderedHeight(this.controller.timeline);
+    const widthChanged = Math.abs(measuredWidth - this.viewportWidth) >= 1;
+    const heightChanged = Math.abs(measuredHeight - this.renderedHeight) >= 1;
+    if (!widthChanged && !heightChanged) {
+      this.applyWidgetContainerHeight(measuredHeight, this.contentHeight);
+      return;
+    }
     this.viewportWidth = measuredWidth;
     this.render(this.controller.timeline);
   }
@@ -2090,6 +2139,42 @@ export class TimelineRenderer {
       this.container.parentElement.style.width = `${stableWidth}px`;
       this.container.parentElement.style.maxWidth = `${stableWidth}px`;
     }
+  }
+
+  getRenderedHeight(timeline = this.controller.timeline) {
+    return getTimelineWidgetRenderedHeight(this.node, this.widget, timeline, this.contentHeight);
+  }
+
+  applyWidgetContainerHeight(renderedHeight, contentHeight = this.contentHeight) {
+    const stableHeight = Math.max(1, Number(renderedHeight) || getTimelineWidgetHeight(this.controller.timeline));
+    const stableContentHeight = Math.max(1, Number(contentHeight) || stableHeight);
+    this.renderedHeight = stableHeight;
+    this.container.style.height = `${stableHeight}px`;
+    this.container.style.minHeight = `${stableContentHeight}px`;
+    if (this.container.parentElement) {
+      this.container.parentElement.style.height = `${stableHeight}px`;
+      this.container.parentElement.style.minHeight = `${stableContentHeight}px`;
+    }
+  }
+
+  ensureNodeFitsContent(timeline = this.controller.timeline) {
+    return ensureTimelineNodeFitsContent(this.node, this.widget, timeline, this.contentHeight, this.app);
+  }
+
+  updateMeasuredContentHeight(timeline = this.controller.timeline) {
+    const measuredHeight = measureIntrinsicTimelineContentHeight(this.container, this.viewportWidth, timeline);
+    if (measuredHeight <= this.contentHeight + 1) return;
+    this.contentHeight = measuredHeight;
+    this.ensureNodeFitsContent(timeline);
+    const renderedHeight = this.getRenderedHeight(timeline);
+    this.applyWidgetContainerHeight(renderedHeight, this.contentHeight);
+    this.applyRenderedInspectorHeight(timeline, renderedHeight);
+  }
+
+  applyRenderedInspectorHeight(timeline, renderedHeight) {
+    const inspector = this.container.querySelector?.(".htd-inspector");
+    if (!inspector) return;
+    inspector.style.height = `${getRenderedInspectorHeight(timeline, renderedHeight)}px`;
   }
 
   scheduleViewportRemeasure() {
@@ -2139,15 +2224,20 @@ export class TimelineRenderer {
 export function mountTimelineRenderer(node, app, controller) {
   if (node._timelineRenderer) return node._timelineRenderer;
   const container = document.createElement("div");
-  const widgetHeight = () => getTimelineWidgetHeight(controller.timeline);
-  const widget = node.addDOMWidget?.("video_timeline_director", "VideoTimelineDirector", container, {
+  const widgetContentHeight = () => Math.max(
+    getTimelineWidgetHeight(controller.timeline),
+    Number(node._timelineRenderer?.contentHeight ?? 0) || 0,
+  );
+  let widget = null;
+  const widgetRenderedHeight = () => getTimelineWidgetRenderedHeight(node, widget, controller.timeline, widgetContentHeight());
+  widget = node.addDOMWidget?.("video_timeline_director", "VideoTimelineDirector", container, {
     serialize: false,
     hideOnZoom: false,
-    getMinHeight: widgetHeight,
-    getMaxHeight: widgetHeight,
-    getHeight: widgetHeight,
+    getMinHeight: widgetContentHeight,
+    getMaxHeight: widgetRenderedHeight,
+    getHeight: widgetRenderedHeight,
   });
-  const renderer = new TimelineRenderer(node, app, controller, container);
+  const renderer = new TimelineRenderer(node, app, controller, container, widget);
   node._timelineRenderer = renderer;
   node._timelineRendererWidget = widget;
   return renderer;
@@ -2337,6 +2427,64 @@ function getInspectorHeight(timeline) {
   const selectedAudio = findAudioClip(timeline, timeline?.ui_state?.selected_item_id);
   const selectedShot = findShot(timeline, timeline?.ui_state?.selected_item_id);
   return selected || selectedAudio || selectedShot ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
+}
+
+function getRenderedInspectorHeight(timeline, widgetHeight) {
+  const remainingHeight = Number(widgetHeight)
+    - TOOLBAR_HEIGHT
+    - RANGE_CONTROL_HEIGHT
+    - getTimelineViewportHeight(timeline)
+    - ROOT_GAP * 3;
+  return Math.max(getInspectorHeight(timeline), remainingHeight);
+}
+
+function timelineWidgetAvailableHeight(node, widget) {
+  const nodeHeight = positiveNumber(node?.size?.[1]);
+  const widgetY = timelineWidgetY(widget);
+  if (!nodeHeight || !widgetY || nodeHeight <= widgetY + NODE_BODY_BOTTOM_PADDING) return 0;
+  return nodeHeight - widgetY - NODE_BODY_BOTTOM_PADDING;
+}
+
+function timelineWidgetY(widget) {
+  return Math.max(positiveNumber(widget?.y), positiveNumber(widget?.last_y));
+}
+
+function measureIntrinsicTimelineContentHeight(container, viewportWidth, timeline) {
+  const root = container?.querySelector?.(".htd-root");
+  const documentRef = container?.ownerDocument ?? globalThis.document;
+  if (!root?.cloneNode || !documentRef?.createElement) return getTimelineWidgetHeight(timeline);
+
+  const clone = root.cloneNode(true);
+  clone.style.position = "absolute";
+  clone.style.left = "-100000px";
+  clone.style.top = "0";
+  clone.style.width = `${Math.max(1, Number(viewportWidth) || TIMELINE_WIDTH)}px`;
+  clone.style.height = "auto";
+  clone.style.minHeight = "0";
+  clone.style.maxHeight = "none";
+  clone.style.visibility = "hidden";
+  clone.style.pointerEvents = "none";
+  clone.style.overflow = "visible";
+
+  for (const inspector of clone.querySelectorAll?.(".htd-inspector") ?? []) {
+    inspector.style.height = "auto";
+    inspector.style.minHeight = "";
+    inspector.style.maxHeight = "none";
+  }
+  for (const panel of clone.querySelectorAll?.(".htd-inspector-panel") ?? []) {
+    panel.style.height = "auto";
+    panel.style.minHeight = "";
+    panel.style.maxHeight = "none";
+  }
+
+  container.append?.(clone);
+  const measuredHeight = Math.max(
+    positiveNumber(clone.scrollHeight),
+    positiveNumber(clone.offsetHeight),
+    positiveNumber(clone.getBoundingClientRect?.().height),
+  );
+  clone.remove?.();
+  return Math.max(getTimelineWidgetHeight(timeline), Math.ceil(measuredHeight));
 }
 
 function positiveNumber(value) {

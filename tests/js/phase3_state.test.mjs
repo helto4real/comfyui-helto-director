@@ -371,6 +371,8 @@ async function testExtensionFlushesBeforeNodeSerialize() {
   assert.equal(extensionSource.includes("this._timelineRenderer?.handleNodeResize?.()"), true);
   assert.equal(extensionSource.includes("const onDrawForeground = nodeType.prototype.onDrawForeground"), true);
   assert.equal(extensionSource.includes("_timelineDirectorLastNodeWidth"), true);
+  assert.equal(extensionSource.includes("_timelineDirectorLastNodeHeight"), true);
+  assert.equal(extensionSource.includes("function getNodeHeight(node)"), true);
 }
 
 async function testGestureMouseupCommitBoundary() {

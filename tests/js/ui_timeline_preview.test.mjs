@@ -9,6 +9,9 @@ import {
   getTimelineViewportHeight,
 } from "../../web/timeline/geometry.js";
 import {
+  ensureTimelineNodeFitsContent,
+  getTimelineNodeMinimumHeight,
+  getTimelineWidgetRenderedHeight,
   getTimelineWidgetHeight,
   isDefaultEmptyTimeline,
   measureStableTimelineViewportWidth,
@@ -62,6 +65,39 @@ function testSelectedPromptUsesShotAwareInspectorHeight() {
   timeline.ui_state.selected_item_id = "section_001";
 
   assert.equal(getTimelineWidgetHeight(timeline), 528);
+}
+
+function testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.director_track.sections.push({
+    item_id: "section_001",
+    type: "Text",
+    start_time: 0,
+    end_time: 1,
+    prompt: "hello",
+  });
+  timeline.ui_state.selected_item_id = "section_001";
+
+  const widget = { y: 180 };
+  const contentHeight = getTimelineWidgetHeight(timeline);
+  assert.equal(contentHeight, 528);
+  assert.equal(getTimelineWidgetRenderedHeight({ size: [820, 900] }, widget, timeline), 700);
+  assert.equal(getTimelineNodeMinimumHeight({ size: [820, 600] }, widget, timeline), 728);
+
+  const setSizes = [];
+  const node = {
+    size: [820, 600],
+    setSize(nextSize) {
+      this.size = nextSize;
+      setSizes.push(nextSize);
+    },
+  };
+  assert.equal(ensureTimelineNodeFitsContent(node, widget, timeline), true);
+  assert.deepEqual(setSizes, [[820, 728]]);
+  assert.equal(getTimelineWidgetRenderedHeight(node, widget, timeline), contentHeight);
+
+  const tallNode = { size: [820, 900] };
+  assert.equal(ensureTimelineNodeFitsContent(tallNode, widget, timeline), false);
 }
 
 function testAudioLanesExpandViewportToContent() {
@@ -158,11 +194,17 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("measureStableTimelineViewportWidth(this.node, this.container)"), true);
   assert.equal(rendererSource.includes("this.applyViewportContainerWidth(this.viewportWidth)"), true);
   assert.equal(rendererSource.includes("handleNodeResize()"), true);
+  assert.equal(rendererSource.includes("getTimelineWidgetRenderedHeight(node, widget"), true);
+  assert.equal(rendererSource.includes("ensureTimelineNodeFitsContent(this.node, this.widget"), true);
+  assert.equal(rendererSource.includes("getRenderedInspectorHeight(timeline, renderedHeight)"), true);
+  assert.equal(rendererSource.includes("measureIntrinsicTimelineContentHeight"), true);
   assert.equal(rendererSource.includes("applyViewportContainerWidth(width)"), true);
+  assert.equal(rendererSource.includes("applyWidgetContainerHeight(renderedHeight"), true);
   assert.equal(rendererSource.includes("this.container.style.width = `${stableWidth}px`;"), true);
   assert.equal(rendererSource.includes("this.container.style.maxWidth = `${stableWidth}px`;"), true);
   assert.equal(rendererSource.includes("this.container.parentElement.style.width = `${stableWidth}px`;"), true);
   assert.equal(rendererSource.includes("this.container.parentElement.style.maxWidth = `${stableWidth}px`;"), true);
+  assert.equal(rendererSource.includes("this.container.parentElement.style.height = `${stableHeight}px`;"), true);
   assert.equal(rendererSource.includes("root.style.width = `${this.viewportWidth}px`;"), true);
   assert.equal(rendererSource.includes("nodeBodyWidth(node)"), true);
   assert.equal(rendererSource.includes("if (nodeWidth > 0) return Math.max(1, nodeWidth);"), true);
@@ -525,6 +567,7 @@ function testViewportMeasurementIgnoresCollapsedChildWidth() {
 testTimelineHeightIsTripled();
 testClearTimelineButtonEnablementHelper();
 testSelectedPromptUsesShotAwareInspectorHeight();
+testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();

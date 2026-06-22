@@ -47,6 +47,7 @@ app.registerExtension({
     nodeType.prototype.onResize = function () {
       const result = onResize?.apply(this, arguments);
       this._timelineDirectorLastNodeWidth = getNodeWidth(this);
+      this._timelineDirectorLastNodeHeight = getNodeHeight(this);
       this._timelineRenderer?.handleNodeResize?.();
       return result;
     };
@@ -55,8 +56,13 @@ app.registerExtension({
     nodeType.prototype.onDrawForeground = function () {
       const result = onDrawForeground?.apply(this, arguments);
       const nodeWidth = getNodeWidth(this);
-      if (nodeWidth > 0 && Math.abs(nodeWidth - Number(this._timelineDirectorLastNodeWidth ?? 0)) >= 1) {
+      const nodeHeight = getNodeHeight(this);
+      if (
+        (nodeWidth > 0 && Math.abs(nodeWidth - Number(this._timelineDirectorLastNodeWidth ?? 0)) >= 1) ||
+        (nodeHeight > 0 && Math.abs(nodeHeight - Number(this._timelineDirectorLastNodeHeight ?? 0)) >= 1)
+      ) {
         this._timelineDirectorLastNodeWidth = nodeWidth;
+        this._timelineDirectorLastNodeHeight = nodeHeight;
         this._timelineRenderer?.handleNodeResize?.();
       }
       return result;
@@ -75,6 +81,11 @@ app.registerExtension({
 function getNodeWidth(node) {
   const width = Number(node?.size?.[0] ?? 0);
   return Number.isFinite(width) ? width : 0;
+}
+
+function getNodeHeight(node) {
+  const height = Number(node?.size?.[1] ?? 0);
+  return Number.isFinite(height) ? height : 0;
 }
 
 function installWanSegmentedExecutorSplitStepSync(nodeType) {
