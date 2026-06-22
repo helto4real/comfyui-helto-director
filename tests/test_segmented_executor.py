@@ -18,7 +18,7 @@ from shared.segmented_executor import (
     stitch_spilled_segment_images,
     trim_visible_segment_images,
 )
-from shared.timeline import create_default_video_timeline
+from shared.timeline import apply_take_registration, create_default_video_timeline, validate_video_timeline
 from shared.timeline_status import TimelineStatusReporter
 import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
@@ -1603,10 +1603,23 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
     assert stages[-3:] == ["timeline.stitch", "timeline.audio", "timeline.done"]
     take_registration = debug["segments"][0]["take_registration"]
     assert take_registration["shot_id"] == "shot_section_001"
+    assert take_registration["shot_ids"] == ["shot_section_001"]
+    assert take_registration["registration_ready"] is True
+    assert take_registration["capture_blockers"] == []
     assert take_registration["segment_context"]["id"] == "gen_001"
+    assert take_registration["take"]["take_id"] == "take_wan_shot_section_001_gen_001_generated"
     assert take_registration["take"]["seed"] == 1
     assert take_registration["take"]["metadata"]["settings"]["steps"] == 4
+    assert take_registration["asset_suggestion"]["name"] == take_registration["suggested_asset_name"]
     assert take_registration["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE][0]["name"] == "segment_style.safetensors"
+
+    registered = apply_take_registration(
+        _timeline_with_text_section("section_001"),
+        take_registration,
+        generated_asset_path="/tmp/output/wan_segment.mp4",
+    )
+    assert registered["take_id"] == "take_wan_shot_section_001_gen_001_generated"
+    assert validate_video_timeline(registered["timeline"])["is_valid"] is True
 
 
 def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, tmp_path):
@@ -2173,6 +2186,21 @@ def _ltx_one_segment_native_generated_audio_executor_plan():
         }
     ]
     return plan
+
+
+def _timeline_with_text_section(item_id: str):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 1.0
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": item_id,
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "segment prompt",
+        }
+    )
+    return timeline
 
 
 class _FakeNativeAudioVAE:

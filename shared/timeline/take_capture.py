@@ -66,6 +66,20 @@ def build_take_capture_metadata(
         segment=segment_context,
         privacy_mode=privacy_mode,
     )
+    take_id = _suggested_take_id(
+        model_family,
+        shot_id=shot_id,
+        segment=segment_context,
+    )
+    asset_suggestion = {
+        "type": str(expected_asset_type or ASSET_TYPE_VIDEO),
+        "source_kind": ASSET_SOURCE_GENERATED,
+        "name": suggested_name,
+        "metadata": {
+            "model_family": str(model_family or ""),
+            "model_version": str(model_version or ""),
+        },
+    }
     runtime_settings = {
         **_runtime_output_settings(plan),
         **_strip_embedded_media(settings or {}),
@@ -92,22 +106,23 @@ def build_take_capture_metadata(
         "type": TAKE_CAPTURE_TYPE,
         "shot_id": shot_id,
         "shot_ids": shot_ids,
+        "registration_ready": shot_id is not None,
+        "capture_blockers": _capture_blockers(shot_id, shot_ids),
         "expected_asset_type": str(expected_asset_type or ASSET_TYPE_VIDEO),
         "suggested_asset_name": suggested_name,
+        "asset_suggestion": deepcopy(asset_suggestion),
         "plan_hash": plan_hash,
         "prompt_hash": prompt_hash,
         "asset": {
-            "type": str(expected_asset_type or ASSET_TYPE_VIDEO),
-            "source_kind": ASSET_SOURCE_GENERATED,
-            "name": suggested_name,
+            **deepcopy(asset_suggestion),
             "metadata": {
-                "model_family": str(model_family or ""),
-                "model_version": str(model_version or ""),
+                **deepcopy(asset_suggestion["metadata"]),
                 "plan_hash": plan_hash,
                 "prompt_hash": prompt_hash,
             },
         },
         "take": {
+            "take_id": take_id,
             "status": TAKE_STATUS_CANDIDATE,
             "seed": seed,
             "model_family": str(model_family or ""),
@@ -334,6 +349,31 @@ def _suggested_asset_name(
         parts.append(str(segment["id"]))
     parts.append("generated")
     return f"{_slug('_'.join(parts))}{extension}"
+
+
+def _suggested_take_id(
+    model_family: str,
+    *,
+    shot_id: str | None,
+    segment: dict[str, Any] | None,
+) -> str:
+    parts = ["take"]
+    if model_family:
+        parts.append(str(model_family))
+    if shot_id:
+        parts.append(str(shot_id))
+    if isinstance(segment, dict) and segment.get("id"):
+        parts.append(str(segment["id"]))
+    parts.append("generated")
+    return _slug("_".join(parts))
+
+
+def _capture_blockers(shot_id: str | None, shot_ids: list[str]) -> list[str]:
+    if shot_id:
+        return []
+    if shot_ids:
+        return ["TAKE_CAPTURE_MULTIPLE_SHOTS"]
+    return ["TAKE_CAPTURE_NO_SHOT_ID"]
 
 
 def _strip_embedded_media(value: Any) -> Any:

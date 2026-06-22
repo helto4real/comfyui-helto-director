@@ -38,7 +38,7 @@ from shared.ltx.runtime import runtime as ltx_runtime
 from shared.lora import config as lora_config_module
 from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
-from shared.timeline import create_default_video_timeline, create_resolved_lora_snapshot, validate_video_timeline
+from shared.timeline import apply_take_registration, create_default_video_timeline, create_resolved_lora_snapshot, validate_video_timeline
 from shared.timeline.take_capture import TAKE_CAPTURE_TYPE
 
 
@@ -223,20 +223,8 @@ def _text_plan(duration=1.0, prompt="wide shot"):
 
 
 def _shot_text_plan(duration=1.0, prompt="wide shot", *, privacy_mode: bool = False):
-    timeline = create_default_video_timeline()
-    timeline["project"]["duration_seconds"] = duration
-    timeline["project"]["frame_rate"] = 24.0
-    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline = _timeline_for_section("section_001", duration=duration, prompt=prompt)
     timeline["project"]["privacy"]["mode"] = privacy_mode
-    timeline["director_track"]["sections"].append(
-        {
-            "item_id": "section_001",
-            "type": SECTION_TYPE_TEXT,
-            "start_time": 0.0,
-            "end_time": duration,
-            "prompt": prompt,
-        }
-    )
     plan, validation, _ = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(),
@@ -244,6 +232,23 @@ def _shot_text_plan(duration=1.0, prompt="wide shot", *, privacy_mode: bool = Fa
     )
     assert validation["is_valid"] is True
     return plan
+
+
+def _timeline_for_section(item_id: str, *, duration=1.0, prompt="wide shot"):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = duration
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": item_id,
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": duration,
+            "prompt": prompt,
+        }
+    )
+    return timeline
 
 
 def _image_plan(path: Path):
@@ -770,8 +775,13 @@ def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
 
     metadata = runtime_debug["take_registration"]
     assert metadata["type"] == TAKE_CAPTURE_TYPE
+    assert metadata["schema_version"] == 1
     assert metadata["shot_id"] == "shot_section_001"
+    assert metadata["shot_ids"] == ["shot_section_001"]
+    assert metadata["registration_ready"] is True
+    assert metadata["capture_blockers"] == []
     assert metadata["expected_asset_type"] == ASSET_TYPE_VIDEO
+    assert metadata["take"]["take_id"] == "take_ltx_shot_section_001_generated"
     assert metadata["take"]["status"] == "Candidate"
     assert metadata["take"]["model_family"] == "LTX"
     assert metadata["take"]["model_version"] == "2.3"
@@ -780,10 +790,21 @@ def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
     assert metadata["shot_context"]["original_end_time"] == 2.0
     assert metadata["shot_context"]["local_duration_seconds"] == 2.0
     assert metadata["asset"]["source_kind"] == "Generated"
+    assert metadata["asset_suggestion"]["source_kind"] == "Generated"
+    assert metadata["asset_suggestion"]["name"] == metadata["suggested_asset_name"]
     assert metadata["asset"].get("path") is None
     assert "secret hero prompt" not in json.dumps(metadata)
     assert "data:" not in json.dumps(metadata)
     assert runtime_debug["summary"]["take_registration_ready"] is True
+    assert runtime_debug["summary"]["take_registration_shot_ids"] == ["shot_section_001"]
+
+    registered = apply_take_registration(
+        _timeline_for_section("section_001", duration=2.0, prompt="secret hero prompt"),
+        metadata,
+        generated_asset_path="/tmp/output/ltx_shot.mp4",
+    )
+    assert registered["take_id"] == "take_ltx_shot_section_001_generated"
+    assert validate_video_timeline(registered["timeline"])["is_valid"] is True
 
 
 def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monkeypatch):
@@ -804,6 +825,7 @@ def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monke
     assert row["name"] == "lora_001"
     assert row["name_hash"]
     assert metadata["privacy"]["privacy_mode"] is True
+    assert metadata["asset_suggestion"]["name"] == "generated_video.mp4"
     assert metadata["suggested_asset_name"] == "generated_video.mp4"
     assert "private_style.safetensors" not in json.dumps(metadata)
     assert "private prompt" not in json.dumps(metadata)

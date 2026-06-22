@@ -111,8 +111,11 @@ def build_runtime_debug(
     }
     if take_registration is not None:
         runtime_debug["take_registration"] = deepcopy(take_registration)
-        runtime_debug["summary"]["take_registration_ready"] = (
-            take_registration.get("shot_id") is not None
+        runtime_debug["summary"]["take_registration_ready"] = bool(
+            take_registration.get("registration_ready")
+        )
+        runtime_debug["summary"]["take_registration_shot_ids"] = list(
+            take_registration.get("shot_ids") or []
         )
     runtime_debug["status"] = summarize_wan_runtime_status(plan, runtime_debug, validation)
     return runtime_debug

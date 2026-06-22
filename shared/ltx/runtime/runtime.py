@@ -400,7 +400,8 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
     }
     if take_registration is not None:
         debug["take_registration"] = take_registration
-        debug["summary"]["take_registration_ready"] = take_registration.get("shot_id") is not None
+        debug["summary"]["take_registration_ready"] = bool(take_registration.get("registration_ready"))
+        debug["summary"]["take_registration_shot_ids"] = list(take_registration.get("shot_ids") or [])
     return debug
 
 
