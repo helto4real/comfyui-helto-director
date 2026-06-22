@@ -1,7 +1,10 @@
 import json
 
+import pytest
+
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
+    ASSET_SOURCE_GENERATED,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
     BOUNDARY_MODE_BLEND_SEAM,
@@ -22,18 +25,23 @@ from shared.contracts.video_timeline import (
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
+    SHOT_TYPE_EXTENDED,
     SHOT_TYPE_GENERATED,
+    SHOT_TYPE_IMPORTED,
+    TAKE_STATUS_ACCEPTED,
     TAKE_STATUS_CANDIDATE,
     VIDEO_TIMELINE_TYPE,
 )
 from shared.timeline import (
     create_default_video_timeline,
     detect_director_gaps,
+    extract_shot_timeline,
     frame_to_seconds,
     merge_prompts,
     migrate_video_timeline,
     normalize_video_timeline,
     seconds_to_frame,
+    ShotExtractionError,
     time_range_to_frames,
     validate_video_timeline,
 )
@@ -45,6 +53,168 @@ def _error_codes(validation: dict) -> list[str]:
 
 def _warning_codes(validation: dict) -> list[str]:
     return [entry["code"] for entry in validation["warnings"]]
+
+
+def _shot_extraction_timeline(
+    *,
+    incoming_mode: str = BOUNDARY_MODE_HARD_CUT,
+    outgoing_mode: str = BOUNDARY_MODE_HARD_CUT,
+    outgoing_tail_frames: int = 5,
+    outgoing_blend_frames: int = 3,
+) -> dict:
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 8.0
+    timeline["project"]["global_prompt"] = {
+        "enabled": True,
+        "prompt": "shared look",
+        "position": GLOBAL_PROMPT_POSITION_SUFFIX,
+        "show_effective_prompt": True,
+    }
+    timeline["project"]["audio"]["always_normalize"] = True
+    timeline["project"]["privacy"] = {"mode": True}
+    timeline["project"]["metadata"]["character_references"] = [
+        {
+            "id": "hero_ref",
+            "label": "hero",
+            "kind": "character",
+            "enabled": True,
+            "description": "",
+            "strength": 1.0,
+            "image": {"path": "/mnt/media/hero.png"},
+        }
+    ]
+    timeline["project"]["model_loras"]["global"][MODEL_LORA_MODEL_LTX_2_3][
+        MODEL_LORA_TARGET_MAIN
+    ]["ui"]["match"] = "cinematic"
+    timeline["assets"] = [
+        {
+            "asset_id": "asset_prev_take",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_GENERATED,
+            "path": "/mnt/output/prev.mp4",
+            "name": "prev.mp4",
+        },
+        {
+            "asset_id": "asset_next_clip",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_GENERATED,
+            "path": "/mnt/output/next.mp4",
+            "name": "next.mp4",
+        },
+        {
+            "asset_id": "asset_source_video",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/source.mp4",
+            "name": "source.mp4",
+        },
+    ]
+    timeline["director_track"]["sections"] = [
+        {
+            "item_id": "prev_text",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "prompt": "previous",
+        },
+        {
+            "item_id": "middle_text",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 2.5,
+            "end_time": 4.0,
+            "prompt": "middle",
+        },
+        {
+            "item_id": "middle_video",
+            "type": SECTION_TYPE_VIDEO,
+            "start_time": 4.0,
+            "end_time": 5.0,
+            "video": {"asset_id": "asset_source_video"},
+            "prompt": "extend source",
+            "source_in": 1.25,
+        },
+        {
+            "item_id": "next_text",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 5.0,
+            "end_time": 8.0,
+            "prompt": "next",
+        },
+    ]
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_prev",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "section_ids": ["prev_text"],
+            "takes": [
+                {
+                    "take_id": "take_prev",
+                    "asset_id": "asset_prev_take",
+                    "status": TAKE_STATUS_ACCEPTED,
+                }
+            ],
+            "accepted_take_id": "take_prev",
+        },
+        {
+            "shot_id": "shot_middle",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 2.0,
+            "end_time": 5.0,
+            "section_ids": ["middle_text", "middle_video"],
+            "lora_overrides": {
+                "enabled": True,
+                "merge_mode": LORA_MERGE_MODE_ADD_TO_GLOBAL,
+                "targets": {
+                    MODEL_LORA_MODEL_LTX_2_3: {
+                        MODEL_LORA_TARGET_MAIN: {
+                            "version": 1,
+                            "loras": [],
+                            "ui": {"show_strengths": "single", "match": "shot look"},
+                        }
+                    }
+                },
+            },
+        },
+        {
+            "shot_id": "shot_next",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 5.0,
+            "end_time": 8.0,
+            "section_ids": ["next_text"],
+            "takes": [
+                {
+                    "take_id": "take_next",
+                    "asset_id": "asset_next_take",
+                    "status": TAKE_STATUS_ACCEPTED,
+                }
+            ],
+            "accepted_take_id": "take_next",
+            "clip_instance": {"asset_id": "asset_next_clip"},
+        },
+    ]
+    timeline["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_prev_middle",
+            "left_shot_id": "shot_prev",
+            "right_shot_id": "shot_middle",
+            "mode": incoming_mode,
+            "tail_frames": 6,
+            "blend_frames": 2,
+            "metadata": {"side": "incoming"},
+        },
+        {
+            "boundary_id": "boundary_middle_next",
+            "left_shot_id": "shot_middle",
+            "right_shot_id": "shot_next",
+            "mode": outgoing_mode,
+            "tail_frames": outgoing_tail_frames,
+            "blend_frames": outgoing_blend_frames,
+            "metadata": {"side": "outgoing"},
+        },
+    ]
+    return timeline
 
 
 def test_create_default_video_timeline_shape():
@@ -459,6 +629,231 @@ def test_json_roundtrip_preserves_migrated_sequence_data():
     roundtripped = normalize_video_timeline(json.dumps(normalized))
 
     assert roundtripped["sequence"] == normalized["sequence"]
+
+
+def test_extract_generated_shot_creates_local_timeline_with_shifted_sections():
+    timeline = _shot_extraction_timeline()
+
+    result = extract_shot_timeline(timeline, "shot_middle")
+    local = result["timeline"]
+    context = result["shot_context"]
+    local_shot = local["sequence"]["shots"][0]
+
+    assert local["project"]["duration_seconds"] == 3.0
+    assert local["director_track"]["sections"] == [
+        {
+            "item_id": "middle_text",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.5,
+            "end_time": 2.0,
+            "prompt": "middle",
+        },
+        {
+            "item_id": "middle_video",
+            "type": SECTION_TYPE_VIDEO,
+            "start_time": 2.0,
+            "end_time": 3.0,
+            "video": {"asset_id": "asset_source_video"},
+            "prompt": "extend source",
+            "source_in": 1.25,
+            "guide_strength": 1.0,
+            "crop_mode": "Project Default",
+            "source_out": None,
+            "timing_mode": "Fit to Section",
+            "video_guidance_range": "Last Frames",
+            "video_guidance_frame_count": 17,
+        },
+    ]
+    assert local["sequence"]["boundaries"] == []
+    assert local_shot["shot_id"] == "shot_middle"
+    assert local_shot["type"] == SHOT_TYPE_GENERATED
+    assert local_shot["start_time"] == 0.0
+    assert local_shot["end_time"] == 3.0
+    assert local_shot["section_ids"] == ["middle_text", "middle_video"]
+    assert context["shot_id"] == "shot_middle"
+    assert context["original_start_time"] == 2.0
+    assert context["original_end_time"] == 5.0
+    assert context["time_offset_seconds"] == 2.0
+    assert local["sequence"]["metadata"]["shot_extraction"] == context
+
+
+def test_extract_imported_shot_preserves_clip_metadata():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["assets"].append(
+        {
+            "asset_id": "asset_imported",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/imported.mp4",
+        }
+    )
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_imported",
+            "type": SHOT_TYPE_IMPORTED,
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "clip_instance": {
+                "asset_id": "asset_imported",
+                "source_in": 0.25,
+                "source_out": 2.25,
+            },
+        }
+    ]
+
+    result = extract_shot_timeline(timeline, "shot_imported")
+    local = result["timeline"]
+    local_shot = local["sequence"]["shots"][0]
+
+    assert local["project"]["duration_seconds"] == 2.0
+    assert local["director_track"]["sections"] == []
+    assert local_shot["type"] == SHOT_TYPE_IMPORTED
+    assert local_shot["clip_instance"] == {
+        "asset_id": "asset_imported",
+        "source_in": 0.25,
+        "source_out": 2.25,
+        "speed": 1.0,
+        "enabled": True,
+    }
+
+
+def test_extract_extended_shot_preserves_source_video_section():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 12.0
+    timeline["assets"].append(
+        {
+            "asset_id": "asset_source",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_FILE_PATH,
+            "path": "/mnt/media/source.mp4",
+        }
+    )
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "source_section",
+            "type": SECTION_TYPE_VIDEO,
+            "start_time": 10.0,
+            "end_time": 12.0,
+            "video": {"asset_id": "asset_source"},
+            "prompt": "continue",
+            "source_in": 3.5,
+        }
+    )
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_extended",
+            "type": SHOT_TYPE_EXTENDED,
+            "start_time": 10.0,
+            "end_time": 12.0,
+            "section_ids": ["source_section"],
+        }
+    ]
+
+    result = extract_shot_timeline(timeline, "shot_extended")
+    local_section = result["timeline"]["director_track"]["sections"][0]
+
+    assert result["timeline"]["project"]["duration_seconds"] == 2.0
+    assert result["timeline"]["sequence"]["shots"][0]["type"] == SHOT_TYPE_EXTENDED
+    assert local_section["start_time"] == 0.0
+    assert local_section["end_time"] == 2.0
+    assert local_section["video"] == {"asset_id": "asset_source"}
+    assert local_section["source_in"] == 3.5
+
+
+def test_shot_extraction_preserves_project_assets_privacy_references_and_loras():
+    timeline = _shot_extraction_timeline()
+    normalized = normalize_video_timeline(timeline)
+
+    result = extract_shot_timeline(timeline, "shot_middle")
+    local = result["timeline"]
+
+    assert local["assets"] == normalized["assets"]
+    assert local["project"]["global_prompt"] == normalized["project"]["global_prompt"]
+    assert local["project"]["audio"] == normalized["project"]["audio"]
+    assert local["project"]["privacy"] == {"mode": True}
+    assert local["project"]["metadata"]["character_references"] == normalized["project"]["metadata"]["character_references"]
+    assert local["project"]["model_loras"]["global"][MODEL_LORA_MODEL_LTX_2_3][
+        MODEL_LORA_TARGET_MAIN
+    ]["ui"]["match"] == "cinematic"
+    assert local["sequence"]["shots"][0]["lora_overrides"]["targets"][
+        MODEL_LORA_MODEL_LTX_2_3
+    ][MODEL_LORA_TARGET_MAIN]["ui"]["match"] == "shot look"
+    for asset in local["assets"]:
+        assert "thumbnail" not in asset
+        assert "waveform" not in asset
+    for section in local["director_track"]["sections"]:
+        assert "thumbnail" not in section
+        assert "waveform" not in section
+
+
+def test_shot_boundary_context_marks_hard_cut_as_no_continuity():
+    timeline = _shot_extraction_timeline()
+
+    context = extract_shot_timeline(timeline, "shot_middle")["shot_context"]["boundary_context"]
+
+    assert context["previous_shot_id"] == "shot_prev"
+    assert context["next_shot_id"] == "shot_next"
+    assert context["incoming_boundary"]["mode"] == BOUNDARY_MODE_HARD_CUT
+    assert context["outgoing_boundary"]["mode"] == BOUNDARY_MODE_HARD_CUT
+    assert context["previous_accepted_take_id"] == "take_prev"
+    assert context["previous_clip_asset_id"] == "asset_prev_take"
+    assert context["next_accepted_take_id"] == "take_next"
+    assert context["next_clip_asset_id"] == "asset_next_clip"
+    assert context["continuity_policy"] == "none"
+    assert context["tail_frames"] == 0
+    assert context["blend_frames"] == 0
+
+
+def test_shot_boundary_context_allows_continuous_shot_tail():
+    timeline = _shot_extraction_timeline(
+        outgoing_mode=BOUNDARY_MODE_CONTINUOUS_SHOT,
+        outgoing_tail_frames=9,
+    )
+
+    context = extract_shot_timeline(timeline, "shot_middle")["shot_context"]["boundary_context"]
+
+    assert context["outgoing_boundary"]["mode"] == BOUNDARY_MODE_CONTINUOUS_SHOT
+    assert context["outgoing_continuity_policy"] == "continuous"
+    assert context["continuity_policy"] == "continuous"
+    assert context["tail_frames"] == 9
+    assert context["blend_frames"] == 0
+
+
+def test_shot_boundary_context_preserves_blend_seam_frames():
+    timeline = _shot_extraction_timeline(
+        outgoing_mode=BOUNDARY_MODE_BLEND_SEAM,
+        outgoing_tail_frames=7,
+        outgoing_blend_frames=4,
+    )
+
+    context = extract_shot_timeline(timeline, "shot_middle")["shot_context"]["boundary_context"]
+
+    assert context["outgoing_boundary"]["mode"] == BOUNDARY_MODE_BLEND_SEAM
+    assert context["outgoing_boundary"]["blend_frames"] == 4
+    assert context["outgoing_continuity_policy"] == "blend"
+    assert context["continuity_policy"] == "blend"
+    assert context["tail_frames"] == 7
+    assert context["blend_frames"] == 4
+
+
+def test_shot_extraction_missing_shot_raises_clear_error():
+    with pytest.raises(ShotExtractionError, match="Shot 'missing' was not found"):
+        extract_shot_timeline(_shot_extraction_timeline(), "missing")
+
+
+def test_shot_extraction_does_not_mutate_full_timeline_workflow_shape():
+    timeline = _shot_extraction_timeline()
+    normalized_before = normalize_video_timeline(timeline)
+
+    result = extract_shot_timeline(timeline, "shot_middle")
+    normalized_after = normalize_video_timeline(timeline)
+
+    assert normalized_after == normalized_before
+    assert len(normalized_before["sequence"]["shots"]) == 3
+    assert len(normalized_before["director_track"]["sections"]) == 4
+    assert result["timeline"]["sequence"]["shots"][0]["shot_id"] == "shot_middle"
+    assert len(result["timeline"]["sequence"]["shots"]) == 1
 
 
 def test_normalization_drops_legacy_lora_fields_and_creates_model_targets():
