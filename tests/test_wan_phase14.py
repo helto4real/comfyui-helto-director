@@ -20,7 +20,13 @@ from shared.contracts.video_timeline import (
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
 )
-from shared.timeline import apply_take_registration, create_default_video_timeline, validate_video_timeline
+from shared.timeline import (
+    GENERATION_MODE_FORCE_FULL_TIMELINE,
+    GENERATION_MODE_FORCE_SELECTED,
+    apply_take_registration,
+    create_default_video_timeline,
+    validate_video_timeline,
+)
 from shared.timeline.take_capture import TAKE_CAPTURE_TYPE
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.runtime import runtime as wan_runtime
@@ -73,11 +79,34 @@ def test_plan_only_runtime_succeeds_without_model_clip_or_vae():
     assert _validation_codes(runtime_debug, "info").count("WAN_RUNTIME_BACKEND_PLAN_ONLY") >= 1
 
 
+def test_wan_runtime_skipped_plan_returns_no_take_registration_without_backend_inputs():
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _text_timeline(),
+        create_wan_timeline_config(debug_mode="Summary"),
+    )
+    plan["section_plan"] = []
+    plan["prompt_plan"] = []
+    plan["media_plan"] = []
+    plan["audio_plan"] = []
+    plan["model_specific"]["wan"]["generation_policy"] = {
+        "status": "skipped",
+        "skip_reason": "all_shots_ready",
+        "mode": "Missing Only",
+    }
+
+    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+
+    assert runtime_debug["summary"]["generation_required"] is False
+    assert runtime_debug["summary"]["generation_status"] == "skipped"
+    assert runtime_debug["summary"]["take_registration_ready"] is False
+    assert "take_registration" not in runtime_debug
+
+
 def test_wan_shot_runtime_emits_take_registration_metadata():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
         create_wan_timeline_config(debug_mode="Summary"),
-        shot_id="shot_section_text",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     plan["model_specific"]["wan"]["lora_resolution"]["single_generation_loras"] = {
         MODEL_LORA_TARGET_HIGH_NOISE: _lora_stack("hi.safetensors"),
@@ -122,7 +151,7 @@ def test_wan_runtime_reports_shot_continuity_debug():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
         create_wan_timeline_config(debug_mode="Summary"),
-        shot_id="shot_section_text",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     plan["model_specific"]["wan"]["continuity_context"] = {
         "policy": "continuous",
@@ -152,6 +181,7 @@ def test_auto_backend_resolves_to_plan_only_or_comfyui_core(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=2),
         create_wan_timeline_config(runtime_backend_profile="Auto", debug_mode="Summary"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     *_outputs, plan_only_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
@@ -175,6 +205,7 @@ def test_comfyui_core_patches_both_models_when_connected(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=2),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     plan_before = copy.deepcopy(plan)
     high_input = FakeModel("high")
@@ -214,6 +245,7 @@ def test_wan_runtime_applies_resolved_high_low_loras_to_models_and_not_clip(tmp_
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=2),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     plan["model_specific"]["wan"]["lora_resolution"]["single_generation_loras"] = {
         MODEL_LORA_TARGET_HIGH_NOISE: _lora_stack("hi.safetensors", 0.9, 0.2),
@@ -442,6 +474,7 @@ def _validation_codes(runtime_debug: dict, bucket: str) -> list[str]:
 def _text_timeline():
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 1.0
+    timeline["ui_state"]["selected_item_id"] = "shot_section_text"
     timeline["director_track"]["sections"].append({
         "item_id": "section_text",
         "type": SECTION_TYPE_TEXT,

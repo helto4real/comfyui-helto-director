@@ -10,6 +10,7 @@ from ...shared.contracts.socket_types import (
 from ...shared.ltx.runtime import build_ltx_runtime_outputs
 from ...shared.ltx.runtime.segmented import build_ltx_segmented_executor_outputs
 from ...shared.segmented_executor import SEED_MODES
+from ...shared.timeline import generation_policy_skips_generation
 from ...shared.timeline_status import TimelineStatusReporter
 
 
@@ -35,6 +36,13 @@ def _hidden_unique_id(cls) -> str | None:
     return getattr(getattr(cls, "hidden", None), "unique_id", None)
 
 
+def _ltx_generation_skipped(ltx_timeline_plan: dict | None) -> bool:
+    if not isinstance(ltx_timeline_plan, dict):
+        return False
+    policy = ltx_timeline_plan.get("model_specific", {}).get("ltx", {}).get("generation_policy")
+    return generation_policy_skips_generation(policy)
+
+
 class LTXTimelineRuntime(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -44,9 +52,9 @@ class LTXTimelineRuntime(io.ComfyNode):
             category="timeline/ltx",
             description="Materialize an LTX 2.3 timeline plan into ComfyUI runtime objects.",
             inputs=[
-                io.Model.Input("model"),
-                io.Clip.Input("clip"),
-                io.Vae.Input("vae"),
+                io.Model.Input("model", lazy=True),
+                io.Clip.Input("clip", lazy=True),
+                io.Vae.Input("vae", lazy=True),
                 LTX_TIMELINE_PLAN.Input(
                     "ltx_timeline_plan",
                     display_name="LTX_TIMELINE_PLAN",
@@ -76,12 +84,32 @@ class LTXTimelineRuntime(io.ComfyNode):
         )
 
     @classmethod
+    def check_lazy_status(
+        cls,
+        ltx_timeline_plan: dict | None,
+        model=None,
+        clip=None,
+        vae=None,
+        **kwargs,
+    ) -> list[str]:
+        if _ltx_generation_skipped(ltx_timeline_plan):
+            return []
+        requested = []
+        if model is None:
+            requested.append("model")
+        if clip is None:
+            requested.append("clip")
+        if vae is None:
+            requested.append("vae")
+        return requested
+
+    @classmethod
     def execute(
         cls,
-        model,
-        clip,
-        vae,
-        ltx_timeline_plan: dict,
+        model=None,
+        clip=None,
+        vae=None,
+        ltx_timeline_plan: dict | None = None,
         negative=None,
         optional_latent=None,
         audio_vae=None,

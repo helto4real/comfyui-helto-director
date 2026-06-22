@@ -24,7 +24,12 @@ from shared.contracts.video_timeline import (
 from shared.lora import config as lora_config_module
 from shared.ltx import build_ltx_timeline_plan, create_ltx_timeline_config
 from shared.ltx.config import normalize_ltx_timeline_config
-from shared.timeline import create_default_video_timeline
+from shared.timeline import (
+    GENERATION_MODE_FORCE_FULL_TIMELINE,
+    GENERATION_MODE_FORCE_SELECTED,
+    GENERATION_MODE_MISSING_ONLY,
+    create_default_video_timeline,
+)
 
 
 def get_node_classes():
@@ -169,6 +174,47 @@ def _two_shot_text_timeline_with_continuity() -> dict:
     return timeline
 
 
+def _two_shot_text_timeline_with_ready_shots(*ready_shot_ids: str) -> dict:
+    timeline = _two_shot_text_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_section_001",
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_001"],
+        },
+        {
+            "shot_id": "shot_section_002",
+            "start_time": 1.0,
+            "end_time": 3.0,
+            "section_ids": ["section_002"],
+        },
+    ]
+    for index, shot in enumerate(timeline["sequence"]["shots"], start=1):
+        if shot["shot_id"] not in ready_shot_ids:
+            continue
+        asset_id = f"asset_ready_{index}"
+        take_id = f"take_ready_{index}"
+        timeline["assets"].append(
+            {
+                "asset_id": asset_id,
+                "type": ASSET_TYPE_VIDEO,
+                "source_kind": ASSET_SOURCE_GENERATED,
+                "path": f"/tmp/ready_{index}.mp4",
+                "name": f"ready_{index}.mp4",
+            }
+        )
+        shot["takes"] = [
+            {
+                "take_id": take_id,
+                "asset_id": asset_id,
+                "status": TAKE_STATUS_ACCEPTED,
+            }
+        ]
+        shot["accepted_take_id"] = take_id
+    return timeline
+
+
 def test_ltx_nodes_are_registered_with_custom_sockets():
     node_classes = get_node_classes()
     node_ids = [node.define_schema().node_id for node in node_classes]
@@ -205,11 +251,16 @@ def test_ltx_nodes_are_registered_with_custom_sockets():
     assert [input_item.io_type for input_item in planner_schema.inputs] == [
         "VIDEO_TIMELINE",
         "LTX_TIMELINE_CONFIG",
-        "STRING",
+        "COMBO",
     ]
-    shot_input = planner_schema.inputs[2]
-    assert shot_input.id == "shot_id"
-    assert shot_input.default == ""
+    generation_mode_input = planner_schema.inputs[2]
+    assert generation_mode_input.id == "generation_mode"
+    assert generation_mode_input.default == GENERATION_MODE_MISSING_ONLY
+    assert generation_mode_input.options == [
+        GENERATION_MODE_MISSING_ONLY,
+        GENERATION_MODE_FORCE_SELECTED,
+        GENERATION_MODE_FORCE_FULL_TIMELINE,
+    ]
     assert [output.io_type for output in planner_schema.outputs] == [
         "LTX_TIMELINE_PLAN",
         "TIMELINE_VALIDATION",
@@ -230,6 +281,32 @@ def test_ltx_config_defaults_include_locked_rules():
         "frame_rule": "8n+1",
         "temporal_stride": 8,
     }
+
+
+def test_ltx_runtime_lazy_status_skips_model_inputs_for_skipped_plan():
+    node_classes = get_node_classes()
+    runtime = next(node for node in node_classes if node.define_schema().node_id == "HeltoLTX23TimelineRuntime")
+    skipped_plan = {
+        "model_specific": {
+            "ltx": {
+                "generation_policy": {"status": "skipped"},
+            }
+        }
+    }
+    targeted_plan = {
+        "model_specific": {
+            "ltx": {
+                "generation_policy": {"status": "targeted"},
+            }
+        }
+    }
+
+    assert runtime.check_lazy_status(skipped_plan, model=None, clip=None, vae=None) == []
+    assert runtime.check_lazy_status(targeted_plan, model=None, clip=None, vae=None) == [
+        "model",
+        "clip",
+        "vae",
+    ]
 
 
 def test_ltx_config_normalizes_segment_continuity_tail_frames():
@@ -301,7 +378,11 @@ def test_ltx_planner_builds_serializable_plan_with_gaps_prompts_and_media():
         ]
     )
 
-    plan, validation, debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
 
     assert plan["type"] == "LTX_TIMELINE_PLAN"
     assert plan["resolved_output"]["frame_count"] == 49
@@ -342,7 +423,11 @@ def test_ltx_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
         ]
     )
 
-    plan, validation, debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     ltx = plan["model_specific"]["ltx"]
 
     assert validation["is_valid"] is True
@@ -363,13 +448,72 @@ def test_ltx_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
     assert "shot_context" not in ltx
 
 
-def test_ltx_planner_plans_selected_shot_timeline():
+def test_ltx_missing_only_skips_when_all_shots_are_ready():
+    timeline = _two_shot_text_timeline_with_ready_shots("shot_section_001", "shot_section_002")
+
+    plan, validation, debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config(debug_mode=True))
+    ltx = plan["model_specific"]["ltx"]
+
+    assert validation["is_valid"] is True
+    assert [entry["code"] for entry in validation["info"]] == [
+        "GENERATION_SKIPPED_ALL_SHOTS_READY"
+    ]
+    assert plan["section_plan"] == []
+    assert ltx["segmented_generation"]["segments"] == []
+    assert ltx["generation_policy"]["status"] == "skipped"
+    assert debug["summary"]["generation_status"] == "skipped"
+    assert debug["summary"]["generation_skip_reason"] == "all_shots_ready"
+
+
+def test_ltx_missing_only_targets_selected_missing_shot():
     timeline = _two_shot_text_timeline()
+    timeline["ui_state"]["selected_item_id"] = "section_002"
+
+    plan, validation, debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config(debug_mode=True))
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["ltx"]["generation_policy"]["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert plan["section_plan"][0]["start_time"] == 0.0
+    assert debug["summary"]["generation_target_shot_id"] == "shot_section_002"
+
+
+def test_ltx_missing_only_targets_earliest_missing_when_selected_shot_is_ready():
+    timeline = _two_shot_text_timeline_with_ready_shots("shot_section_001")
+    timeline["ui_state"]["selected_item_id"] = "shot_section_001"
+
+    plan, validation, debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config(debug_mode=True))
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["ltx"]["generation_policy"]["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert debug["summary"]["generation_target_shot_id"] == "shot_section_002"
+
+
+def test_ltx_force_selected_regenerates_ready_selected_shot():
+    timeline = _two_shot_text_timeline_with_ready_shots("shot_section_001", "shot_section_002")
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(debug_mode=True),
-        shot_id="shot_section_002",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["ltx"]["generation_policy"]["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert debug["summary"]["generation_status"] == "targeted"
+
+
+def test_ltx_planner_plans_selected_shot_timeline():
+    timeline = _two_shot_text_timeline()
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(debug_mode=True),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     ltx = plan["model_specific"]["ltx"]
     shot_context = ltx["shot_context"]
@@ -400,11 +544,12 @@ def test_ltx_planner_plans_selected_shot_timeline():
 
 def test_ltx_planner_reports_available_continuity_as_unsupported():
     timeline = _two_shot_text_timeline_with_continuity()
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(debug_mode=True),
-        shot_id="shot_section_002",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     ltx = plan["model_specific"]["ltx"]
     continuity = ltx["continuity_context"]
@@ -426,11 +571,12 @@ def test_ltx_planner_warns_when_continuity_source_is_missing():
     timeline = _two_shot_text_timeline_with_continuity()
     timeline["sequence"]["shots"][0]["takes"] = []
     timeline["sequence"]["shots"][0]["accepted_take_id"] = None
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(debug_mode=True),
-        shot_id="shot_section_002",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     continuity = plan["model_specific"]["ltx"]["continuity_context"]
 
@@ -445,24 +591,24 @@ def test_ltx_planner_warns_when_continuity_source_is_missing():
     assert debug["summary"]["shot_continuity_status"] == "unavailable"
 
 
-def test_ltx_planner_invalid_shot_id_marks_plan_invalid_without_crashing():
+def test_ltx_planner_force_selected_requires_selected_shot_without_crashing():
     timeline = _two_shot_text_timeline()
 
     plan, validation, debug = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(debug_mode=True),
-        shot_id="missing_shot",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
 
     assert validation["is_valid"] is False
     assert [entry["code"] for entry in validation["errors"]] == [
-        "SHOT_SELECTION_NOT_FOUND"
+        "GENERATION_SELECTED_SHOT_REQUIRED"
     ]
     assert plan["project"]["duration_seconds"] == 3.0
-    assert len(plan["section_plan"]) == 2
+    assert len(plan["section_plan"]) == 0
     assert "shot_context" not in plan["model_specific"]["ltx"]
-    assert debug["summary"]["selected_shot_id"] == "missing_shot"
-    assert "missing_shot" in debug["summary"]["shot_selection_error"]
+    assert debug["summary"]["generation_status"] == "blocked"
+    assert debug["summary"]["shot_selection_error"] == "selected_shot_required"
 
 
 def test_ltx_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_deferred(monkeypatch):
@@ -530,7 +676,11 @@ def test_ltx_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_def
         ),
     ]
 
-    plan, validation, _debug = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     lora_resolution = plan["model_specific"]["ltx"]["lora_resolution"]
     loras_by_section = {
         entry["item_id"]: entry["effective_loras"][MODEL_LORA_TARGET_MAIN]["loras"]

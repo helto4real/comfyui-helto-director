@@ -38,7 +38,14 @@ from shared.ltx.runtime import runtime as ltx_runtime
 from shared.lora import config as lora_config_module
 from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
-from shared.timeline import apply_take_registration, create_default_video_timeline, create_resolved_lora_snapshot, validate_video_timeline
+from shared.timeline import (
+    GENERATION_MODE_FORCE_FULL_TIMELINE,
+    GENERATION_MODE_FORCE_SELECTED,
+    apply_take_registration,
+    create_default_video_timeline,
+    create_resolved_lora_snapshot,
+    validate_video_timeline,
+)
 from shared.timeline.take_capture import TAKE_CAPTURE_TYPE
 
 
@@ -217,7 +224,11 @@ def _text_plan(duration=1.0, prompt="wide shot"):
             "prompt": prompt,
         }
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -225,13 +236,39 @@ def _text_plan(duration=1.0, prompt="wide shot"):
 def _shot_text_plan(duration=1.0, prompt="wide shot", *, privacy_mode: bool = False):
     timeline = _timeline_for_section("section_001", duration=duration, prompt=prompt)
     timeline["project"]["privacy"]["mode"] = privacy_mode
+    timeline["ui_state"]["selected_item_id"] = "shot_section_001"
     plan, validation, _ = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(),
-        shot_id="shot_section_001",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     assert validation["is_valid"] is True
     return plan
+
+
+def test_ltx_runtime_skipped_plan_returns_no_take_registration_without_model_inputs():
+    plan = _text_plan(duration=1.0, prompt="already assembled")
+    plan["section_plan"] = []
+    plan["prompt_plan"] = []
+    plan["media_plan"] = []
+    plan["audio_plan"] = []
+    plan["model_specific"]["ltx"]["generation_policy"] = {
+        "status": "skipped",
+        "skip_reason": "all_shots_ready",
+        "mode": "Missing Only",
+    }
+
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(
+        model=None,
+        clip=None,
+        vae=None,
+        ltx_timeline_plan=plan,
+    )
+
+    assert runtime_debug["summary"]["generation_required"] is False
+    assert runtime_debug["summary"]["generation_status"] == "skipped"
+    assert runtime_debug["summary"]["take_registration_ready"] is False
+    assert "take_registration" not in runtime_debug
 
 
 def _timeline_for_section(item_id: str, *, duration=1.0, prompt="wide shot"):
@@ -278,7 +315,11 @@ def _image_plan(path: Path):
             "guide_strength": 0.5,
         }
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -321,6 +362,7 @@ def _character_reference_plan(path: Path, reference_mode="Prompt Relay", duplica
     plan, validation, _ = build_ltx_timeline_plan(
         timeline,
         create_ltx_timeline_config(reference_mode=reference_mode, debug_mode=True),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     assert validation["is_valid"] is True
     return plan
@@ -400,7 +442,11 @@ def _audio_plan(path: Path):
             ],
         }
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -445,7 +491,11 @@ def _video_plan(
             "video_guidance_frame_count": guidance_frame_count,
         }
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -501,7 +551,11 @@ def _prompt_timing_plan_with_media_gap(media_path: Path, media_type: str):
             },
         ]
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -520,7 +574,11 @@ def _gap_then_text_plan():
             "prompt": "late prompt",
         }
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -1034,7 +1092,11 @@ def test_promptless_video_before_text_preserves_late_prompt_timing(tmp_path):
             },
         ]
     )
-    plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert validation["is_valid"] is True
 
     runtime_model, positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))

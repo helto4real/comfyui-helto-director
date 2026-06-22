@@ -7,6 +7,7 @@ from ...shared.contracts.socket_types import (
 from ...shared.wan.runtime import build_wan_runtime_outputs
 from ...shared.wan.runtime.segmented import build_wan_segmented_executor_outputs
 from ...shared.segmented_executor import SEED_MODES
+from ...shared.timeline import generation_policy_skips_generation
 from ...shared.timeline_status import TimelineStatusReporter
 
 
@@ -32,6 +33,16 @@ def _hidden_unique_id(cls) -> str | None:
     return getattr(getattr(cls, "hidden", None), "unique_id", None)
 
 
+_MISSING = object()
+
+
+def _wan_generation_skipped(wan_timeline_plan: dict | None) -> bool:
+    if not isinstance(wan_timeline_plan, dict):
+        return False
+    policy = wan_timeline_plan.get("model_specific", {}).get("wan", {}).get("generation_policy")
+    return generation_policy_skips_generation(policy)
+
+
 class WANTimelineRuntime(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -41,10 +52,10 @@ class WANTimelineRuntime(io.ComfyNode):
             category="timeline/wan",
             description="Materialize a WAN 2.2 timeline plan into ComfyUI runtime conditioning objects.",
             inputs=[
-                io.Model.Input("high_noise_model", display_name="High Noise Model", optional=True),
-                io.Model.Input("low_noise_model", display_name="Low Noise Model", optional=True),
-                io.Clip.Input("clip", optional=True),
-                io.Vae.Input("vae", optional=True),
+                io.Model.Input("high_noise_model", display_name="High Noise Model", optional=True, lazy=True),
+                io.Model.Input("low_noise_model", display_name="Low Noise Model", optional=True, lazy=True),
+                io.Clip.Input("clip", optional=True, lazy=True),
+                io.Vae.Input("vae", optional=True, lazy=True),
                 WAN_TIMELINE_PLAN.Input(
                     "wan_timeline_plan",
                     display_name="WAN_TIMELINE_PLAN",
@@ -62,6 +73,29 @@ class WANTimelineRuntime(io.ComfyNode):
             ],
             hidden=[io.Hidden.unique_id],
         )
+
+    @classmethod
+    def check_lazy_status(
+        cls,
+        wan_timeline_plan: dict | None,
+        high_noise_model=_MISSING,
+        low_noise_model=_MISSING,
+        clip=_MISSING,
+        vae=_MISSING,
+        **kwargs,
+    ) -> list[str]:
+        if _wan_generation_skipped(wan_timeline_plan):
+            return []
+        requested = []
+        for name, value in (
+            ("high_noise_model", high_noise_model),
+            ("low_noise_model", low_noise_model),
+            ("clip", clip),
+            ("vae", vae),
+        ):
+            if value is None:
+                requested.append(name)
+        return requested
 
     @classmethod
     def execute(

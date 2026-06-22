@@ -7,6 +7,7 @@ from ...shared.contracts.socket_types import (
     WAN_TIMELINE_CONFIG,
     WAN_TIMELINE_PLAN,
 )
+from ...shared.timeline import GENERATION_MODE_MISSING_ONLY, GENERATION_MODES
 from ...shared.wan.planner import build_wan_timeline_plan
 
 
@@ -27,10 +28,11 @@ class WANTimelinePlanner(io.ComfyNode):
                     "wan_timeline_config",
                     display_name="WAN_TIMELINE_CONFIG",
                 ),
-                io.String.Input(
-                    "shot_id",
-                    display_name="Shot ID",
-                    default="",
+                io.Combo.Input(
+                    "generation_mode",
+                    display_name="Generation Mode",
+                    options=GENERATION_MODES,
+                    default=GENERATION_MODE_MISSING_ONLY,
                     socketless=True,
                 ),
             ],
@@ -55,11 +57,11 @@ class WANTimelinePlanner(io.ComfyNode):
         cls,
         video_timeline: dict,
         wan_timeline_config: dict,
-        shot_id: str = "",
+        generation_mode: str = GENERATION_MODE_MISSING_ONLY,
     ) -> io.NodeOutput:
         plan, validation, debug_info = build_wan_timeline_plan(
             video_timeline=video_timeline,
             wan_config=wan_timeline_config,
-            shot_id=shot_id,
+            generation_mode=generation_mode,
         )
         return io.NodeOutput(plan, validation, debug_info)

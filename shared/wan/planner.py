@@ -26,10 +26,16 @@ from ..contracts.video_timeline import (
     SECTION_TYPE_VIDEO,
 )
 from ..timeline import (
+    GENERATION_MODE_MISSING_ONLY,
+    GENERATION_STATUS_TARGETED,
     build_generation_segments,
     detect_director_gaps,
+    extract_shot_timeline,
+    generation_policy_debug_summary,
+    generation_policy_requires_generation,
+    generation_policy_validation_entries,
     merge_prompts,
-    select_shot_timeline_for_planning,
+    resolve_generation_policy,
     time_range_to_frames,
     validate_video_timeline,
 )
@@ -67,12 +73,20 @@ QUALITY_SHORT_EDGE = {
 def build_wan_timeline_plan(
     video_timeline: Any,
     wan_config: Any,
-    shot_id: str = "",
+    generation_mode: str = GENERATION_MODE_MISSING_ONLY,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    timeline, shot_context, shot_selection_error = select_shot_timeline_for_planning(
+    source_timeline, generation_policy = resolve_generation_policy(
         video_timeline,
-        shot_id,
+        generation_mode,
     )
+    shot_context = None
+    if generation_policy.get("status") == GENERATION_STATUS_TARGETED:
+        extracted = extract_shot_timeline(source_timeline, str(generation_policy.get("target_shot_id") or ""))
+        timeline = extracted["timeline"]
+        shot_context = extracted["shot_context"]
+    else:
+        timeline = source_timeline
+    should_plan_generation = generation_policy_requires_generation(generation_policy)
     config = normalize_wan_timeline_config(wan_config)
     director_validation = validate_video_timeline(timeline)
 
@@ -82,7 +96,10 @@ def build_wan_timeline_plan(
     latent_chunk_count = _latent_chunk_count(total_frames)
     frame_info = _wan_frame_info(requested_frames, total_frames, frame_rate)
     resolved_output = _resolve_output(timeline["project"], config)
-    section_entries, gap_decisions = _build_section_plan(timeline, config, frame_rate, total_frames)
+    if should_plan_generation:
+        section_entries, gap_decisions = _build_section_plan(timeline, config, frame_rate, total_frames)
+    else:
+        section_entries, gap_decisions = [], []
     sequence_metadata = build_sequence_plan_metadata(timeline)
     lora_resolution = build_model_lora_resolution(
         timeline,
@@ -90,20 +107,24 @@ def build_wan_timeline_plan(
         model_key=MODEL_LORA_MODEL_WAN_2_2,
         target_keys=[MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE],
     )
-    segmented_generation = build_generation_segments(
-        section_entries=section_entries,
-        frame_rate=frame_rate,
-        total_frames=total_frames,
-        requested_frame_count=requested_frames,
-        max_generation_duration=float(config.get("max_generation_duration") or 0.0),
-        segment_continuity_tail_frames=int(config.get("segment_continuity_tail_frames") or 5),
-        temporal_stride=WAN_TEMPORAL_STRIDE,
-        model="wan",
-        frame_rule=_wan_frame_count,
+    segmented_generation = (
+        build_generation_segments(
+            section_entries=section_entries,
+            frame_rate=frame_rate,
+            total_frames=total_frames,
+            requested_frame_count=requested_frames,
+            max_generation_duration=float(config.get("max_generation_duration") or 0.0),
+            segment_continuity_tail_frames=int(config.get("segment_continuity_tail_frames") or 5),
+            temporal_stride=WAN_TEMPORAL_STRIDE,
+            model="wan",
+            frame_rule=_wan_frame_count,
+        )
+        if should_plan_generation
+        else _empty_segmented_generation("wan")
     )
-    prompt_entries = _build_prompt_plan(timeline, section_entries)
-    media_entries = _build_media_plan(timeline, section_entries)
-    audio_entries = _build_audio_plan(timeline, frame_rate)
+    prompt_entries = _build_prompt_plan(timeline, section_entries) if should_plan_generation else []
+    media_entries = _build_media_plan(timeline, section_entries) if should_plan_generation else []
+    audio_entries = _build_audio_plan(timeline, frame_rate) if should_plan_generation else []
     character_references, prompt_entries, reference_validation_entries = build_bernini_character_reference_plan(
         timeline,
         config,
@@ -144,10 +165,11 @@ def build_wan_timeline_plan(
         segmented_generation,
         reference_validation_entries,
         lora_resolution,
+        should_plan_generation,
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
-        *_shot_selection_validation_entries(shot_selection_error, "WAN Planner"),
+        *generation_policy_validation_entries(generation_policy, "WAN Planner"),
         *_shot_continuity_validation_entries(shot_context, "WAN Planner"),
         *flatten_validation_result(wan_validation),
     ])
@@ -185,6 +207,7 @@ def build_wan_timeline_plan(
                 "gap_decisions": gap_decisions,
                 "timeline_structure": sequence_metadata,
                 "lora_resolution": lora_resolution,
+                "generation_policy": deepcopy(generation_policy),
             },
         },
         "validation": validation,
@@ -198,7 +221,7 @@ def build_wan_timeline_plan(
         plan,
         validation,
         shot_context=shot_context,
-        shot_selection_error=shot_selection_error,
+        generation_policy=generation_policy,
     )
     return plan, validation, debug
 
@@ -487,6 +510,7 @@ def _validate_wan_inputs(
     segmented_generation: dict[str, Any],
     reference_validation_entries: list[dict[str, Any]] | None = None,
     lora_resolution: dict[str, Any] | None = None,
+    should_plan_generation: bool = True,
 ) -> dict[str, Any]:
     entries = list(reference_validation_entries or [])
     if not director_validation.get("is_valid", False):
@@ -498,6 +522,16 @@ def _validate_wan_inputs(
             "WAN planning requires a valid Director timeline.",
             "Fix Director validation errors before using the WAN planner output.",
         ))
+    if not should_plan_generation:
+        entries.append(_entry(
+            "WAN_GENERATION_POLICY_NO_MODEL_CONDITIONING",
+            SEVERITY_INFO,
+            "Generation",
+            None,
+            "WAN generation conditioning was not built because Director generation policy skipped or blocked generation.",
+            "Use Generation Mode in the WAN Planner to regenerate a selected shot or full timeline.",
+        ))
+        return create_validation_result(entries)
     if config["visual_conditioning_mode"] == "Off" and visual_conditioning["requested_keyframes"]:
         entries.append(_entry(
             "WAN_VISUAL_KEYFRAMES_PLANNED",
@@ -774,7 +808,7 @@ def _build_debug(
     validation: dict[str, Any],
     *,
     shot_context: dict[str, Any] | None = None,
-    shot_selection_error: dict[str, Any] | None = None,
+    generation_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     wan = plan["model_specific"]["wan"]
     prompt_relay = wan["prompt_relay"]
@@ -812,7 +846,8 @@ def _build_debug(
         "warning_count": len(validation["warnings"]),
         "info_count": len(validation["info"]),
     }
-    _add_shot_debug_summary(summary, shot_context, shot_selection_error)
+    summary.update(generation_policy_debug_summary(generation_policy))
+    _add_shot_debug_summary(summary, shot_context, generation_policy)
     debug = {
         "type": "DEBUG_INFO",
         "source": "WAN Planner",
@@ -832,6 +867,7 @@ def _build_debug(
             "gap_decisions": deepcopy(wan["gap_decisions"]),
             "timeline_structure": deepcopy(timeline_structure),
             "lora_resolution": deepcopy(lora_resolution),
+            "generation_policy": deepcopy(generation_policy),
             "validation": deepcopy(validation),
         }
         if shot_context is not None:
@@ -843,7 +879,7 @@ def _build_debug(
 def _add_shot_debug_summary(
     summary: dict[str, Any],
     shot_context: dict[str, Any] | None,
-    shot_selection_error: dict[str, Any] | None,
+    generation_policy: dict[str, Any] | None,
 ) -> None:
     if shot_context is not None:
         summary["selected_shot_id"] = shot_context.get("shot_id")
@@ -854,9 +890,9 @@ def _add_shot_debug_summary(
         summary["shot_continuity_policy"] = continuity.get("policy")
         summary["shot_continuity_status"] = continuity.get("model_status")
         summary["shot_continuity_tail_frames"] = continuity.get("tail_frames")
-    elif shot_selection_error:
-        summary["selected_shot_id"] = shot_selection_error.get("shot_id")
-        summary["shot_selection_error"] = shot_selection_error.get("error")
+    elif isinstance(generation_policy, dict) and generation_policy.get("block_reason"):
+        summary["selected_shot_id"] = generation_policy.get("selected_shot_id")
+        summary["shot_selection_error"] = generation_policy.get("block_reason")
 
 
 def _incoming_continuity(shot_context: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -955,6 +991,18 @@ def _section_role(section_type: str | None) -> str:
     if section_type == SECTION_TYPE_VIDEO:
         return "Prompt Only Video Fallback"
     return "No Guidance"
+
+
+def _empty_segmented_generation(model: str) -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "model": model,
+        "max_generation_duration": 0.0,
+        "max_visible_frames": 0,
+        "continuity_strategy": "generation_skipped",
+        "segments": [],
+        "diagnostics": ["Generation skipped by Director policy."],
+    }
 
 
 def _distribute_segment_lengths(segments: list[dict[str, Any]], latent_chunk_count: int) -> list[int]:

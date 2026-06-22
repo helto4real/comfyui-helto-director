@@ -25,10 +25,16 @@ from ..contracts.video_timeline import (
     SECTION_TYPE_VIDEO,
 )
 from ..timeline import (
+    GENERATION_MODE_MISSING_ONLY,
+    GENERATION_STATUS_TARGETED,
     build_generation_segments,
     detect_director_gaps,
+    extract_shot_timeline,
+    generation_policy_debug_summary,
+    generation_policy_requires_generation,
+    generation_policy_validation_entries,
     merge_prompts,
-    select_shot_timeline_for_planning,
+    resolve_generation_policy,
     time_range_to_frames,
     validate_video_timeline,
 )
@@ -61,19 +67,27 @@ QUALITY_SHORT_EDGE = {
 def build_ltx_timeline_plan(
     video_timeline: Any,
     ltx_config: Any,
-    shot_id: str = "",
+    generation_mode: str = GENERATION_MODE_MISSING_ONLY,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    timeline, shot_context, shot_selection_error = select_shot_timeline_for_planning(
+    source_timeline, generation_policy = resolve_generation_policy(
         video_timeline,
-        shot_id,
+        generation_mode,
     )
+    shot_context = None
+    if generation_policy.get("status") == GENERATION_STATUS_TARGETED:
+        extracted = extract_shot_timeline(source_timeline, str(generation_policy.get("target_shot_id") or ""))
+        timeline = extracted["timeline"]
+        shot_context = extracted["shot_context"]
+    else:
+        timeline = source_timeline
+    should_plan_generation = generation_policy_requires_generation(generation_policy)
     config = normalize_ltx_timeline_config(ltx_config)
     director_validation = validate_video_timeline(timeline)
     frame_rate = float(timeline["project"].get("frame_rate") or 24.0)
     requested_frames = _requested_frame_count(float(timeline["project"].get("duration_seconds") or 0.0), frame_rate)
     total_frames = _ltx_frame_count_from_requested(requested_frames, int(config["rules"]["temporal_stride"]))
     resolved_output = _resolve_output(timeline["project"], config)
-    section_entries = _build_section_plan(timeline, frame_rate, total_frames)
+    section_entries = _build_section_plan(timeline, frame_rate, total_frames) if should_plan_generation else []
     sequence_metadata = build_sequence_plan_metadata(timeline)
     lora_resolution = build_model_lora_resolution(
         timeline,
@@ -81,16 +95,20 @@ def build_ltx_timeline_plan(
         model_key=MODEL_LORA_MODEL_LTX_2_3,
         target_keys=[MODEL_LORA_TARGET_MAIN],
     )
-    segmented_generation = build_generation_segments(
-        section_entries=section_entries,
-        frame_rate=frame_rate,
-        total_frames=total_frames,
-        requested_frame_count=requested_frames,
-        max_generation_duration=float(config.get("max_generation_duration") or 0.0),
-        segment_continuity_tail_frames=int(config.get("segment_continuity_tail_frames") or 5),
-        temporal_stride=int(config["rules"]["temporal_stride"]),
-        model="ltx",
-        frame_rule=lambda requested: _ltx_frame_count_from_requested(requested, int(config["rules"]["temporal_stride"])),
+    segmented_generation = (
+        build_generation_segments(
+            section_entries=section_entries,
+            frame_rate=frame_rate,
+            total_frames=total_frames,
+            requested_frame_count=requested_frames,
+            max_generation_duration=float(config.get("max_generation_duration") or 0.0),
+            segment_continuity_tail_frames=int(config.get("segment_continuity_tail_frames") or 5),
+            temporal_stride=int(config["rules"]["temporal_stride"]),
+            model="ltx",
+            frame_rule=lambda requested: _ltx_frame_count_from_requested(requested, int(config["rules"]["temporal_stride"])),
+        )
+        if should_plan_generation
+        else _empty_segmented_generation("ltx")
     )
     character_references, character_validation_entries = build_ltx_character_reference_plan(timeline, config, section_entries)
     ltx_validation = _validate_ltx_inputs(
@@ -102,14 +120,14 @@ def build_ltx_timeline_plan(
     )
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
-        *_shot_selection_validation_entries(shot_selection_error, "LTX Planner"),
+        *generation_policy_validation_entries(generation_policy, "LTX Planner"),
         *_shot_continuity_validation_entries(shot_context, "LTX Planner"),
         *flatten_validation_result(ltx_validation),
     ])
 
-    prompt_entries = _build_prompt_plan(timeline, section_entries, character_references)
-    media_entries = _build_media_plan(timeline, section_entries, config)
-    audio_entries = _build_audio_plan(timeline, frame_rate)
+    prompt_entries = _build_prompt_plan(timeline, section_entries, character_references) if should_plan_generation else []
+    media_entries = _build_media_plan(timeline, section_entries, config) if should_plan_generation else []
+    audio_entries = _build_audio_plan(timeline, frame_rate) if should_plan_generation else []
 
     plan = {
         "schema_version": LTX_PLAN_SCHEMA_VERSION,
@@ -139,6 +157,7 @@ def build_ltx_timeline_plan(
                 "segmented_generation": segmented_generation,
                 "timeline_structure": sequence_metadata,
                 "lora_resolution": lora_resolution,
+                "generation_policy": deepcopy(generation_policy),
                 "rules": deepcopy(config["rules"]),
             },
         },
@@ -153,7 +172,7 @@ def build_ltx_timeline_plan(
         plan,
         validation,
         shot_context=shot_context,
-        shot_selection_error=shot_selection_error,
+        generation_policy=generation_policy,
     )
     return plan, validation, debug
 
@@ -443,7 +462,7 @@ def _build_debug(
     validation: dict[str, Any],
     *,
     shot_context: dict[str, Any] | None = None,
-    shot_selection_error: dict[str, Any] | None = None,
+    generation_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ltx = plan["model_specific"]["ltx"]
     timeline_structure = ltx.get("timeline_structure", {})
@@ -460,7 +479,8 @@ def _build_debug(
         "warning_count": len(validation["warnings"]),
         "info_count": len(validation["info"]),
     }
-    _add_shot_debug_summary(summary, shot_context, shot_selection_error)
+    summary.update(generation_policy_debug_summary(generation_policy))
+    _add_shot_debug_summary(summary, shot_context, generation_policy)
     debug = {
         "type": "DEBUG_INFO",
         "source": "LTX Planner",
@@ -471,6 +491,7 @@ def _build_debug(
         debug["details"] = {
             "shot_context": deepcopy(shot_context),
             "continuity_context": _model_continuity_context(shot_context),
+            "generation_policy": deepcopy(generation_policy),
         }
     return debug
 
@@ -478,7 +499,7 @@ def _build_debug(
 def _add_shot_debug_summary(
     summary: dict[str, Any],
     shot_context: dict[str, Any] | None,
-    shot_selection_error: dict[str, Any] | None,
+    generation_policy: dict[str, Any] | None,
 ) -> None:
     if shot_context is not None:
         summary["selected_shot_id"] = shot_context.get("shot_id")
@@ -489,9 +510,9 @@ def _add_shot_debug_summary(
         summary["shot_continuity_policy"] = continuity.get("policy")
         summary["shot_continuity_status"] = continuity.get("model_status")
         summary["shot_continuity_tail_frames"] = continuity.get("tail_frames")
-    elif shot_selection_error:
-        summary["selected_shot_id"] = shot_selection_error.get("shot_id")
-        summary["shot_selection_error"] = shot_selection_error.get("error")
+    elif isinstance(generation_policy, dict) and generation_policy.get("block_reason"):
+        summary["selected_shot_id"] = generation_policy.get("selected_shot_id")
+        summary["shot_selection_error"] = generation_policy.get("block_reason")
 
 
 def _ltx_frame_count(duration_seconds: float, frame_rate: float, temporal_stride: int) -> int:
@@ -517,6 +538,18 @@ def _section_role(section_type: str | None) -> str:
     if section_type == SECTION_TYPE_VIDEO:
         return "Video Guidance"
     return "No Guidance"
+
+
+def _empty_segmented_generation(model: str) -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "model": model,
+        "max_generation_duration": 0.0,
+        "max_visible_frames": 0,
+        "continuity_strategy": "generation_skipped",
+        "segments": [],
+        "diagnostics": ["Generation skipped by Director policy."],
+    }
 
 
 def _ltx_media_role(section: dict[str, Any], config: dict[str, Any]) -> str:

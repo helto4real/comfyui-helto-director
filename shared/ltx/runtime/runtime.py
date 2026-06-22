@@ -13,7 +13,7 @@ from ..config import LTX_MODEL_FAMILY, LTX_MODEL_VERSION
 from ..identity import apply_identity_anchor
 from ..planner import LTX_PLAN_TYPE
 from ..references import planned_hidden_reference_count, planned_hidden_reference_guard_latent_frames
-from .audio import build_audio_latent, build_native_audio_latent, mix_timeline_audio
+from .audio import build_audio_latent, build_native_audio_latent, empty_audio, mix_timeline_audio
 from .guides import apply_guide_data
 from .media import build_guide_data, source_video_outputs
 from .prompt_relay import encode_prompt_relay
@@ -25,6 +25,7 @@ from ...timeline.planner_context import (
     resolve_runtime_lora_targets,
 )
 from ...timeline.take_capture import build_take_capture_metadata
+from ...timeline import generation_policy_skips_generation
 
 
 def build_ltx_runtime_outputs(
@@ -46,6 +47,16 @@ def build_ltx_runtime_outputs(
     status_reporter.report("timeline.prepare", "LTX Runtime: preparing latent")
     plan = deepcopy(ltx_timeline_plan)
     _validate_plan(plan)
+    generation_policy = plan.get("model_specific", {}).get("ltx", {}).get("generation_policy")
+    if generation_policy_skips_generation(generation_policy):
+        return _build_skipped_ltx_runtime_outputs(
+            model=model,
+            negative=negative,
+            plan=plan,
+            generation_policy=generation_policy,
+            status_reporter=status_reporter,
+            complete_status=complete_status,
+        )
     runtime_loras, lora_diagnostics = _resolve_ltx_loras(plan)
     lora_config = runtime_loras["targets"][MODEL_LORA_TARGET_MAIN]
     if lora_config["loras"]:
@@ -150,6 +161,63 @@ def build_ltx_runtime_outputs(
         source_audio,
         float(source_fps),
         int(source_frame_count),
+        runtime_debug,
+    )
+
+
+def _build_skipped_ltx_runtime_outputs(
+    *,
+    model,
+    negative,
+    plan: dict[str, Any],
+    generation_policy: dict[str, Any] | None,
+    status_reporter: TimelineStatusReporter,
+    complete_status: bool,
+) -> tuple[Any, Any, Any, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], Any, dict[str, Any], float, int, dict[str, Any]]:
+    width = int(plan["resolved_output"].get("width") or 768)
+    height = int(plan["resolved_output"].get("height") or 512)
+    frame_count = int(plan["resolved_output"].get("frame_count") or 1)
+    frame_rate = float(plan["resolved_output"].get("frame_rate") or 24.0)
+    duration = float(plan["resolved_output"].get("duration_seconds") or (frame_count / frame_rate if frame_rate > 0 else 0.0))
+    latent_frames = ((frame_count - 1) // 8) + 1
+    video_latent = empty_ltx_video_latent(width, height, latent_frames)
+    audio_latent = {"samples": torch.zeros((1, 1, 1, 1))}
+    combined_audio = empty_audio(duration)
+    guide_data = {"images": [], "masks": [], "metadata": [], "diagnostics": ["Generation skipped by Director policy."]}
+    status_reporter.report("timeline.skip", "LTX Runtime: generation skipped by Director policy")
+    if complete_status:
+        status_reporter.done("LTX Runtime: generation skipped")
+    runtime_debug = {
+        "type": "DEBUG_INFO",
+        "source": "LTX Runtime",
+        "enabled": bool(plan.get("model_specific", {}).get("ltx", {}).get("config", {}).get("debug_mode")),
+        "summary": {
+            "generation_required": False,
+            "generation_status": generation_policy.get("status") if isinstance(generation_policy, dict) else "skipped",
+            "generation_skip_reason": generation_policy.get("skip_reason") if isinstance(generation_policy, dict) else None,
+            "generation_mode": generation_policy.get("mode") if isinstance(generation_policy, dict) else None,
+            "generation_target_shot_id": generation_policy.get("target_shot_id") if isinstance(generation_policy, dict) else None,
+            "take_registration_ready": False,
+            "take_registration_shot_ids": [],
+            "video_latent_shape": tuple(video_latent["samples"].shape),
+            "combined_audio_shape": tuple(combined_audio["waveform"].shape),
+        },
+        "generation_policy": deepcopy(generation_policy),
+        "diagnostics": ["Generation skipped; no LTX model, clip, VAE, guide, prompt, or LoRA work was performed."],
+        "status_events": status_reporter.snapshot(),
+    }
+    return (
+        model,
+        [],
+        negative if negative is not None else [],
+        video_latent,
+        audio_latent,
+        combined_audio,
+        guide_data,
+        None,
+        empty_audio(0.0),
+        frame_rate,
+        0,
         runtime_debug,
     )
 

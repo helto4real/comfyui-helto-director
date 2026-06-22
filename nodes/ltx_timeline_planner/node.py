@@ -8,6 +8,7 @@ from ...shared.contracts.socket_types import (
     VIDEO_TIMELINE,
 )
 from ...shared.ltx.planner import build_ltx_timeline_plan
+from ...shared.timeline import GENERATION_MODE_MISSING_ONLY, GENERATION_MODES
 
 
 class LTXTimelinePlanner(io.ComfyNode):
@@ -27,10 +28,11 @@ class LTXTimelinePlanner(io.ComfyNode):
                     "ltx_timeline_config",
                     display_name="LTX_TIMELINE_CONFIG",
                 ),
-                io.String.Input(
-                    "shot_id",
-                    display_name="Shot ID",
-                    default="",
+                io.Combo.Input(
+                    "generation_mode",
+                    display_name="Generation Mode",
+                    options=GENERATION_MODES,
+                    default=GENERATION_MODE_MISSING_ONLY,
                     socketless=True,
                 ),
             ],
@@ -55,11 +57,11 @@ class LTXTimelinePlanner(io.ComfyNode):
         cls,
         video_timeline: dict,
         ltx_timeline_config: dict,
-        shot_id: str = "",
+        generation_mode: str = GENERATION_MODE_MISSING_ONLY,
     ) -> io.NodeOutput:
         plan, validation, debug_info = build_ltx_timeline_plan(
             video_timeline=video_timeline,
             ltx_config=ltx_timeline_config,
-            shot_id=shot_id,
+            generation_mode=generation_mode,
         )
         return io.NodeOutput(plan, validation, debug_info)

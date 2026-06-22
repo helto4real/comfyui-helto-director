@@ -34,6 +34,7 @@ from ...timeline.planner_context import (
     resolve_runtime_lora_targets,
 )
 from ...timeline.take_capture import build_take_capture_metadata
+from ...timeline import generation_policy_skips_generation
 
 
 def build_wan_runtime_outputs(
@@ -56,6 +57,18 @@ def build_wan_runtime_outputs(
     status_reporter.report("timeline.prepare", "WAN Runtime: resolving backend")
     plan = deepcopy(wan_timeline_plan)
     _validate_plan(plan)
+    generation_policy = plan.get("model_specific", {}).get("wan", {}).get("generation_policy")
+    if generation_policy_skips_generation(generation_policy):
+        return _build_skipped_wan_runtime_outputs(
+            high_noise_model=high_noise_model,
+            low_noise_model=low_noise_model,
+            negative=negative,
+            plan=plan,
+            generation_policy=generation_policy,
+            batch_size=batch_size,
+            status_reporter=status_reporter,
+            complete_status=complete_status,
+        )
     config = plan.get("model_specific", {}).get("wan", {}).get("config", {})
     is_bernini = str(config.get("model_mode") or "") == BERNINI_MODEL_MODE
     requested_backend = str(config.get("runtime_backend_profile") or BACKEND_PLAN_ONLY)
@@ -312,6 +325,48 @@ def build_wan_runtime_outputs(
         status_reporter.done("WAN Runtime: ready")
         runtime_debug["status_events"] = status_reporter.snapshot()
     return runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, runtime_debug
+
+
+def _build_skipped_wan_runtime_outputs(
+    *,
+    high_noise_model=None,
+    low_noise_model=None,
+    negative=None,
+    plan: dict[str, Any],
+    generation_policy: dict[str, Any] | None,
+    batch_size: int,
+    status_reporter: TimelineStatusReporter,
+    complete_status: bool,
+) -> tuple[Any, Any, Any, Any, dict[str, Any], dict[str, Any]]:
+    width = int(plan["resolved_output"].get("width") or 1280)
+    height = int(plan["resolved_output"].get("height") or 704)
+    frame_count = int(plan["resolved_output"].get("frame_count") or 1)
+    frame_rate = float(plan["resolved_output"].get("frame_rate") or 24.0)
+    latent_spec = {"channels": 16, "spatial_scale": 8, "source": "wan_default"}
+    video_latent = empty_wan22_video_latent(width, height, frame_count, batch_size, latent_spec)
+    status_reporter.report("timeline.skip", "WAN Runtime: generation skipped by Director policy")
+    if complete_status:
+        status_reporter.done("WAN Runtime: generation skipped")
+    runtime_debug = {
+        "type": "DEBUG_INFO",
+        "source": "WAN Runtime",
+        "enabled": True,
+        "summary": {
+            "generation_required": False,
+            "generation_status": generation_policy.get("status") if isinstance(generation_policy, dict) else "skipped",
+            "generation_skip_reason": generation_policy.get("skip_reason") if isinstance(generation_policy, dict) else None,
+            "generation_mode": generation_policy.get("mode") if isinstance(generation_policy, dict) else None,
+            "generation_target_shot_id": generation_policy.get("target_shot_id") if isinstance(generation_policy, dict) else None,
+            "take_registration_ready": False,
+            "take_registration_shot_ids": [],
+            "video_latent_shape": tuple(video_latent["samples"].shape),
+            "frame_rate": frame_rate,
+        },
+        "generation_policy": deepcopy(generation_policy),
+        "diagnostics": ["Generation skipped; no WAN backend, prompt, visual conditioning, or LoRA work was performed."],
+        "status_events": status_reporter.snapshot(),
+    }
+    return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_debug
 
 
 def resolve_wan_latent_spec(*, high_noise_model=None, low_noise_model=None, vae=None) -> dict[str, Any]:

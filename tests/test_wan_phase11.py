@@ -26,7 +26,12 @@ from shared.contracts.video_timeline import (
     TAKE_STATUS_ACCEPTED,
 )
 from shared.lora import config as lora_config_module
-from shared.timeline import create_default_video_timeline
+from shared.timeline import (
+    GENERATION_MODE_FORCE_FULL_TIMELINE,
+    GENERATION_MODE_FORCE_SELECTED,
+    GENERATION_MODE_MISSING_ONLY,
+    create_default_video_timeline,
+)
 from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.config import normalize_wan_timeline_config
 from shared.segmented_executor import build_segment_plan
@@ -180,6 +185,47 @@ def _two_shot_text_timeline_with_continuity() -> dict:
     return timeline
 
 
+def _two_shot_text_timeline_with_ready_shots(*ready_shot_ids: str) -> dict:
+    timeline = _two_shot_text_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_section_001",
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_001"],
+        },
+        {
+            "shot_id": "shot_section_002",
+            "start_time": 1.0,
+            "end_time": 3.0,
+            "section_ids": ["section_002"],
+        },
+    ]
+    for index, shot in enumerate(timeline["sequence"]["shots"], start=1):
+        if shot["shot_id"] not in ready_shot_ids:
+            continue
+        asset_id = f"asset_ready_{index}"
+        take_id = f"take_ready_{index}"
+        timeline["assets"].append(
+            {
+                "asset_id": asset_id,
+                "type": ASSET_TYPE_VIDEO,
+                "source_kind": ASSET_SOURCE_GENERATED,
+                "path": f"/tmp/ready_{index}.mp4",
+                "name": f"ready_{index}.mp4",
+            }
+        )
+        shot["takes"] = [
+            {
+                "take_id": take_id,
+                "asset_id": asset_id,
+                "status": TAKE_STATUS_ACCEPTED,
+            }
+        ]
+        shot["accepted_take_id"] = take_id
+    return timeline
+
+
 def _wan_lora_stack(name: str) -> dict:
     return {
         "version": 1,
@@ -271,11 +317,16 @@ def test_wan_nodes_register_with_custom_sockets_and_mappings():
     assert [input_item.io_type for input_item in planner_schema.inputs] == [
         "VIDEO_TIMELINE",
         "WAN_TIMELINE_CONFIG",
-        "STRING",
+        "COMBO",
     ]
-    shot_input = planner_schema.inputs[2]
-    assert shot_input.id == "shot_id"
-    assert shot_input.default == ""
+    generation_mode_input = planner_schema.inputs[2]
+    assert generation_mode_input.id == "generation_mode"
+    assert generation_mode_input.default == GENERATION_MODE_MISSING_ONLY
+    assert generation_mode_input.options == [
+        GENERATION_MODE_MISSING_ONLY,
+        GENERATION_MODE_FORCE_SELECTED,
+        GENERATION_MODE_FORCE_FULL_TIMELINE,
+    ]
     assert [output.io_type for output in planner_schema.outputs] == [
         "WAN_TIMELINE_PLAN",
         "TIMELINE_VALIDATION",
@@ -308,6 +359,40 @@ def test_wan_config_defaults_include_skeleton_rules():
         "frame_rule": "4n+1 latent chunks",
         "temporal_stride": 4,
     }
+
+
+def test_wan_runtime_lazy_status_skips_backend_inputs_for_skipped_plan():
+    module, _node_classes = _load_nodepack()
+    runtime = module.NODE_CLASS_MAPPINGS["HeltoWAN22TimelineRuntime"]
+    skipped_plan = {
+        "model_specific": {
+            "wan": {
+                "generation_policy": {"status": "skipped"},
+            }
+        }
+    }
+    targeted_plan = {
+        "model_specific": {
+            "wan": {
+                "generation_policy": {"status": "targeted"},
+            }
+        }
+    }
+
+    assert runtime.check_lazy_status(
+        skipped_plan,
+        high_noise_model=None,
+        low_noise_model=None,
+        clip=None,
+        vae=None,
+    ) == []
+    assert runtime.check_lazy_status(
+        targeted_plan,
+        high_noise_model=None,
+        low_noise_model=None,
+        clip=None,
+        vae=None,
+    ) == ["high_noise_model", "low_noise_model", "clip", "vae"]
 
 
 def test_wan_config_normalizes_vram_unload_policy():
@@ -432,7 +517,11 @@ def test_wan_planner_builds_serializable_text_plan_with_gap_no_guidance():
         }
     )
 
-    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config(debug_mode=True))
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode=True),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
 
     assert plan["type"] == "WAN_TIMELINE_PLAN"
     assert plan["model_family"] == "WAN"
@@ -482,6 +571,7 @@ def test_wan_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
     plan, validation, debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     wan = plan["model_specific"]["wan"]
 
@@ -512,13 +602,81 @@ def test_wan_planner_maps_sections_to_shots_and_preserves_boundary_metadata():
     assert "shot_context" not in wan
 
 
-def test_wan_planner_plans_selected_shot_timeline_with_boundary_context():
-    timeline = _two_shot_text_timeline()
+def test_wan_missing_only_skips_when_all_shots_are_ready():
+    timeline = _two_shot_text_timeline_with_ready_shots("shot_section_001", "shot_section_002")
 
     plan, validation, debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(debug_mode="Full"),
-        shot_id="shot_section_002",
+    )
+    wan = plan["model_specific"]["wan"]
+
+    assert validation["is_valid"] is True
+    assert "GENERATION_SKIPPED_ALL_SHOTS_READY" in [entry["code"] for entry in validation["info"]]
+    assert plan["section_plan"] == []
+    assert wan["prompt_relay"]["local_prompts"] == []
+    assert wan["segmented_generation"]["segments"] == []
+    assert wan["generation_policy"]["status"] == "skipped"
+    assert debug["summary"]["generation_status"] == "skipped"
+    assert debug["summary"]["generation_skip_reason"] == "all_shots_ready"
+    assert debug["details"]["generation_policy"]["status"] == "skipped"
+
+
+def test_wan_missing_only_targets_selected_missing_shot():
+    timeline = _two_shot_text_timeline()
+    timeline["ui_state"]["selected_item_id"] = "section_002"
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+    )
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["wan"]["generation_policy"]["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert plan["section_plan"][0]["start_time"] == 0.0
+    assert debug["summary"]["generation_target_shot_id"] == "shot_section_002"
+
+
+def test_wan_missing_only_targets_earliest_missing_when_selected_shot_is_ready():
+    timeline = _two_shot_text_timeline_with_ready_shots("shot_section_001")
+    timeline["ui_state"]["selected_item_id"] = "shot_section_001"
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+    )
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["wan"]["generation_policy"]["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert debug["summary"]["generation_target_shot_id"] == "shot_section_002"
+
+
+def test_wan_force_selected_regenerates_ready_selected_shot():
+    timeline = _two_shot_text_timeline_with_ready_shots("shot_section_001", "shot_section_002")
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    assert plan["model_specific"]["wan"]["generation_policy"]["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert debug["summary"]["generation_status"] == "targeted"
+
+
+def test_wan_planner_plans_selected_shot_timeline_with_boundary_context():
+    timeline = _two_shot_text_timeline()
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     wan = plan["model_specific"]["wan"]
     shot_context = wan["shot_context"]
@@ -551,11 +709,12 @@ def test_wan_planner_plans_selected_shot_timeline_with_boundary_context():
 
 def test_wan_planner_reports_available_continuity_as_unsupported():
     timeline = _two_shot_text_timeline_with_continuity()
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(debug_mode="Full"),
-        shot_id="shot_section_002",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     wan = plan["model_specific"]["wan"]
     continuity = wan["continuity_context"]
@@ -577,11 +736,12 @@ def test_wan_planner_warns_when_continuity_source_is_missing():
     timeline = _two_shot_text_timeline_with_continuity()
     timeline["sequence"]["shots"][0]["takes"] = []
     timeline["sequence"]["shots"][0]["accepted_take_id"] = None
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(debug_mode="Full"),
-        shot_id="shot_section_002",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     continuity = plan["model_specific"]["wan"]["continuity_context"]
 
@@ -596,24 +756,24 @@ def test_wan_planner_warns_when_continuity_source_is_missing():
     assert debug["summary"]["shot_continuity_status"] == "unavailable"
 
 
-def test_wan_planner_invalid_shot_id_marks_plan_invalid_without_crashing():
+def test_wan_planner_force_selected_requires_selected_shot_without_crashing():
     timeline = _two_shot_text_timeline()
 
     plan, validation, debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(debug_mode="Full"),
-        shot_id="missing_shot",
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
 
     assert validation["is_valid"] is False
     assert [entry["code"] for entry in validation["errors"]] == [
-        "SHOT_SELECTION_NOT_FOUND"
+        "GENERATION_SELECTED_SHOT_REQUIRED"
     ]
     assert plan["project"]["duration_seconds"] == 3.0
-    assert len(plan["section_plan"]) == 2
+    assert len(plan["section_plan"]) == 0
     assert "shot_context" not in plan["model_specific"]["wan"]
-    assert debug["summary"]["selected_shot_id"] == "missing_shot"
-    assert "missing_shot" in debug["summary"]["shot_selection_error"]
+    assert debug["summary"]["generation_status"] == "blocked"
+    assert debug["summary"]["shot_selection_error"] == "selected_shot_required"
 
 
 def test_wan_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_deferred(monkeypatch):
@@ -688,7 +848,11 @@ def test_wan_planner_resolves_shot_loras_and_warns_when_runtime_switching_is_def
         ),
     ]
 
-    plan, validation, _debug = build_wan_timeline_plan(timeline, create_wan_timeline_config())
+    plan, validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     lora_resolution = plan["model_specific"]["wan"]["lora_resolution"]
     loras_by_section = {
         entry["item_id"]: entry["effective_loras"]
@@ -746,6 +910,7 @@ def test_wan_segment_padding_does_not_create_extra_hidden_generation_with_start_
     plan, validation, _debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(max_generation_duration=5.0),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     segmented = plan["model_specific"]["wan"]["segmented_generation"]
@@ -766,6 +931,7 @@ def test_wan_segment_plan_does_not_leak_original_start_keyframe_into_continuatio
     plan, validation, _debug = build_wan_timeline_plan(
         timeline,
         create_wan_timeline_config(max_generation_duration=5.0),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     assert validation["is_valid"] is True
@@ -879,7 +1045,11 @@ def test_wan_planner_preserves_unsupported_media_audio_with_warnings():
         }
     )
 
-    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config())
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
 
     assert validation["is_valid"] is True
     warning_codes = [entry["code"] for entry in validation["warnings"]]
