@@ -50,6 +50,9 @@ HeltoTimelineLoraConfiguration = importlib.import_module(
 TimelineTakeCapture = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.timeline_take_capture.node"
 ).TimelineTakeCapture
+TimelineSequenceAssembler = importlib.import_module(
+    f"{_PACKAGE_NAME}.nodes.timeline_sequence_assembler.node"
+).TimelineSequenceAssembler
 _identity_module = importlib.import_module(
     f"{_PACKAGE_NAME}.nodes.ltx_timeline_identity.node"
 )
@@ -101,6 +104,7 @@ NODE_CLASS_MAPPINGS = {
     "HeltoWAN22TimelineSegmentedExecutor": WANTimelineSegmentedExecutor,
     "HeltoTimelineLoraConfiguration": HeltoTimelineLoraConfiguration,
     "HeltoTimelineTakeCapture": TimelineTakeCapture,
+    "HeltoTimelineSequenceAssembler": TimelineSequenceAssembler,
     "HeltoLTX23TimelineCropReferenceTail": LTXTimelineCropReferenceTail,
     "HeltoLTX23TimelineReferenceImageSelector": LTXTimelineReferenceImageSelector,
     "HeltoLTX23TimelineIdentityAnchorLatentAware": LTXTimelineIdentityAnchorLatentAware,
@@ -121,6 +125,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeltoWAN22TimelineSegmentedExecutor": "WAN 2.2 Timeline Segmented Executor",
     "HeltoTimelineLoraConfiguration": "Timeline LoRA Configuration",
     "HeltoTimelineTakeCapture": "Timeline Take Capture",
+    "HeltoTimelineSequenceAssembler": "Timeline Sequence Assembler",
     "HeltoLTX23TimelineCropReferenceTail": "LTX 2.3 Timeline Crop Reference Tail",
     "HeltoLTX23TimelineReferenceImageSelector": "LTX 2.3 Timeline Reference Image Selector",
     "HeltoLTX23TimelineIdentityAnchorLatentAware": "LTX 2.3 Timeline Identity Anchor: Latent Aware",
@@ -144,6 +149,7 @@ class TimelineDirectorExtension(ComfyExtension):
             WANTimelineRuntime,
             WANTimelineSegmentedExecutor,
             TimelineTakeCapture,
+            TimelineSequenceAssembler,
             LTXTimelineCropReferenceTail,
             LTXTimelineReferenceImageSelector,
             LTXTimelineIdentityAnchorLatentAware,
@@ -181,4 +187,5 @@ __all__ = [
     "register_lora_info_routes",
     "HeltoTimelineLoraConfiguration",
     "TimelineTakeCapture",
+    "TimelineSequenceAssembler",
 ]

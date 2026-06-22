@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import torch
+
 from shared.contracts.video_timeline import ASSET_TYPE_VIDEO, SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline, validate_video_timeline
 
@@ -113,6 +115,66 @@ def test_comfyui_style_loader_includes_timeline_take_capture_node():
         "accept",
         "update_clip_instance",
     ]
+
+
+def test_comfyui_style_loader_includes_timeline_sequence_assembler_node():
+    nodes = get_node_list()
+    schemas = {node.define_schema().node_id: node.define_schema() for node in nodes}
+    schema = schemas["HeltoTimelineSequenceAssembler"]
+
+    assert schema.display_name == "Timeline Sequence Assembler"
+    assert [output.io_type for output in schema.outputs] == [
+        "VIDEO",
+        "IMAGE",
+        "AUDIO",
+        "FLOAT",
+        "DEBUG_INFO",
+    ]
+    assert [output.id for output in schema.outputs] == [
+        "video",
+        "images",
+        "audio",
+        "frame_rate",
+        "debug_info",
+    ]
+    assert [input.id for input in schema.inputs] == [
+        "video_timeline",
+        "missing_take_policy",
+        "bit_depth",
+    ]
+
+
+def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineSequenceAssembler"]
+    node_module = sys.modules[node.__module__]
+    frames = torch.zeros((3, 4, 5, 3), dtype=torch.float32)
+    audio = {"waveform": torch.zeros((1, 1, 400), dtype=torch.float32), "sample_rate": 16000}
+    debug = {"type": "DEBUG_INFO", "source": "test"}
+
+    def fake_assemble(video_timeline, *, missing_take_policy):
+        assert video_timeline == {"type": "VIDEO_TIMELINE"}
+        assert missing_take_policy == "error"
+        return frames, audio, 12.5, debug
+
+    monkeypatch.setattr(node_module, "assemble_timeline_sequence", fake_assemble)
+
+    output = node.execute(
+        {"type": "VIDEO_TIMELINE"},
+        missing_take_policy="error",
+        bit_depth=10,
+    )
+
+    video = output[0]
+    components = video.get_components()
+    assert components.images is frames
+    assert components.audio is audio
+    assert float(components.frame_rate) == 12.5
+    assert video.get_bit_depth() == 10
+    assert output[1] is frames
+    assert output[2] is audio
+    assert output[3] == 12.5
+    assert output[4] is debug
 
 
 def test_timeline_take_capture_node_registers_asset_path_and_writes_sidecar(tmp_path):

@@ -109,6 +109,23 @@ def test_missing_accepted_take_warns_and_skips_when_policy_allows(tmp_path):
     assert "SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING" in _warning_codes(debug)
 
 
+def test_missing_accepted_take_errors_when_policy_requires_it(tmp_path):
+    timeline = _timeline_with_assets(
+        [],
+        [
+            {
+                "shot_id": "shot_missing",
+                "type": SHOT_TYPE_GENERATED,
+                "start_time": 0.0,
+                "end_time": 1.0,
+            },
+        ],
+    )
+
+    with pytest.raises(SequenceAssemblyError, match="SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING"):
+        assemble_timeline_sequence(timeline, missing_take_policy="error")
+
+
 def test_missing_asset_reference_raises_clear_error(tmp_path):
     timeline = _timeline_with_assets(
         [],
@@ -148,6 +165,36 @@ def test_blend_seam_applies_when_frames_are_compatible(tmp_path):
     assert debug["boundaries"][0]["status"] == "blend_applied"
     blended_mean = float(frames[2].mean())
     assert 0.05 < blended_mean < 0.95
+
+
+def test_blend_seam_falls_back_when_frames_are_too_short(tmp_path):
+    first = _write_test_video(tmp_path / "first.mp4", color=(0, 0, 0))
+    second = _write_test_video(tmp_path / "second.mp4", color=(255, 255, 255))
+    timeline = _timeline_with_assets(
+        [
+            _video_asset("asset_first", first, ASSET_SOURCE_GENERATED),
+            _video_asset("asset_second", second, ASSET_SOURCE_GENERATED),
+        ],
+        [
+            _generated_shot("shot_first", "asset_first", 0.0, 1.0),
+            _generated_shot("shot_second", "asset_second", 1.0, 2.0),
+        ],
+        boundaries=[
+            _boundary(
+                "boundary_blend",
+                "shot_first",
+                "shot_second",
+                BOUNDARY_MODE_BLEND_SEAM,
+                blend_frames=8,
+            )
+        ],
+    )
+
+    frames, _audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert tuple(frames.shape) == (8, 16, 16, 3)
+    assert debug["boundaries"][0]["status"] == "blend_fallback_concatenate"
+    assert "SEQUENCE_ASSEMBLY_BLEND_FALLBACK" in _warning_codes(debug)
 
 
 def test_transition_boundary_falls_back_with_warning(tmp_path):
