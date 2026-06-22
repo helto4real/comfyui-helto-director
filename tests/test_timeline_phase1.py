@@ -4,10 +4,13 @@ from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_BLEND_SEAM,
+    BOUNDARY_MODE_CONTINUOUS_SHOT,
     BOUNDARY_MODE_HARD_CUT,
     DEFAULT_VIDEO_GUIDANCE_FRAME_COUNT,
     DEFAULT_VIDEO_GUIDANCE_RANGE,
     GLOBAL_PROMPT_POSITION_SUFFIX,
+    LORA_MERGE_MODE_ADD_TO_GLOBAL,
     MODEL_LORA_MODEL_LTX_2_3,
     MODEL_LORA_MODEL_WAN_2_2,
     MODEL_LORA_TARGET_HIGH_NOISE,
@@ -34,6 +37,14 @@ from shared.timeline import (
     time_range_to_frames,
     validate_video_timeline,
 )
+
+
+def _error_codes(validation: dict) -> list[str]:
+    return [entry["code"] for entry in validation["errors"]]
+
+
+def _warning_codes(validation: dict) -> list[str]:
+    return [entry["code"] for entry in validation["warnings"]]
 
 
 def test_create_default_video_timeline_shape():
@@ -466,6 +477,365 @@ def test_normalization_drops_legacy_lora_fields_and_creates_model_targets():
     assert model_loras["global"][MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN]["loras"] == []
     assert model_loras["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE]["loras"] == []
     assert model_loras["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_LOW_NOISE]["loras"] == []
+
+
+def test_validation_accepts_valid_shot_timeline_and_project_lora_defaults():
+    timeline = create_default_video_timeline()
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "valid prompt",
+        }
+    )
+
+    validation = validate_video_timeline(timeline)
+
+    assert validation["is_valid"] is True
+    assert _error_codes(validation) == []
+
+
+def test_validation_reports_invalid_shot_timing_and_overlap():
+    timeline = create_default_video_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_bad",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 1.0,
+            "end_time": 1.0,
+        },
+        {
+            "shot_id": "shot_a",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 2.0,
+        },
+        {
+            "shot_id": "shot_b",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 1.5,
+            "end_time": 3.0,
+        },
+    ]
+
+    validation = validate_video_timeline(timeline)
+    codes = _error_codes(validation)
+
+    assert "SHOT_INVALID_TIME_RANGE" in codes
+    assert "SHOT_OVERLAP" in codes
+
+
+def test_validation_reports_invalid_section_and_boundary_references():
+    timeline = create_default_video_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["missing_section"],
+        }
+    ]
+    timeline["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_001",
+            "left_shot_id": "shot_001",
+            "right_shot_id": "missing_shot",
+            "mode": BOUNDARY_MODE_HARD_CUT,
+        }
+    ]
+
+    validation = validate_video_timeline(timeline)
+    codes = _error_codes(validation)
+
+    assert "SHOT_SECTION_NOT_FOUND" in codes
+    assert "BOUNDARY_RIGHT_SHOT_NOT_FOUND" in codes
+
+
+def test_validation_reports_invalid_raw_boundary_mode_and_take_status():
+    timeline = create_default_video_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "takes": [{"take_id": "take_001", "status": "Nope"}],
+        },
+        {
+            "shot_id": "shot_002",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 1.0,
+            "end_time": 2.0,
+        },
+    ]
+    timeline["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_001",
+            "left_shot_id": "shot_001",
+            "right_shot_id": "shot_002",
+            "mode": "Jump Cut",
+        }
+    ]
+
+    validation = validate_video_timeline(timeline)
+    codes = _error_codes(validation)
+
+    assert "BOUNDARY_MODE_INVALID" in codes
+    assert "TAKE_STATUS_INVALID" in codes
+
+
+def test_validation_reports_stale_accepted_take_and_missing_take_asset():
+    timeline = create_default_video_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "takes": [
+                {
+                    "take_id": "take_001",
+                    "status": TAKE_STATUS_CANDIDATE,
+                    "asset_id": "missing_asset",
+                }
+            ],
+            "accepted_take_id": "stale_take",
+        }
+    ]
+
+    validation = validate_video_timeline(timeline)
+    codes = _error_codes(validation)
+
+    assert "SHOT_ACCEPTED_TAKE_NOT_FOUND" in codes
+    assert "TAKE_ASSET_NOT_FOUND" in codes
+
+
+def test_validation_reports_missing_imported_clip_asset_and_clip_reference_error():
+    timeline = create_default_video_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_imported",
+            "type": "Imported",
+            "start_time": 0.0,
+            "end_time": 1.0,
+        },
+        {
+            "shot_id": "shot_stale_clip",
+            "type": "Imported",
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "clip_instance": {"asset_id": "missing_asset"},
+        },
+    ]
+
+    validation = validate_video_timeline(timeline)
+
+    assert "IMPORTED_SHOT_MISSING_CLIP_ASSET" in _warning_codes(validation)
+    assert "SHOT_CLIP_INSTANCE_ASSET_NOT_FOUND" in _error_codes(validation)
+
+
+def test_validation_reports_invalid_project_lora_target_and_legacy_loras_are_ignored():
+    timeline = create_default_video_timeline()
+    timeline["project"]["model_loras"] = {
+        "lora_config_hi": {"loras": [{"enabled": True, "name": "hi.safetensors"}]},
+        "global": {
+            MODEL_LORA_MODEL_LTX_2_3: {
+                MODEL_LORA_TARGET_HIGH_NOISE: {
+                    "version": 1,
+                    "loras": [],
+                    "ui": {"show_strengths": "single", "match": ""},
+                },
+            }
+        },
+    }
+
+    validation = validate_video_timeline(timeline)
+    normalized = normalize_video_timeline(timeline)
+
+    assert "MODEL_LORA_TARGET_INVALID" in _error_codes(validation)
+    assert "lora_config_hi" not in normalized["project"]["model_loras"]
+
+
+def test_validation_accepts_valid_shot_lora_override_and_reports_invalid_merge_mode():
+    valid_timeline = create_default_video_timeline()
+    valid_timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "prompt": "valid prompt",
+        }
+    )
+    valid_timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_001"],
+            "lora_overrides": {
+                "enabled": True,
+                "merge_mode": LORA_MERGE_MODE_ADD_TO_GLOBAL,
+                "targets": {
+                    MODEL_LORA_MODEL_LTX_2_3: {
+                        MODEL_LORA_TARGET_MAIN: {
+                            "version": 1,
+                            "loras": [],
+                            "ui": {"show_strengths": "single", "match": ""},
+                        }
+                    }
+                },
+            },
+        }
+    ]
+    invalid_timeline = create_default_video_timeline()
+    invalid_timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_bad_lora",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "lora_overrides": {"enabled": True, "merge_mode": "Sideways"},
+        }
+    ]
+
+    valid_validation = validate_video_timeline(valid_timeline)
+    invalid_validation = validate_video_timeline(invalid_timeline)
+
+    assert "SHOT_LORA_MERGE_MODE_INVALID" not in _error_codes(valid_validation)
+    assert valid_validation["is_valid"] is True
+    assert "SHOT_LORA_MERGE_MODE_INVALID" in _error_codes(invalid_validation)
+
+
+def test_validation_checks_take_resolved_loras_snapshot_shape():
+    valid_timeline = create_default_video_timeline()
+    valid_timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "takes": [
+                {
+                    "take_id": "take_001",
+                    "status": TAKE_STATUS_CANDIDATE,
+                    "model_family": "WAN",
+                    "model_version": "2.2",
+                    "resolved_loras": {
+                        "model_family": "WAN",
+                        "model_version": "2.2",
+                        "targets": {
+                            MODEL_LORA_TARGET_HIGH_NOISE: [
+                                {"name": "high.safetensors", "strength_model": 0.8}
+                            ],
+                            MODEL_LORA_TARGET_LOW_NOISE: [
+                                {"name": "low.safetensors", "strength_model": 0.6}
+                            ],
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+    invalid_timeline = create_default_video_timeline()
+    invalid_timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_001",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "takes": [
+                {
+                    "take_id": "take_001",
+                    "status": TAKE_STATUS_CANDIDATE,
+                    "model_family": "LTX",
+                    "model_version": "2.3",
+                    "resolved_loras": {
+                        "model_family": "LTX",
+                        "model_version": "2.3",
+                        "targets": {
+                            MODEL_LORA_TARGET_HIGH_NOISE: [
+                                {"name": "wrong.safetensors", "thumbnail": "data:image/png;base64,AAAA"}
+                            ]
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+
+    valid_validation = validate_video_timeline(valid_timeline)
+    invalid_validation = validate_video_timeline(invalid_timeline)
+
+    assert "TAKE_RESOLVED_LORAS_TARGET_INVALID" not in _error_codes(valid_validation)
+    assert "TAKE_RESOLVED_LORAS_TARGET_INVALID" in _error_codes(invalid_validation)
+    assert "TAKE_RESOLVED_LORAS_EMBEDDED_MEDIA_NOT_ALLOWED" in _error_codes(invalid_validation)
+
+
+def test_validation_warns_on_lora_change_across_continuous_boundary_but_not_hard_cut():
+    timeline = create_default_video_timeline()
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_a",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 0.0,
+            "end_time": 1.0,
+        },
+        {
+            "shot_id": "shot_b",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "lora_overrides": {
+                "enabled": True,
+                "merge_mode": "Replace Global",
+                "targets": {
+                    MODEL_LORA_MODEL_LTX_2_3: {
+                        MODEL_LORA_TARGET_MAIN: {
+                            "version": 1,
+                            "loras": [],
+                            "ui": {"show_strengths": "single", "match": "different"},
+                        }
+                    }
+                },
+            },
+        },
+    ]
+    continuous = json.loads(json.dumps(timeline))
+    continuous["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_continuous",
+            "left_shot_id": "shot_a",
+            "right_shot_id": "shot_b",
+            "mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
+        }
+    ]
+    blend = json.loads(json.dumps(timeline))
+    blend["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_blend",
+            "left_shot_id": "shot_a",
+            "right_shot_id": "shot_b",
+            "mode": BOUNDARY_MODE_BLEND_SEAM,
+        }
+    ]
+    hard_cut = json.loads(json.dumps(timeline))
+    hard_cut["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_hard",
+            "left_shot_id": "shot_a",
+            "right_shot_id": "shot_b",
+            "mode": BOUNDARY_MODE_HARD_CUT,
+        }
+    ]
+
+    assert "BOUNDARY_LORA_STACK_MISMATCH" in _warning_codes(validate_video_timeline(continuous))
+    assert "BOUNDARY_LORA_STACK_MISMATCH" in _warning_codes(validate_video_timeline(blend))
+    assert "BOUNDARY_LORA_STACK_MISMATCH" not in _warning_codes(validate_video_timeline(hard_cut))
 
 
 def test_video_section_normalization_defaults_to_tail_guidance():

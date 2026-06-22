@@ -38,6 +38,14 @@ function addValidTextSection(timeline, startTime) {
   return section;
 }
 
+function errorCodes(validation) {
+  return validation.errors.map((entry) => entry.code);
+}
+
+function warningCodes(validation) {
+  return validation.warnings.map((entry) => entry.code);
+}
+
 function testNewTextSectionStartsEmpty() {
   const timeline = createDefaultVideoTimeline();
   const section = addSection(timeline, "Text", 0);
@@ -311,6 +319,125 @@ function testExistingSequenceShotsArePreserved() {
   assert.deepEqual(normalized.sequence.boundaries.map((boundary) => boundary.boundary_id), ["boundary_authored"]);
 }
 
+function testValidationReportsGenericShotStructureIssues() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.sequence.shots = [
+    { shot_id: "shot_bad", type: "Generated", start_time: 1, end_time: 1, section_ids: ["missing_section"] },
+    { shot_id: "shot_a", type: "Generated", start_time: 0, end_time: 2 },
+    {
+      shot_id: "shot_b",
+      type: "Generated",
+      start_time: 1.5,
+      end_time: 3,
+      takes: [{ take_id: "take_001", status: "Candidate", asset_id: "missing_asset" }],
+      accepted_take_id: "stale_take",
+    },
+  ];
+  timeline.sequence.boundaries = [
+    { boundary_id: "boundary_001", left_shot_id: "shot_a", right_shot_id: "missing_shot", mode: "Jump Cut" },
+  ];
+
+  const codes = errorCodes(validateVideoTimeline(timeline));
+
+  assert.equal(codes.includes("SHOT_INVALID_TIME_RANGE"), true);
+  assert.equal(codes.includes("SHOT_OVERLAP"), true);
+  assert.equal(codes.includes("SHOT_SECTION_NOT_FOUND"), true);
+  assert.equal(codes.includes("BOUNDARY_RIGHT_SHOT_NOT_FOUND"), true);
+  assert.equal(codes.includes("BOUNDARY_MODE_INVALID"), true);
+  assert.equal(codes.includes("TAKE_ASSET_NOT_FOUND"), true);
+  assert.equal(codes.includes("SHOT_ACCEPTED_TAKE_NOT_FOUND"), true);
+}
+
+function testValidationChecksGenericLoraStructureAndLegacyRemoval() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.model_loras = {
+    lora_config_hi: { loras: [{ enabled: true, name: "hi.safetensors" }] },
+    global: {
+      [MODEL_LORA_MODEL_LTX_2_3]: {
+        [MODEL_LORA_TARGET_HIGH_NOISE]: {
+          version: 1,
+          loras: [],
+          ui: { show_strengths: "single", match: "" },
+        },
+      },
+    },
+  };
+  timeline.sequence.shots = [
+    {
+      shot_id: "shot_bad_lora",
+      type: "Generated",
+      start_time: 0,
+      end_time: 1,
+      lora_overrides: { enabled: true, merge_mode: "Sideways" },
+    },
+  ];
+
+  const validation = validateVideoTimeline(timeline);
+  const normalized = normalizeVideoTimeline(timeline);
+  const codes = errorCodes(validation);
+
+  assert.equal(codes.includes("MODEL_LORA_TARGET_INVALID"), true);
+  assert.equal(codes.includes("SHOT_LORA_MERGE_MODE_INVALID"), true);
+  assert.equal("lora_config_hi" in normalized.project.model_loras, false);
+}
+
+function testValidationChecksTakeResolvedLorasAndBoundaryContinuity() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.sequence.shots = [
+    {
+      shot_id: "shot_a",
+      type: "Generated",
+      start_time: 0,
+      end_time: 1,
+      takes: [{
+        take_id: "take_001",
+        status: "Candidate",
+        model_family: "LTX",
+        model_version: "2.3",
+        resolved_loras: {
+          model_family: "LTX",
+          model_version: "2.3",
+          targets: {
+            [MODEL_LORA_TARGET_HIGH_NOISE]: [{ name: "wrong.safetensors", thumbnail: "data:image/png;base64,AAAA" }],
+          },
+        },
+      }],
+    },
+    {
+      shot_id: "shot_b",
+      type: "Generated",
+      start_time: 1,
+      end_time: 2,
+      lora_overrides: {
+        enabled: true,
+        merge_mode: "Replace Global",
+        targets: {
+          [MODEL_LORA_MODEL_LTX_2_3]: {
+            [MODEL_LORA_TARGET_MAIN]: {
+              version: 1,
+              loras: [],
+              ui: { show_strengths: "single", match: "different" },
+            },
+          },
+        },
+      },
+    },
+  ];
+  timeline.sequence.boundaries = [
+    { boundary_id: "boundary_001", left_shot_id: "shot_a", right_shot_id: "shot_b", mode: "Continuous Shot" },
+  ];
+  const hardCut = JSON.parse(JSON.stringify(timeline));
+  hardCut.sequence.boundaries[0].mode = "Hard Cut";
+
+  const validation = validateVideoTimeline(timeline);
+  const hardCutValidation = validateVideoTimeline(hardCut);
+
+  assert.equal(errorCodes(validation).includes("TAKE_RESOLVED_LORAS_TARGET_INVALID"), true);
+  assert.equal(errorCodes(validation).includes("TAKE_RESOLVED_LORAS_EMBEDDED_MEDIA_NOT_ALLOWED"), true);
+  assert.equal(warningCodes(validation).includes("BOUNDARY_LORA_STACK_MISMATCH"), true);
+  assert.equal(warningCodes(hardCutValidation).includes("BOUNDARY_LORA_STACK_MISMATCH"), false);
+}
+
 function testGroupDeleteRemovesMixedSelection() {
   const timeline = createDefaultVideoTimeline();
   timeline.project.duration_seconds = 5;
@@ -504,6 +631,9 @@ testMigrationDerivesShotsFromFlatSections();
 testMigrationIsIdempotentAndUsesDuplicateSuffixes();
 testMalformedOrMissingSequenceMigratesFromSections();
 testExistingSequenceShotsArePreserved();
+testValidationReportsGenericShotStructureIssues();
+testValidationChecksGenericLoraStructureAndLegacyRemoval();
+testValidationChecksTakeResolvedLorasAndBoundaryContinuity();
 testGroupDeleteRemovesMixedSelection();
 testGroupMoveClampsSectionsAndMovesUnlockedAudio();
 testGroupDuplicatePreservesOffsetsAndSelectsCopies();
