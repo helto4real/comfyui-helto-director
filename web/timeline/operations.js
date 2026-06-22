@@ -27,16 +27,21 @@ import { clamp, getProjectWholeSeconds, snapTime } from "./geometry.js";
 const DEFAULT_SECTION_DURATION = 1.0;
 const MIN_SECTION_DURATION = 0.25;
 
-export function addSection(timeline, type = SECTION_TYPE_TEXT, startTime = null) {
+export function addSection(timeline, type = SECTION_TYPE_TEXT, startTime = null, options = {}) {
+  const targetShot = resolveSectionTargetShot(timeline, options);
   const duration = getDuration(timeline);
   const sectionDuration = Math.min(DEFAULT_SECTION_DURATION, duration);
   const start = startTime == null
-    ? findGapForDuration(timeline, sectionDuration)
+    ? (targetShot ? findShotSectionInsertionStart(timeline, targetShot, sectionDuration) : findGapForDuration(timeline, sectionDuration))
     : findGapForDuration(timeline, sectionDuration, clampStart(timeline, snapTime(startTime, timeline), sectionDuration));
   if (start == null) return null;
   const section = createSection(type, start, start + sectionDuration);
   timeline.director_track.sections.push(section);
-  ensureShotForSection(timeline, section);
+  if (targetShot) {
+    assignSectionToShot(timeline, section.item_id, targetShot.shot_id);
+  } else {
+    ensureShotForSection(timeline, section);
+  }
   selectItem(timeline, section.item_id);
   sortDirectorSections(timeline);
   return section;
@@ -394,6 +399,7 @@ export function changeBoundaryMode(timeline, boundaryId, mode) {
 export function addTakeMetadata(timeline, shotId, takeData = {}) {
   const shot = findShot(timeline, shotId);
   if (!shot) return null;
+  const requestedAccepted = takeData.status === "Accepted";
   shot.takes ??= [];
   const take = {
     ...createDefaultTake(shot.takes.length + 1),
@@ -405,7 +411,21 @@ export function addTakeMetadata(timeline, shotId, takeData = {}) {
     resolved_loras: takeData.resolved_loras ?? null,
   };
   shot.takes.push(take);
+  if (requestedAccepted && !acceptTake(timeline, shotId, take.take_id)) {
+    take.status = "Candidate";
+  }
   return take;
+}
+
+export function attachVideoAssetAsTake(timeline, shotId, assetId, takeData = {}) {
+  const shot = findShot(timeline, shotId);
+  const asset = videoAssetForId(timeline, assetId);
+  if (!shot || !asset) return null;
+  return addTakeMetadata(timeline, shot.shot_id, {
+    ...deepClone(takeData),
+    asset_id: asset.asset_id,
+    status: TAKE_STATUSES.includes(takeData.status) ? takeData.status : "Candidate",
+  });
 }
 
 export function acceptTake(timeline, shotId, takeId) {
@@ -417,6 +437,13 @@ export function acceptTake(timeline, shotId, takeId) {
   }
   take.status = "Accepted";
   shot.accepted_take_id = take.take_id;
+  const asset = videoAssetForId(timeline, take.asset_id);
+  if (asset) {
+    shot.clip_instance = {
+      ...createDefaultClipInstance(),
+      asset_id: String(asset.asset_id),
+    };
+  }
   return true;
 }
 
@@ -426,7 +453,10 @@ export function setTakeStatus(timeline, shotId, takeId, status) {
   if (!shot || !take || !TAKE_STATUSES.includes(status)) return false;
   if (status === "Accepted") return acceptTake(timeline, shotId, takeId);
   take.status = status;
-  if (shot.accepted_take_id === take.take_id) shot.accepted_take_id = null;
+  if (shot.accepted_take_id === take.take_id) {
+    shot.accepted_take_id = null;
+    clearClipInstanceForTake(shot, take);
+  }
   return true;
 }
 
@@ -927,6 +957,21 @@ function assetExists(timeline, assetId) {
   return Boolean(assetId && timeline.assets?.some((asset) => asset.asset_id === assetId));
 }
 
+function videoAssetForId(timeline, assetId) {
+  if (assetId == null) return null;
+  return timeline.assets?.find((asset) => asset.asset_id === assetId && asset.type === ASSET_TYPE_VIDEO) ?? null;
+}
+
+function clearClipInstanceForTake(shot, take) {
+  if (
+    shot.clip_instance
+    && take?.asset_id != null
+    && shot.clip_instance.asset_id === take.asset_id
+  ) {
+    shot.clip_instance = null;
+  }
+}
+
 function isValidLoraTarget(modelKey, targetKey) {
   return (
     (modelKey === MODEL_LORA_MODEL_LTX_2_3 && targetKey === MODEL_LORA_TARGET_MAIN) ||
@@ -977,6 +1022,14 @@ function findGapForDuration(timeline, duration, preferredStart = 0) {
   return gap ? gap.start : null;
 }
 
+function findShotSectionInsertionStart(timeline, shot, duration) {
+  const shotSections = sectionsForShot(timeline, shot);
+  const preferredStart = shotSections.length
+    ? Math.max(...shotSections.map((section) => Number(section.end_time)))
+    : Number(shot.start_time ?? 0);
+  return findGapForDuration(timeline, duration, clampStart(timeline, preferredStart, duration));
+}
+
 function clampStart(timeline, start, duration) {
   return clamp(start, 0, Math.max(0, getDuration(timeline) - duration));
 }
@@ -1006,6 +1059,28 @@ function getFollowingSections(timeline, section) {
 
 function directorSections(timeline) {
   return [...(timeline.director_track?.sections ?? [])].sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time));
+}
+
+function sectionsForShot(timeline, shot) {
+  const sectionIds = new Set((shot?.section_ids ?? []).map((sectionId) => String(sectionId)));
+  return directorSections(timeline).filter((section) => sectionIds.has(String(section.item_id)));
+}
+
+function resolveSectionTargetShot(timeline, options = {}) {
+  if (options.forceStandalone) return null;
+  if (options.shotId) return compatibleSectionTargetShot(timeline, findShot(timeline, options.shotId));
+  const selectedId = timeline.ui_state?.selected_item_id;
+  const selectedShot = findShot(timeline, selectedId);
+  if (selectedShot) return compatibleSectionTargetShot(timeline, selectedShot);
+  const selectedSection = findSection(timeline, selectedId);
+  if (selectedSection) return compatibleSectionTargetShot(timeline, findShotForSection(timeline, selectedSection.item_id));
+  return null;
+}
+
+function compatibleSectionTargetShot(timeline, shot) {
+  if (!shot || shot.type === "Imported") return null;
+  if (!["Generated", "Extended", "Edited", "Placeholder"].includes(shot.type)) return null;
+  return findShot(timeline, shot.shot_id) ?? null;
 }
 
 function findAudioClipWithTrack(timeline, itemId) {

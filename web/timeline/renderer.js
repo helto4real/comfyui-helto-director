@@ -29,6 +29,7 @@ import {
 import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, mediaViewUrl, thumbnailUrl } from "./media_cache.js";
 import {
   addPickedMediaItem,
+  attachPickedGeneratedVideoAsTake,
   replacePickedSectionMedia,
 } from "./media_actions.js";
 import {
@@ -70,7 +71,7 @@ import {
 } from "./geometry.js";
 import {
   acceptTake,
-  addTakeMetadata,
+  attachVideoAssetAsTake,
   addSection,
   adjacentShotPairs,
   canFitLastDirectorSectionToDuration,
@@ -230,6 +231,10 @@ export class TimelineRenderer {
     if (next === this.privacyRevealActive) return;
     this.privacyRevealActive = next;
     if (this.controller.timeline?.project?.privacy?.mode) this.render();
+  }
+
+  isPrivacyRevealed(timeline = this.controller.timeline) {
+    return !timeline?.project?.privacy?.mode || (this.privacyRevealActive && !this.privacyExternalModalOpen);
   }
 
   renderToolbar() {
@@ -664,6 +669,10 @@ export class TimelineRenderer {
   renderShotInspector(timeline, shot, options = {}) {
     const wrapper = el("div", `htd-shot-inspector${options.standalone ? " is-standalone" : ""}`);
     const title = inspectorTitle(options.standalone ? "Shot" : "Shot Details");
+    const shotIdInput = el("input", "htd-field htd-shot-id");
+    shotIdInput.value = shot.shot_id ?? "";
+    shotIdInput.readOnly = true;
+    shotIdInput.title = "Shot ID";
     const nameInput = el("input", "htd-field htd-shot-name");
     nameInput.value = shot.name ?? "";
     nameInput.placeholder = shot.shot_id;
@@ -674,15 +683,28 @@ export class TimelineRenderer {
     wrapper.append(
       title,
       this.renderInspectorControlRow(
+        this.renderInspectorCompactField("ID:", shotIdInput, "is-shot-id"),
         this.renderInspectorCompactField("Name:", nameInput, "is-shot-name"),
+      ),
+      this.renderInspectorControlRow(
+        this.renderInspectorCompactField("Status:", this.renderShotStatusField(timeline, shot), "is-shot-status"),
         this.renderInspectorCompactField("Type:", this.renderShotTypeField(shot), "is-shot-type"),
         this.renderInspectorCompactField("LoRAs:", this.renderShotLoraModeField(shot), "is-shot-lora-mode"),
       ),
+      this.renderShotBoundaryContext(timeline, shot),
       this.renderShotClipField(timeline, shot),
+      this.renderAttachTakeField(timeline, shot),
       this.renderShotTakes(timeline, shot),
       this.renderShotLoraTargets(timeline, shot),
     );
     return wrapper;
+  }
+
+  renderShotStatusField(timeline, shot) {
+    const status = el("span", "htd-shot-status");
+    status.textContent = shotGenerationStatus(timeline, shot);
+    status.title = "Shot Generation Status";
+    return status;
   }
 
   renderShotTypeField(shot) {
@@ -735,6 +757,7 @@ export class TimelineRenderer {
     const label = el("span", "htd-shot-row-label");
     label.textContent = "Clip";
     const videos = (timeline.assets ?? []).filter((asset) => asset.type === ASSET_TYPE_VIDEO);
+    const privacyRevealed = this.isPrivacyRevealed(timeline);
     const select = el("select", "htd-select htd-shot-clip-select");
     const none = el("option");
     none.value = "";
@@ -743,7 +766,7 @@ export class TimelineRenderer {
     for (const asset of videos) {
       const option = el("option");
       option.value = asset.asset_id;
-      option.textContent = asset.name || asset.path || asset.asset_id;
+      option.textContent = assetDisplayLabel(asset, privacyRevealed, "Video Asset");
       select.append(option);
     }
     select.value = shot.clip_instance?.asset_id ?? "";
@@ -762,14 +785,41 @@ export class TimelineRenderer {
     return row;
   }
 
+  renderAttachTakeField(timeline, shot) {
+    const row = el("div", "htd-shot-row htd-shot-attach-take");
+    const label = el("span", "htd-shot-row-label");
+    label.textContent = "Generated";
+    const privacyRevealed = this.isPrivacyRevealed(timeline);
+    const generatedVideos = (timeline.assets ?? []).filter((asset) => asset.type === ASSET_TYPE_VIDEO && asset.source_kind === "Generated");
+    const select = el("select", "htd-select htd-generated-take-select");
+    const none = el("option");
+    none.value = "";
+    none.textContent = generatedVideos.length ? "Choose generated video" : "No generated videos";
+    select.append(none);
+    for (const asset of generatedVideos) {
+      const option = el("option");
+      option.value = asset.asset_id;
+      option.textContent = assetDisplayLabel(asset, privacyRevealed, "Generated Video");
+      select.append(option);
+    }
+    const attach = button("Attach", "Attach Generated Video As Take", () => {
+      if (!select.value) return;
+      this.commitMutation((currentTimeline) => attachVideoAssetAsTake(currentTimeline, shot.shot_id, select.value), "attach take");
+    });
+    attach.disabled = !generatedVideos.length;
+    const pick = button("Pick", "Pick Generated Video As Take", () => {
+      this.openMediaPicker(ASSET_TYPE_VIDEO, { mode: "attach-generated-take", shotId: shot.shot_id });
+    });
+    row.append(label, select, attach, pick);
+    return row;
+  }
+
   renderShotTakes(timeline, shot) {
     const block = el("div", "htd-shot-takes");
     const header = el("div", "htd-shot-subheader");
     const title = el("span");
     title.textContent = "Takes";
-    header.append(title, button("Add Take", "Add Take Metadata", () => {
-      this.commitMutation((currentTimeline) => addTakeMetadata(currentTimeline, shot.shot_id), "add take");
-    }));
+    header.append(title);
     block.append(header);
     const takes = shot.takes ?? [];
     if (!takes.length) {
@@ -782,8 +832,9 @@ export class TimelineRenderer {
       const row = el("div", "htd-take-row");
       const label = el("span", "htd-take-label");
       const asset = take.asset_id ? timeline.assets?.find((candidate) => candidate.asset_id === take.asset_id) : null;
-      label.textContent = `${take.take_id}${asset ? ` · ${asset.name || asset.asset_id}` : ""}`;
-      label.title = take.asset_id || take.take_id;
+      const privacyRevealed = this.isPrivacyRevealed(timeline);
+      label.textContent = takeSummaryLabel(timeline, take, privacyRevealed);
+      label.title = privacyRevealed ? (take.asset_id || take.take_id) : take.take_id;
       const status = iconMenuControl({
         id: `take-status-${take.take_id}`,
         title: "Take Status",
@@ -807,10 +858,38 @@ export class TimelineRenderer {
         this.commitMutation((currentTimeline) => acceptTake(currentTimeline, shot.shot_id, take.take_id), "accept take");
       });
       accept.disabled = !asset;
-      row.append(label, status, accept);
+      const reject = button("Reject", "Mark Take Rejected", () => {
+        this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, take.take_id, "Rejected"), "take change");
+      });
+      reject.disabled = take.status === "Rejected";
+      const restore = button("Candidate", "Restore Candidate Take", () => {
+        this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, take.take_id, "Candidate"), "take change");
+      });
+      restore.disabled = take.status === "Candidate";
+      row.append(label, status, accept, reject, restore);
       block.append(row);
     }
     return block;
+  }
+
+  renderShotBoundaryContext(timeline, shot) {
+    const context = shotBoundaryContext(timeline, shot);
+    const row = el("div", "htd-shot-boundary-context");
+    const incoming = el("span", "htd-boundary-pill");
+    incoming.textContent = `In: ${context.incoming?.mode ?? "None"}`;
+    incoming.title = context.incoming ? `Incoming Boundary: ${context.incoming.mode}` : "Incoming Boundary: None";
+    const outgoing = el("span", "htd-boundary-pill");
+    outgoing.textContent = `Out: ${context.outgoing?.mode ?? "None"}`;
+    outgoing.title = context.outgoing ? `Outgoing Boundary: ${context.outgoing.mode}` : "Outgoing Boundary: None";
+    row.append(incoming, outgoing);
+    const warning = boundaryWarningForShot(timeline, context);
+    if (warning) {
+      const warningElement = el("span", "htd-boundary-warning");
+      warningElement.textContent = "LoRA mismatch";
+      warningElement.title = warning.hint || warning.message || "Boundary LoRA stack mismatch";
+      row.append(warningElement);
+    }
+    return row;
   }
 
   renderShotLoraTargets(timeline, shot) {
@@ -1872,10 +1951,12 @@ export class TimelineRenderer {
       this.commitMutation((timeline) => {
         if (options.mode === "replace") {
           replacePickedSectionMedia(timeline, options.itemId, assetType, item);
+        } else if (options.mode === "attach-generated-take") {
+          attachPickedGeneratedVideoAsTake(timeline, options.shotId, item);
         } else {
           addPickedMediaItem(timeline, assetType, item);
         }
-      }, reason);
+      }, options.mode === "attach-generated-take" ? "attach generated take" : reason);
     } catch (error) {
       const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
       alertFn?.(error.message);
@@ -2038,6 +2119,72 @@ function computeGaps(timeline) {
   }
   if (cursor < duration) gaps.push({ start_time: cursor, end_time: duration });
   return gaps;
+}
+
+function shotGenerationStatus(timeline, shot) {
+  const accepted = (shot.takes ?? []).find((take) => take.take_id === shot.accepted_take_id);
+  if (shot.accepted_take_id && !accepted) return "Missing accepted take";
+  if (accepted && !assetForId(timeline, accepted.asset_id)) return "Missing take asset";
+  if (accepted) return "Accepted take";
+  if (shot.clip_instance?.asset_id) {
+    return assetForId(timeline, shot.clip_instance.asset_id)
+      ? (shot.type === "Imported" ? "Imported clip ready" : "Clip ready")
+      : "Missing clip asset";
+  }
+  if ((shot.takes ?? []).some((take) => take.status === "Candidate")) return "Candidate takes";
+  return "Needs generation";
+}
+
+function shotBoundaryContext(timeline, shot) {
+  const shots = [...(timeline.sequence?.shots ?? [])]
+    .sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time) || String(a.shot_id).localeCompare(String(b.shot_id)));
+  const index = shots.findIndex((candidate) => candidate.shot_id === shot.shot_id);
+  const previous = index > 0 ? shots[index - 1] : null;
+  const next = index >= 0 && index < shots.length - 1 ? shots[index + 1] : null;
+  return {
+    incoming: previous ? findBoundaryBetweenShots(timeline, previous.shot_id, shot.shot_id) : null,
+    outgoing: next ? findBoundaryBetweenShots(timeline, shot.shot_id, next.shot_id) : null,
+  };
+}
+
+function boundaryWarningForShot(timeline, context) {
+  const ids = new Set([
+    context.incoming?.boundary_id,
+    context.outgoing?.boundary_id,
+  ].filter(Boolean));
+  return (timeline.validation?.warnings ?? []).find((entry) => (
+    entry.code === "BOUNDARY_LORA_STACK_MISMATCH" && ids.has(entry.item_id)
+  )) ?? null;
+}
+
+function takeSummaryLabel(timeline, take, privacyRevealed) {
+  const parts = [take.take_id];
+  const asset = assetForId(timeline, take.asset_id);
+  if (asset) parts.push(assetDisplayLabel(asset, privacyRevealed, "Video Asset"));
+  const model = [take.model_family, take.model_version].filter(Boolean).join(" ");
+  if (model) parts.push(model);
+  if (take.seed != null) parts.push(`seed ${take.seed}`);
+  const loraCount = resolvedLoraCount(take.resolved_loras);
+  if (loraCount > 0) parts.push(`${loraCount} LoRA${loraCount === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
+function assetDisplayLabel(asset, privacyRevealed, fallback = "Asset") {
+  if (!asset) return fallback;
+  if (!privacyRevealed) return fallback;
+  return asset.name || asset.path || asset.file_path || asset.asset_id || fallback;
+}
+
+function resolvedLoraCount(resolvedLoras) {
+  const targets = resolvedLoras?.targets && typeof resolvedLoras.targets === "object" && !Array.isArray(resolvedLoras.targets)
+    ? resolvedLoras.targets
+    : {};
+  return Object.values(targets).reduce((count, stack) => count + (Array.isArray(stack) ? stack.length : 0), 0);
+}
+
+function assetForId(timeline, assetId) {
+  if (assetId == null) return null;
+  return (timeline.assets ?? []).find((asset) => asset.asset_id === assetId) ?? null;
 }
 
 function rangeSecondFromClientX(clientX, bar, timeline) {
@@ -2679,15 +2826,21 @@ function installStyles(documentRef) {
     .htd-media-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-shot-inspector { min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; border-top: 1px solid #30394c; }
     .htd-shot-inspector.is-standalone { padding-top: 0; border-top: 0; }
+    .htd-shot-id { max-width: 170px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
     .htd-shot-name { max-width: 170px; }
+    .htd-shot-status { min-width: 0; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
+    .htd-shot-boundary-context { min-width: 0; min-height: 22px; display: flex; align-items: center; gap: 6px; }
+    .htd-boundary-pill { max-width: 140px; padding: 2px 6px; border: 1px solid #465064; border-radius: 4px; background: #182232; color: #cfd7e5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .htd-boundary-warning { padding: 2px 6px; border: 1px solid #7a5e28; border-radius: 4px; background: #332711; color: #ffe3a3; white-space: nowrap; }
     .htd-shot-row, .htd-lora-summary-row { min-width: 0; min-height: 24px; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
     .htd-shot-row-label { flex: 0 0 74px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
     .htd-shot-clip-select { max-width: 220px; }
+    .htd-generated-take-select { max-width: 220px; }
     .htd-shot-subheader { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #eef2f7; font-weight: 600; }
     .htd-shot-subheader .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-shot-takes, .htd-shot-loras { min-width: 0; display: grid; gap: 4px; }
     .htd-shot-empty { color: #8d98ab; font-size: 11px; }
-    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) auto auto; align-items: center; gap: 6px; }
+    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(140px, 1fr) auto auto auto auto; align-items: center; gap: 6px; }
     .htd-take-label, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-project-loras { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 7px; padding-top: 7px; border-top: 1px solid #30394c; }

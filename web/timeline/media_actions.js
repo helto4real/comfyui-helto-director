@@ -2,8 +2,14 @@ import {
   ASSET_TYPE_AUDIO,
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
+  ASSET_SOURCE_GENERATED,
 } from "./schema.js";
-import { addAudioClip, addSection, findSection } from "./operations.js";
+import {
+  addAudioClip,
+  addSection,
+  attachVideoAssetAsTake,
+  findSection,
+} from "./operations.js";
 import { attachMediaAsset, createFilePathAsset } from "./media.js";
 
 
@@ -42,6 +48,21 @@ export function addPickedMediaItem(timeline, assetType, item) {
     return clip;
   }
   return null;
+}
+
+export function attachPickedGeneratedVideoAsTake(timeline, shotId, item, takeData = {}) {
+  const asset = createPickedMediaAsset(ASSET_TYPE_VIDEO, item);
+  if (!asset) return null;
+  asset.source_kind = ASSET_SOURCE_GENERATED;
+  asset.metadata = {
+    ...(asset.metadata ?? {}),
+    shot_id: shotId,
+    source_kind: ASSET_SOURCE_GENERATED,
+  };
+  timeline.assets ??= [];
+  timeline.assets.push(asset);
+  const take = attachVideoAssetAsTake(timeline, shotId, asset.asset_id, takeData);
+  return take ? { asset, take } : null;
 }
 
 export function replacePickedSectionMedia(timeline, itemId, assetType, item) {

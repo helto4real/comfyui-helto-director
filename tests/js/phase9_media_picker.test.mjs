@@ -95,12 +95,12 @@ function testReplaceModePreservesTiming() {
   assert.deepEqual(section.image, { asset_id: timeline.assets[0].asset_id });
 }
 
-function testInspectorNoLongerRendersPathAttachChooseClearControls() {
+function testInspectorNoLongerRendersPathEntryClearControls() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
   assert.equal(rendererSource.includes("renderMediaControls"), false);
-  assert.equal(rendererSource.includes("Attach"), false);
-  assert.equal(rendererSource.includes("Choose"), false);
+  assert.equal(rendererSource.includes("Attach Generated Video As Take"), true);
+  assert.equal(rendererSource.includes("Choose generated video"), true);
   assert.equal(rendererSource.includes("Clear Media"), false);
   assert.equal(rendererSource.includes("htd-media-path"), false);
 }
@@ -137,7 +137,7 @@ testVideoPickerSelectionCreatesSectionAndAsset();
 testAudioPickerSelectionCreatesClipAndAsset();
 testCancelOrEmptySelectionDoesNotCreateBlankSection();
 testReplaceModePreservesTiming();
-testInspectorNoLongerRendersPathAttachChooseClearControls();
+testInspectorNoLongerRendersPathEntryClearControls();
 testMediaPickerPrivacyUsesSingleDirectorMode();
 
 console.log("phase9 media picker tests passed");

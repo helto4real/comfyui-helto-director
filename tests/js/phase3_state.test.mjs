@@ -16,13 +16,15 @@ import {
   createDefaultVideoTimeline,
 } from "../../web/timeline/schema.js";
 import {
+  acceptTake,
   addSection,
-  addTakeMetadata,
+  attachVideoAssetAsTake,
   findShotForSection,
   selectItem,
   setProjectModelLoraStack,
   setShotLoraMergeMode,
   setShotLoraTargetStack,
+  setTakeStatus,
 } from "../../web/timeline/operations.js";
 
 function createWidget(name, value) {
@@ -248,9 +250,8 @@ async function testSequenceTakeAndLoraStructuresSerializeAndUndoRedo() {
       path: "/tmp/generated.mp4",
       name: "generated.mp4",
     });
-    addTakeMetadata(timeline, shot.shot_id, {
+    attachVideoAssetAsTake(timeline, shot.shot_id, "asset_video_001", {
       take_id: "take_001",
-      asset_id: "asset_video_001",
       resolved_loras: {
         model_family: "LTX",
         model_version: "2.3",
@@ -271,6 +272,7 @@ async function testSequenceTakeAndLoraStructuresSerializeAndUndoRedo() {
   let hiddenTimeline = getHiddenTimeline(node);
   assert.equal(hiddenTimeline.sequence.shots.length, 1);
   assert.equal(hiddenTimeline.sequence.shots[0].takes[0].take_id, "take_001");
+  assert.equal(hiddenTimeline.sequence.shots[0].takes[0].asset_id, "asset_video_001");
   assert.equal(hiddenTimeline.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras[0].name, "global.safetensors");
   assert.equal(hiddenTimeline.sequence.shots[0].lora_overrides.targets[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE].loras[0].name, "shot.safetensors");
 
@@ -281,6 +283,31 @@ async function testSequenceTakeAndLoraStructuresSerializeAndUndoRedo() {
   assert.equal(controller.redoTimelineChange(), true);
   hiddenTimeline = getHiddenTimeline(node);
   assert.equal(hiddenTimeline.sequence.shots[0].takes[0].take_id, "take_001");
+
+  controller.updateTimeline((timeline) => {
+    const shot = timeline.sequence.shots[0];
+    acceptTake(timeline, shot.shot_id, "take_001");
+  }, "accept take");
+
+  hiddenTimeline = getHiddenTimeline(node);
+  assert.equal(hiddenTimeline.sequence.shots[0].takes[0].status, "Accepted");
+  assert.equal(hiddenTimeline.sequence.shots[0].accepted_take_id, "take_001");
+  assert.equal(hiddenTimeline.sequence.shots[0].clip_instance.asset_id, "asset_video_001");
+
+  controller.updateTimeline((timeline) => {
+    const shot = timeline.sequence.shots[0];
+    setTakeStatus(timeline, shot.shot_id, "take_001", "Rejected");
+  }, "reject take");
+
+  hiddenTimeline = getHiddenTimeline(node);
+  assert.equal(hiddenTimeline.sequence.shots[0].takes[0].status, "Rejected");
+  assert.equal(hiddenTimeline.sequence.shots[0].accepted_take_id, null);
+  assert.equal(hiddenTimeline.sequence.shots[0].clip_instance, null);
+
+  assert.equal(controller.undoTimelineChange(), true);
+  hiddenTimeline = getHiddenTimeline(node);
+  assert.equal(hiddenTimeline.sequence.shots[0].takes[0].status, "Accepted");
+  assert.equal(hiddenTimeline.sequence.shots[0].clip_instance.asset_id, "asset_video_001");
 }
 
 async function testDebouncedCommit() {
@@ -642,7 +669,19 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
             },
           },
         },
-        takes: [{ take_id: "take_private", asset_id: "asset_video_001", status: "Candidate", resolved_loras: null, metadata: {} }],
+        takes: [{
+          take_id: "take_private",
+          asset_id: "asset_video_001",
+          status: "Candidate",
+          resolved_loras: {
+            model_family: "LTX",
+            model_version: "2.3",
+            targets: {
+              [MODEL_LORA_TARGET_MAIN]: [{ enabled: true, name: "private-take-lora.safetensors", strength_model: 1, strength_clip: 1 }],
+            },
+          },
+          metadata: { prompt: "private take prompt" },
+        }],
         accepted_take_id: null,
         clip_instance: { asset_id: "asset_video_001", source_in: 0, source_out: null, speed: 1, enabled: true },
         metadata: {},
@@ -657,6 +696,8 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
     assert.equal(hiddenValue.includes("reference.png"), false);
     assert.equal(hiddenValue.includes("private shot"), false);
     assert.equal(hiddenValue.includes("private-lora.safetensors"), false);
+    assert.equal(hiddenValue.includes("private-take-lora.safetensors"), false);
+    assert.equal(hiddenValue.includes("private take prompt"), false);
     assert.equal(hiddenValue.includes("generated.mp4"), false);
   } finally {
     restoreXhr();

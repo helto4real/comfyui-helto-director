@@ -16,6 +16,7 @@ import {
   addSection,
   addTakeMetadata,
   assignSectionToShot,
+  attachVideoAssetAsTake,
   autoStackAudioLanes,
   canFitLastDirectorSectionToDuration,
   changeBoundaryMode,
@@ -51,7 +52,7 @@ import {
 import { detectDirectorGaps, validateVideoTimeline } from "../../web/timeline/validation.js";
 
 function addValidTextSection(timeline, startTime) {
-  const section = addSection(timeline, "Text", startTime);
+  const section = addSection(timeline, "Text", startTime, { forceStandalone: true });
   section.prompt = "Text prompt";
   return section;
 }
@@ -362,6 +363,41 @@ function testShotOperationsCreateAssignBoundaryAndDelete() {
   assert.equal(timeline.sequence.boundaries.length, 0);
 }
 
+function testAddSectionTargetsSelectedCompatibleShot() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+  const shot = createShot(timeline, { shot_id: "shot_manual", start_time: 0, end_time: 1 });
+
+  const first = addSection(timeline, "Text");
+  first.prompt = "first";
+  assert.equal(timeline.sequence.shots.length, 1);
+  assert.deepEqual(shot.section_ids, [first.item_id]);
+  assert.equal(findShotForSection(timeline, first.item_id).shot_id, "shot_manual");
+
+  const second = addSection(timeline, "Image");
+  assert.equal(timeline.sequence.shots.length, 1);
+  assert.deepEqual(shot.section_ids, [first.item_id, second.item_id]);
+  assert.deepEqual([second.start_time, second.end_time], [1, 2]);
+  assert.deepEqual([shot.start_time, shot.end_time], [0, 2]);
+}
+
+function testStandaloneSectionCreationStillCreatesWrapperShot() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+  const shot = createShot(timeline, { shot_id: "shot_manual", start_time: 0, end_time: 1 });
+  const standalone = addSection(timeline, "Text", null, { forceStandalone: true });
+
+  assert.equal(timeline.sequence.shots.length, 2);
+  assert.equal(findShotForSection(timeline, standalone.item_id).shot_id.startsWith("shot_section_"), true);
+  assert.deepEqual(shot.section_ids, []);
+
+  const importedTimeline = createDefaultVideoTimeline();
+  createShot(importedTimeline, { shot_id: "shot_imported", type: "Imported", start_time: 0, end_time: 1 });
+  const importedSelectedSection = addSection(importedTimeline, "Text");
+  assert.equal(importedTimeline.sequence.shots.length, 2);
+  assert.notEqual(findShotForSection(importedTimeline, importedSelectedSection.item_id).shot_id, "shot_imported");
+}
+
 function testTakeAndClipInstanceOperations() {
   const timeline = createDefaultVideoTimeline();
   const section = addValidTextSection(timeline, 0);
@@ -396,6 +432,42 @@ function testTakeAndClipInstanceOperations() {
   assert.equal(setTakeStatus(timeline, shot.shot_id, take.take_id, "Rejected"), true);
   assert.equal(shot.accepted_take_id, null);
   assert.equal(take.status, "Rejected");
+}
+
+function testAttachGeneratedAssetAsTakePreservesGeneratedShotType() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addValidTextSection(timeline, 0);
+  const shot = findShotForSection(timeline, section.item_id);
+  timeline.assets.push({
+    asset_id: "asset_generated_001",
+    type: ASSET_TYPE_VIDEO,
+    source_kind: ASSET_SOURCE_GENERATED,
+    path: "/tmp/generated-take.mp4",
+    name: "generated-take.mp4",
+  });
+
+  const take = attachVideoAssetAsTake(timeline, shot.shot_id, "asset_generated_001", {
+    take_id: "take_generated",
+    seed: 456,
+    model_family: "WAN",
+    model_version: "2.2",
+  });
+
+  assert.equal(take.take_id, "take_generated");
+  assert.equal(take.asset_id, "asset_generated_001");
+  assert.equal(take.status, "Candidate");
+  assert.equal(shot.type, "Generated");
+  assert.equal(acceptTake(timeline, shot.shot_id, take.take_id), true);
+  assert.equal(shot.type, "Generated");
+  assert.equal(shot.accepted_take_id, take.take_id);
+  assert.equal(shot.clip_instance.asset_id, "asset_generated_001");
+
+  assert.equal(setTakeStatus(timeline, shot.shot_id, take.take_id, "Rejected"), true);
+  assert.equal(shot.accepted_take_id, null);
+  assert.equal(shot.clip_instance, null);
+  assert.equal(setTakeStatus(timeline, shot.shot_id, take.take_id, "Candidate"), true);
+  assert.equal(take.status, "Candidate");
+  assert.equal(shot.clip_instance, null);
 }
 
 function testProjectAndShotLoraOperations() {
@@ -777,7 +849,10 @@ testMigrationIsIdempotentAndUsesDuplicateSuffixes();
 testMalformedOrMissingSequenceMigratesFromSections();
 testExistingSequenceShotsArePreserved();
 testShotOperationsCreateAssignBoundaryAndDelete();
+testAddSectionTargetsSelectedCompatibleShot();
+testStandaloneSectionCreationStillCreatesWrapperShot();
 testTakeAndClipInstanceOperations();
+testAttachGeneratedAssetAsTakePreservesGeneratedShotType();
 testProjectAndShotLoraOperations();
 testValidationReportsGenericShotStructureIssues();
 testValidationChecksGenericLoraStructureAndLegacyRemoval();

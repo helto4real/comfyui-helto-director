@@ -128,6 +128,13 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("iconButton(\"text\", \"Add Text Section\""), true);
   assert.equal(rendererSource.includes("iconMenuControl"), true);
   assert.equal(rendererSource.includes("aria-label"), true);
+  assert.equal(rendererSource.includes("renderShotBoundaryContext(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("Attach Generated Video As Take"), true);
+  assert.equal(rendererSource.includes("attachPickedGeneratedVideoAsTake(timeline, options.shotId, item)"), true);
+  assert.equal(rendererSource.includes("entry.code === \"BOUNDARY_LORA_STACK_MISMATCH\""), true);
+  assert.equal(rendererSource.includes("assetDisplayLabel(asset, privacyRevealed"), true);
+  assert.equal(rendererSource.includes("takeSummaryLabel(timeline, take, privacyRevealed)"), true);
+  assert.equal(rendererSource.includes("shotIdInput.readOnly = true"), true);
   assert.equal(rendererSource.includes("htd-project-end"), true);
   assert.equal(rendererSource.includes("TIMELINE_RIGHT_PADDING"), true);
   assert.equal(rendererSource.includes("renderRangeControl"), true);
@@ -247,8 +254,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selected.image, "Image")'), false);
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selected.video, "Video")'), false);
   assert.equal(rendererSource.includes('this.renderMediaSummary(timeline, selectedAudio.audio, "Audio")'), true);
-  assert.equal(rendererSource.includes("Attach"), false);
-  assert.equal(rendererSource.includes("Choose"), false);
+  assert.equal(rendererSource.includes("Attach Generated Video As Take"), true);
+  assert.equal(rendererSource.includes("Choose generated video"), true);
   assert.equal(rendererSource.includes("Clear Media"), false);
 
   const migrationSource = readFileSync(new URL("../../web/timeline/migration.js", import.meta.url), "utf8");
