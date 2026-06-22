@@ -6,7 +6,24 @@ import {
   VIDEO_TIMELINE_WIDGET,
 } from "../../web/timeline/state.js";
 import { PRIVACY_SCHEMA } from "../../web/timeline/privacy.js";
-import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
+import {
+  ASSET_SOURCE_GENERATED,
+  ASSET_TYPE_VIDEO,
+  MODEL_LORA_MODEL_LTX_2_3,
+  MODEL_LORA_MODEL_WAN_2_2,
+  MODEL_LORA_TARGET_HIGH_NOISE,
+  MODEL_LORA_TARGET_MAIN,
+  createDefaultVideoTimeline,
+} from "../../web/timeline/schema.js";
+import {
+  addSection,
+  addTakeMetadata,
+  findShotForSection,
+  selectItem,
+  setProjectModelLoraStack,
+  setShotLoraMergeMode,
+  setShotLoraTargetStack,
+} from "../../web/timeline/operations.js";
 
 function createWidget(name, value) {
   return { name, value, type: "string" };
@@ -216,6 +233,56 @@ async function testUndoRedoUpdatesStateAndWidget() {
   assert.equal(getHiddenTimeline(node).director_track.sections[0].prompt, "first");
 }
 
+async function testSequenceTakeAndLoraStructuresSerializeAndUndoRedo() {
+  const node = createNode();
+  const controller = mountTimelineState(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    const section = addSection(timeline, "Text", 0);
+    section.prompt = "shot prompt";
+    const shot = findShotForSection(timeline, section.item_id);
+    timeline.assets.push({
+      asset_id: "asset_video_001",
+      type: ASSET_TYPE_VIDEO,
+      source_kind: ASSET_SOURCE_GENERATED,
+      path: "/tmp/generated.mp4",
+      name: "generated.mp4",
+    });
+    addTakeMetadata(timeline, shot.shot_id, {
+      take_id: "take_001",
+      asset_id: "asset_video_001",
+      resolved_loras: {
+        model_family: "LTX",
+        model_version: "2.3",
+        targets: { [MODEL_LORA_TARGET_MAIN]: [] },
+      },
+    });
+    setProjectModelLoraStack(timeline, MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN, {
+      loras: [{ enabled: true, name: "global.safetensors", strength_model: 1, strength_clip: 1 }],
+      ui: { match: "global" },
+    });
+    setShotLoraMergeMode(timeline, shot.shot_id, "Add To Global");
+    setShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE, {
+      loras: [{ enabled: true, name: "shot.safetensors", strength_model: 0.8, strength_clip: 0.8 }],
+      ui: { match: "shot" },
+    });
+  }, "add shot data");
+
+  let hiddenTimeline = getHiddenTimeline(node);
+  assert.equal(hiddenTimeline.sequence.shots.length, 1);
+  assert.equal(hiddenTimeline.sequence.shots[0].takes[0].take_id, "take_001");
+  assert.equal(hiddenTimeline.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras[0].name, "global.safetensors");
+  assert.equal(hiddenTimeline.sequence.shots[0].lora_overrides.targets[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE].loras[0].name, "shot.safetensors");
+
+  assert.equal(controller.undoTimelineChange(), true);
+  hiddenTimeline = getHiddenTimeline(node);
+  assert.equal(hiddenTimeline.sequence.shots.length, 0);
+
+  assert.equal(controller.redoTimelineChange(), true);
+  hiddenTimeline = getHiddenTimeline(node);
+  assert.equal(hiddenTimeline.sequence.shots[0].takes[0].take_id, "take_001");
+}
+
 async function testDebouncedCommit() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, {
@@ -357,6 +424,28 @@ async function testDeleteKeyRemovesMixedSelectedItems() {
   assert.deepEqual(hiddenTimeline.ui_state.selected_item_ids, []);
   assert.equal(event.defaultPrevented, true);
   assert.equal(event.propagationStopped, true);
+}
+
+async function testDeleteKeyRemovesSelectedShotAndSections() {
+  const node = createNode();
+  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+  controller.updateTimeline((timeline) => {
+    const section = addSection(timeline, "Text", 0);
+    section.prompt = "delete shot";
+    const shot = findShotForSection(timeline, section.item_id);
+    selectItem(timeline, shot.shot_id);
+  }, "add shot selection");
+
+  const event = createKeyEvent("Delete");
+  controller.handleKeyDown(event);
+  const hiddenTimeline = getHiddenTimeline(node);
+
+  assert.equal(hiddenTimeline.sequence.shots.length, 0);
+  assert.equal(hiddenTimeline.director_track.sections.length, 0);
+  assert.equal(hiddenTimeline.ui_state.selected_item_id, null);
+  assert.deepEqual(hiddenTimeline.ui_state.selected_item_ids, []);
+  assert.equal(event.defaultPrevented, true);
 }
 
 async function testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused() {
@@ -518,6 +607,13 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
         path: "/private/reference.png",
         name: "reference.png",
       });
+      timeline.assets.push({
+        asset_id: "asset_video_001",
+        type: ASSET_TYPE_VIDEO,
+        source_kind: ASSET_SOURCE_GENERATED,
+        path: "/private/generated.mp4",
+        name: "generated.mp4",
+      });
       timeline.director_track.sections.push({
         item_id: "section_001",
         type: "Image",
@@ -525,6 +621,31 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
         end_time: 1,
         prompt: "private prompt",
         image: { asset_id: "asset_001" },
+      });
+      timeline.sequence.shots.push({
+        shot_id: "shot_private",
+        name: "private shot",
+        type: "Generated",
+        start_time: 0,
+        end_time: 1,
+        section_ids: ["section_001"],
+        lora_overrides: {
+          enabled: true,
+          merge_mode: "Replace Global",
+          targets: {
+            [MODEL_LORA_MODEL_LTX_2_3]: {
+              [MODEL_LORA_TARGET_MAIN]: {
+                version: 1,
+                loras: [{ enabled: true, name: "private-lora.safetensors", strength_model: 1, strength_clip: 1 }],
+                ui: { show_strengths: "single", match: "private lora" },
+              },
+            },
+          },
+        },
+        takes: [{ take_id: "take_private", asset_id: "asset_video_001", status: "Candidate", resolved_loras: null, metadata: {} }],
+        accepted_take_id: null,
+        clip_instance: { asset_id: "asset_video_001", source_in: 0, source_out: null, speed: 1, enabled: true },
+        metadata: {},
       });
     }, "privacy");
 
@@ -534,6 +655,9 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
     assert.equal(payload.schema, PRIVACY_SCHEMA);
     assert.equal(hiddenValue.includes("private prompt"), false);
     assert.equal(hiddenValue.includes("reference.png"), false);
+    assert.equal(hiddenValue.includes("private shot"), false);
+    assert.equal(hiddenValue.includes("private-lora.safetensors"), false);
+    assert.equal(hiddenValue.includes("generated.mp4"), false);
   } finally {
     restoreXhr();
   }
@@ -587,12 +711,14 @@ async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();
 await testLongMultilinePromptSurvivesCommit();
 await testUndoRedoUpdatesStateAndWidget();
+await testSequenceTakeAndLoraStructuresSerializeAndUndoRedo();
 await testDebouncedCommit();
 await testFlushBeforeSerializationWritesPendingPromptWithoutRerender();
 await testExtensionFlushesBeforeNodeSerialize();
 await testGestureMouseupCommitBoundary();
 await testDeleteKeyRemovesSelectedItem();
 await testDeleteKeyRemovesMixedSelectedItems();
+await testDeleteKeyRemovesSelectedShotAndSections();
 await testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused();
 await testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem();
 await testDeleteKeyIsIgnoredOnInteractiveTimelineControls();

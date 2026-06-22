@@ -459,6 +459,9 @@ function normalizeUiStateSelection(timeline) {
   const uiState = timeline.ui_state ??= {};
   const existing = new Set([
     ...(timeline.director_track?.sections ?? []).map((section) => section.item_id),
+    ...(timeline.sequence?.shots ?? []).map((shot) => shot.shot_id),
+    ...(timeline.sequence?.boundaries ?? []).map((boundary) => boundary.boundary_id),
+    ...(timeline.sequence?.shots ?? []).flatMap((shot) => (shot.takes ?? []).map((take) => take.take_id)),
     ...(timeline.audio_tracks ?? []).flatMap((track) => (track.clips ?? []).map((clip) => clip.item_id)),
   ].filter(Boolean));
   const rawIds = Array.isArray(uiState.selected_item_ids) && uiState.selected_item_ids.length

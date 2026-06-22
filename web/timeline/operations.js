@@ -1,7 +1,25 @@
 import {
+  ASSET_TYPE_VIDEO,
+  BOUNDARY_MODES,
+  LORA_MERGE_MODES,
+  MODEL_LORA_MODEL_LTX_2_3,
+  MODEL_LORA_MODEL_WAN_2_2,
+  MODEL_LORA_SCHEMA_VERSION,
+  MODEL_LORA_TARGET_HIGH_NOISE,
+  MODEL_LORA_TARGET_LOW_NOISE,
+  MODEL_LORA_TARGET_MAIN,
   SECTION_TYPE_IMAGE,
   SECTION_TYPE_TEXT,
   SECTION_TYPE_VIDEO,
+  SHOT_TYPES,
+  TAKE_STATUSES,
+  createDefaultBoundary,
+  createDefaultClipInstance,
+  createDefaultLoraStack,
+  createDefaultProjectModelLoras,
+  createDefaultSequence,
+  createDefaultShot,
+  createDefaultTake,
   deepClone,
 } from "./schema.js";
 import { clamp, getProjectWholeSeconds, snapTime } from "./geometry.js";
@@ -18,6 +36,7 @@ export function addSection(timeline, type = SECTION_TYPE_TEXT, startTime = null)
   if (start == null) return null;
   const section = createSection(type, start, start + sectionDuration);
   timeline.director_track.sections.push(section);
+  ensureShotForSection(timeline, section);
   selectItem(timeline, section.item_id);
   sortDirectorSections(timeline);
   return section;
@@ -26,9 +45,15 @@ export function addSection(timeline, type = SECTION_TYPE_TEXT, startTime = null)
 export function deleteSelectedItem(timeline) {
   const ids = new Set(getSelectedItemIds(timeline));
   if (!ids.size) return false;
+  let changed = false;
+  for (const id of ids) {
+    if (deleteShot(timeline, id)) changed = true;
+    if (deleteBoundary(timeline, id)) changed = true;
+    if (deleteTakeById(timeline, id)) changed = true;
+  }
   const before = timeline.director_track.sections.length;
   timeline.director_track.sections = timeline.director_track.sections.filter((section) => !ids.has(section.item_id));
-  let changed = before !== timeline.director_track.sections.length;
+  changed = changed || before !== timeline.director_track.sections.length;
   for (const track of timeline.audio_tracks) {
     const clipBefore = track.clips.length;
     track.clips = track.clips.filter((clip) => !ids.has(clip.item_id));
@@ -37,7 +62,11 @@ export function deleteSelectedItem(timeline) {
       cleanupAudioTracks(timeline);
     }
   }
-  if (changed) clearSelection(timeline);
+  if (changed) {
+    cleanupShotSectionIds(timeline);
+    syncShotTimingFromSections(timeline);
+    clearSelection(timeline);
+  }
   return changed;
 }
 
@@ -70,6 +99,7 @@ export function duplicateSelectedSection(timeline) {
     copy.start_time = Number(copy.start_time) + delta;
     copy.end_time = Number(copy.end_time) + delta;
     timeline.director_track.sections.push(copy);
+    ensureShotForSection(timeline, copy);
     newIds.push(copy.item_id);
   }
   if (selected.audioClips.length) {
@@ -110,6 +140,8 @@ export function splitSelectedSection(timeline, splitTime = null) {
   }
 
   timeline.director_track.sections.push(copy);
+  ensureShotForSection(timeline, copy);
+  syncShotTimingFromSections(timeline);
   selectItem(timeline, copy.item_id);
   sortDirectorSections(timeline);
   return copy;
@@ -123,6 +155,7 @@ export function moveSection(timeline, itemId, startTime) {
   const start = clamp(snapTime(startTime, timeline), bounds.min, bounds.max - duration);
   section.start_time = start;
   section.end_time = start + duration;
+  syncShotTimingFromSections(timeline);
   sortDirectorSections(timeline);
   return true;
 }
@@ -177,6 +210,7 @@ export function moveSelectedItems(timeline, itemId, startTime) {
     }
   }
   sortDirectorSections(timeline);
+  syncShotTimingFromSections(timeline);
   autoStackAudioLanes(timeline);
   return true;
 }
@@ -232,6 +266,7 @@ function trimResizeSection(timeline, section, edge, time) {
     }
   }
   sortDirectorSections(timeline);
+  syncShotTimingFromSections(timeline);
   return true;
 }
 
@@ -243,6 +278,7 @@ function rippleResizeSection(timeline, section, edge, time) {
     const minStart = neighbors.previous ? neighbors.previous.end_time : 0;
     section.start_time = clamp(snapped, minStart, section.end_time - minDuration);
     sortDirectorSections(timeline);
+    syncShotTimingFromSections(timeline);
     return true;
   }
 
@@ -258,7 +294,219 @@ function rippleResizeSection(timeline, section, edge, time) {
     candidate.end_time += delta;
   }
   sortDirectorSections(timeline);
+  syncShotTimingFromSections(timeline);
   return true;
+}
+
+export function createShot(timeline, options = {}) {
+  const sequence = ensureSequence(timeline);
+  const shot = {
+    ...createDefaultShot(sequence.shots.length + 1),
+    shot_id: uniqueTimelineId(String(options.shot_id || `shot_${String(sequence.shots.length + 1).padStart(3, "0")}`), existingShotIds(timeline)),
+    name: String(options.name ?? ""),
+    type: SHOT_TYPES.includes(options.type) ? options.type : "Generated",
+    start_time: Number.isFinite(Number(options.start_time)) ? Number(options.start_time) : 0,
+    end_time: Number.isFinite(Number(options.end_time)) ? Number(options.end_time) : Math.min(getDuration(timeline), 1),
+    section_ids: Array.isArray(options.section_ids) ? uniqueStrings(options.section_ids) : [],
+    metadata: options.metadata && typeof options.metadata === "object" && !Array.isArray(options.metadata) ? deepClone(options.metadata) : {},
+  };
+  if (shot.end_time <= shot.start_time) {
+    shot.end_time = Math.min(getDuration(timeline), shot.start_time + getMinimumSectionDuration(timeline));
+  }
+  sequence.shots.push(shot);
+  syncShotTimingFromSections(timeline);
+  selectItem(timeline, shot.shot_id);
+  return shot;
+}
+
+export function deleteShot(timeline, shotId, options = {}) {
+  const sequence = ensureSequence(timeline);
+  const id = String(shotId ?? "");
+  const shot = findShot(timeline, id);
+  if (!shot) return false;
+  const deleteSections = options.deleteSections !== false;
+  const sectionIds = new Set(shot.section_ids ?? []);
+  sequence.shots = sequence.shots.filter((candidate) => candidate.shot_id !== id);
+  sequence.boundaries = sequence.boundaries.filter((boundary) => boundary.left_shot_id !== id && boundary.right_shot_id !== id);
+  if (deleteSections && sectionIds.size) {
+    timeline.director_track.sections = timeline.director_track.sections.filter((section) => !sectionIds.has(section.item_id));
+  }
+  return true;
+}
+
+export function renameShot(timeline, shotId, name) {
+  const shot = findShot(timeline, shotId);
+  if (!shot) return false;
+  shot.name = String(name ?? "");
+  return true;
+}
+
+export function changeShotType(timeline, shotId, type) {
+  const shot = findShot(timeline, shotId);
+  if (!shot || !SHOT_TYPES.includes(type)) return false;
+  shot.type = type;
+  return true;
+}
+
+export function assignSectionToShot(timeline, sectionId, shotId, options = {}) {
+  const section = findSection(timeline, sectionId);
+  const shot = findShot(timeline, shotId);
+  if (!section || !shot) return false;
+  const id = String(section.item_id);
+  if (options.exclusive !== false) {
+    for (const candidate of ensureSequence(timeline).shots) {
+      candidate.section_ids = (candidate.section_ids ?? []).filter((candidateId) => candidateId !== id);
+    }
+  }
+  shot.section_ids ??= [];
+  if (!shot.section_ids.includes(id)) shot.section_ids.push(id);
+  cleanupShotSectionIds(timeline);
+  syncShotTimingFromSections(timeline);
+  return true;
+}
+
+export function createOrUpdateBoundaryBetweenShots(timeline, leftShotId, rightShotId, patch = {}) {
+  const sequence = ensureSequence(timeline);
+  const left = findShot(timeline, leftShotId);
+  const right = findShot(timeline, rightShotId);
+  if (!left || !right || !areAdjacentShots(timeline, left.shot_id, right.shot_id)) return null;
+  let boundary = findBoundaryBetweenShots(timeline, left.shot_id, right.shot_id);
+  if (!boundary) {
+    boundary = {
+      ...createDefaultBoundary(sequence.boundaries.length + 1),
+      boundary_id: uniqueTimelineId(`boundary_${left.shot_id}_to_${right.shot_id}`, existingBoundaryIds(timeline)),
+      left_shot_id: left.shot_id,
+      right_shot_id: right.shot_id,
+    };
+    sequence.boundaries.push(boundary);
+  }
+  applyBoundaryPatch(boundary, patch);
+  return boundary;
+}
+
+export function changeBoundaryMode(timeline, boundaryId, mode) {
+  const boundary = findBoundary(timeline, boundaryId);
+  if (!boundary || !BOUNDARY_MODES.includes(mode)) return false;
+  boundary.mode = mode;
+  return true;
+}
+
+export function addTakeMetadata(timeline, shotId, takeData = {}) {
+  const shot = findShot(timeline, shotId);
+  if (!shot) return null;
+  shot.takes ??= [];
+  const take = {
+    ...createDefaultTake(shot.takes.length + 1),
+    ...deepClone(takeData),
+    take_id: uniqueTimelineId(String(takeData.take_id || `take_${String(shot.takes.length + 1).padStart(3, "0")}`), existingTakeIds(shot)),
+    status: TAKE_STATUSES.includes(takeData.status) ? takeData.status : "Candidate",
+    asset_id: takeData.asset_id == null ? null : String(takeData.asset_id),
+    metadata: takeData.metadata && typeof takeData.metadata === "object" && !Array.isArray(takeData.metadata) ? deepClone(takeData.metadata) : {},
+    resolved_loras: takeData.resolved_loras ?? null,
+  };
+  shot.takes.push(take);
+  return take;
+}
+
+export function acceptTake(timeline, shotId, takeId) {
+  const shot = findShot(timeline, shotId);
+  const take = shot?.takes?.find((candidate) => candidate.take_id === takeId);
+  if (!shot || !take || !assetExists(timeline, take.asset_id)) return false;
+  for (const candidate of shot.takes) {
+    if (candidate.status === "Accepted") candidate.status = "Candidate";
+  }
+  take.status = "Accepted";
+  shot.accepted_take_id = take.take_id;
+  return true;
+}
+
+export function setTakeStatus(timeline, shotId, takeId, status) {
+  const shot = findShot(timeline, shotId);
+  const take = shot?.takes?.find((candidate) => candidate.take_id === takeId);
+  if (!shot || !take || !TAKE_STATUSES.includes(status)) return false;
+  if (status === "Accepted") return acceptTake(timeline, shotId, takeId);
+  take.status = status;
+  if (shot.accepted_take_id === take.take_id) shot.accepted_take_id = null;
+  return true;
+}
+
+export function setClipInstanceFromAsset(timeline, shotId, assetId, patch = {}) {
+  const shot = findShot(timeline, shotId);
+  const asset = timeline.assets?.find((candidate) => candidate.asset_id === assetId && candidate.type === ASSET_TYPE_VIDEO);
+  if (!shot || !asset) return false;
+  shot.clip_instance = {
+    ...createDefaultClipInstance(),
+    ...deepClone(patch),
+    asset_id: String(asset.asset_id),
+  };
+  shot.type = "Imported";
+  return true;
+}
+
+export function setProjectModelLoraStack(timeline, modelKey, targetKey, stack) {
+  if (!isValidLoraTarget(modelKey, targetKey)) return false;
+  timeline.project ??= {};
+  timeline.project.model_loras ??= createDefaultProjectModelLoras();
+  timeline.project.model_loras.schema_version = MODEL_LORA_SCHEMA_VERSION;
+  timeline.project.model_loras.global ??= {};
+  timeline.project.model_loras.global[modelKey] ??= {};
+  timeline.project.model_loras.global[modelKey][targetKey] = normalizeTimelineLoraStack(stack);
+  return true;
+}
+
+export function setShotLoraMergeMode(timeline, shotId, mergeMode) {
+  const shot = findShot(timeline, shotId);
+  if (!shot || !LORA_MERGE_MODES.includes(mergeMode)) return false;
+  shot.lora_overrides ??= { enabled: false, merge_mode: "Inherit Global", targets: {} };
+  shot.lora_overrides.merge_mode = mergeMode;
+  shot.lora_overrides.enabled = mergeMode !== "Inherit Global";
+  shot.lora_overrides.targets ??= {};
+  return true;
+}
+
+export function setShotLoraTargetStack(timeline, shotId, modelKey, targetKey, stack) {
+  const shot = findShot(timeline, shotId);
+  if (!shot || !isValidLoraTarget(modelKey, targetKey)) return false;
+  shot.lora_overrides ??= { enabled: true, merge_mode: "Add To Global", targets: {} };
+  shot.lora_overrides.enabled = true;
+  if (shot.lora_overrides.merge_mode === "Inherit Global") shot.lora_overrides.merge_mode = "Add To Global";
+  shot.lora_overrides.targets ??= {};
+  shot.lora_overrides.targets[modelKey] ??= {};
+  shot.lora_overrides.targets[modelKey][targetKey] = normalizeTimelineLoraStack(stack);
+  return true;
+}
+
+export function clearShotLoraOverride(timeline, shotId) {
+  const shot = findShot(timeline, shotId);
+  if (!shot) return false;
+  shot.lora_overrides = deepClone(createDefaultShot(1).lora_overrides);
+  return true;
+}
+
+export function findShot(timeline, shotId) {
+  return ensureSequence(timeline).shots.find((shot) => shot.shot_id === shotId) ?? null;
+}
+
+export function findBoundary(timeline, boundaryId) {
+  return ensureSequence(timeline).boundaries.find((boundary) => boundary.boundary_id === boundaryId) ?? null;
+}
+
+export function findShotForSection(timeline, sectionId) {
+  return ensureSequence(timeline).shots.find((shot) => (shot.section_ids ?? []).includes(sectionId)) ?? null;
+}
+
+export function findBoundaryBetweenShots(timeline, leftShotId, rightShotId) {
+  return ensureSequence(timeline).boundaries
+    .find((boundary) => boundary.left_shot_id === leftShotId && boundary.right_shot_id === rightShotId) ?? null;
+}
+
+export function adjacentShotPairs(timeline) {
+  const shots = orderedShots(timeline);
+  const pairs = [];
+  for (let index = 0; index < shots.length - 1; index += 1) {
+    pairs.push([shots[index], shots[index + 1]]);
+  }
+  return pairs;
 }
 
 export function addAudioClip(timeline, startTime = 0, duration = 1) {
@@ -327,6 +575,7 @@ export function fitLastDirectorSectionToDuration(timeline) {
   if (!canFitLastDirectorSectionToDuration(timeline)) return false;
   last.end_time = duration;
   sortDirectorSections(timeline);
+  syncShotTimingFromSections(timeline);
   return true;
 }
 
@@ -341,6 +590,7 @@ export function fitDirectorSectionsEvenlyToDuration(timeline) {
     section.end_time = Number(section.end_time) * scale;
   }
   sortDirectorSections(timeline);
+  syncShotTimingFromSections(timeline);
   return true;
 }
 
@@ -510,6 +760,12 @@ function selectedMoveDeltaBounds(timeline, selectedIds) {
 function findTimelineItem(timeline, itemId) {
   const section = findSection(timeline, itemId);
   if (section) return { kind: "section", item: section };
+  const shot = findShot(timeline, itemId);
+  if (shot) return { kind: "shot", item: shot };
+  const boundary = findBoundary(timeline, itemId);
+  if (boundary) return { kind: "boundary", item: boundary };
+  const take = findTakeWithShot(timeline, itemId);
+  if (take) return { kind: "take", item: take.take, shot: take.shot };
   const match = findAudioClipWithTrack(timeline, itemId);
   if (match) return { kind: "audio", item: match.clip, track: match.track };
   return null;
@@ -519,9 +775,187 @@ function timelineItemsForKind(timeline, kind) {
   if (kind === "section") {
     return [...timeline.director_track.sections].sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time));
   }
+  if (kind === "shot") {
+    return orderedShots(timeline).map((shot) => ({ ...shot, item_id: shot.shot_id }));
+  }
+  if (kind === "boundary") {
+    return [...ensureSequence(timeline).boundaries].map((boundary) => ({ ...boundary, item_id: boundary.boundary_id }));
+  }
+  if (kind === "take") {
+    return ensureSequence(timeline).shots
+      .flatMap((shot) => (shot.takes ?? []).map((take) => ({ ...take, item_id: take.take_id })));
+  }
   return timeline.audio_tracks
     .flatMap((track) => track.clips)
     .sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.lane ?? 0) - Number(b.lane ?? 0) || Number(a.end_time) - Number(b.end_time));
+}
+
+function ensureSequence(timeline) {
+  timeline.sequence ??= createDefaultSequence();
+  timeline.sequence.shots = Array.isArray(timeline.sequence.shots) ? timeline.sequence.shots : [];
+  timeline.sequence.boundaries = Array.isArray(timeline.sequence.boundaries) ? timeline.sequence.boundaries : [];
+  return timeline.sequence;
+}
+
+function ensureShotForSection(timeline, section) {
+  if (!section?.item_id || findShotForSection(timeline, section.item_id)) return null;
+  const sequence = ensureSequence(timeline);
+  const shot = {
+    ...createDefaultShot(sequence.shots.length + 1),
+    shot_id: uniqueTimelineId(`shot_${sanitizeTimelineId(section.item_id, `section_${sequence.shots.length + 1}`)}`, existingShotIds(timeline)),
+    start_time: Number(section.start_time ?? 0),
+    end_time: Number(section.end_time ?? section.start_time ?? 0),
+    section_ids: [String(section.item_id)],
+  };
+  sequence.shots.push(shot);
+  return shot;
+}
+
+function cleanupShotSectionIds(timeline) {
+  const existingSections = new Set((timeline.director_track?.sections ?? []).map((section) => section.item_id));
+  const sequence = ensureSequence(timeline);
+  for (const shot of sequence.shots) {
+    shot.section_ids = (shot.section_ids ?? []).filter((sectionId) => existingSections.has(sectionId));
+  }
+  sequence.shots = sequence.shots
+    .filter((shot) => {
+      if ((shot.section_ids ?? []).length) return true;
+      if ((shot.takes ?? []).length) return true;
+      if (shot.clip_instance?.asset_id) return true;
+      return Boolean(shot.name || Object.keys(shot.metadata ?? {}).length);
+    });
+  const shotIds = new Set(sequence.shots.map((shot) => shot.shot_id));
+  sequence.boundaries = sequence.boundaries.filter((boundary) => shotIds.has(boundary.left_shot_id) && shotIds.has(boundary.right_shot_id));
+}
+
+function syncShotTimingFromSections(timeline) {
+  const sectionById = new Map((timeline.director_track?.sections ?? []).map((section) => [section.item_id, section]));
+  for (const shot of ensureSequence(timeline).shots) {
+    const sections = (shot.section_ids ?? []).map((sectionId) => sectionById.get(sectionId)).filter(Boolean);
+    if (!sections.length) continue;
+    shot.start_time = Math.min(...sections.map((section) => Number(section.start_time)));
+    shot.end_time = Math.max(...sections.map((section) => Number(section.end_time)));
+  }
+}
+
+function orderedShots(timeline) {
+  return [...ensureSequence(timeline).shots]
+    .sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time) || String(a.shot_id).localeCompare(String(b.shot_id)));
+}
+
+function areAdjacentShots(timeline, leftShotId, rightShotId) {
+  const shots = orderedShots(timeline);
+  const leftIndex = shots.findIndex((shot) => shot.shot_id === leftShotId);
+  return leftIndex >= 0 && shots[leftIndex + 1]?.shot_id === rightShotId;
+}
+
+function applyBoundaryPatch(boundary, patch) {
+  if (BOUNDARY_MODES.includes(patch.mode)) boundary.mode = patch.mode;
+  if (Number.isFinite(Number(patch.tail_frames))) boundary.tail_frames = Math.max(0, Math.round(Number(patch.tail_frames)));
+  if (Number.isFinite(Number(patch.blend_frames))) boundary.blend_frames = Math.max(0, Math.round(Number(patch.blend_frames)));
+  if (patch.transition_prompt != null) boundary.transition_prompt = String(patch.transition_prompt);
+  if (patch.reuse_character_refs != null) boundary.reuse_character_refs = patch.reuse_character_refs !== false;
+  if (patch.reuse_style != null) boundary.reuse_style = patch.reuse_style !== false;
+  if (patch.metadata && typeof patch.metadata === "object" && !Array.isArray(patch.metadata)) boundary.metadata = deepClone(patch.metadata);
+}
+
+function deleteBoundary(timeline, boundaryId) {
+  const sequence = ensureSequence(timeline);
+  const before = sequence.boundaries.length;
+  sequence.boundaries = sequence.boundaries.filter((boundary) => boundary.boundary_id !== boundaryId);
+  return before !== sequence.boundaries.length;
+}
+
+function deleteTakeById(timeline, takeId) {
+  for (const shot of ensureSequence(timeline).shots) {
+    const before = shot.takes?.length ?? 0;
+    shot.takes = (shot.takes ?? []).filter((take) => take.take_id !== takeId);
+    if (shot.accepted_take_id === takeId) shot.accepted_take_id = null;
+    if (before !== shot.takes.length) return true;
+  }
+  return false;
+}
+
+function findTakeWithShot(timeline, takeId) {
+  for (const shot of ensureSequence(timeline).shots) {
+    const take = (shot.takes ?? []).find((candidate) => candidate.take_id === takeId);
+    if (take) return { shot, take };
+  }
+  return null;
+}
+
+function existingShotIds(timeline) {
+  return new Set(ensureSequence(timeline).shots.map((shot) => shot.shot_id));
+}
+
+function existingBoundaryIds(timeline) {
+  return new Set(ensureSequence(timeline).boundaries.map((boundary) => boundary.boundary_id));
+}
+
+function existingTakeIds(shot) {
+  return new Set((shot.takes ?? []).map((take) => take.take_id));
+}
+
+function uniqueStrings(values) {
+  const result = [];
+  for (const value of values ?? []) {
+    const stringValue = String(value ?? "");
+    if (!stringValue || result.includes(stringValue)) continue;
+    result.push(stringValue);
+  }
+  return result;
+}
+
+function uniqueTimelineId(baseId, existingIds) {
+  const base = sanitizeTimelineId(baseId, "item");
+  let candidate = base;
+  let suffix = 2;
+  while (existingIds.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  existingIds.add(candidate);
+  return candidate;
+}
+
+function sanitizeTimelineId(value, fallback) {
+  const sanitized = String(value ?? "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return sanitized || fallback;
+}
+
+function assetExists(timeline, assetId) {
+  return Boolean(assetId && timeline.assets?.some((asset) => asset.asset_id === assetId));
+}
+
+function isValidLoraTarget(modelKey, targetKey) {
+  return (
+    (modelKey === MODEL_LORA_MODEL_LTX_2_3 && targetKey === MODEL_LORA_TARGET_MAIN) ||
+    (modelKey === MODEL_LORA_MODEL_WAN_2_2 && (targetKey === MODEL_LORA_TARGET_HIGH_NOISE || targetKey === MODEL_LORA_TARGET_LOW_NOISE))
+  );
+}
+
+function normalizeTimelineLoraStack(stack) {
+  const source = stack && typeof stack === "object" && !Array.isArray(stack) ? stack : createDefaultLoraStack();
+  const ui = source.ui && typeof source.ui === "object" && !Array.isArray(source.ui) ? source.ui : {};
+  const loras = Array.isArray(source.loras)
+    ? source.loras
+      .filter((lora) => lora && typeof lora === "object" && !Array.isArray(lora) && lora.enabled !== false && lora.name)
+      .map((lora) => ({
+        enabled: true,
+        name: String(lora.name),
+        strength_model: Number(lora.strength_model ?? lora.strength ?? 1),
+        strength_clip: Number(lora.strength_clip ?? lora.strength_model ?? lora.strength ?? 1),
+      }))
+      .filter((lora) => Number.isFinite(lora.strength_model) && Number.isFinite(lora.strength_clip) && (lora.strength_model !== 0 || lora.strength_clip !== 0))
+    : [];
+  return {
+    version: 1,
+    loras,
+    ui: {
+      show_strengths: String(source.show_strengths || ui.show_strengths || "single"),
+      match: String(source.match || ui.match || ""),
+    },
+  };
 }
 
 function findGapForDuration(timeline, duration, preferredStart = 0) {

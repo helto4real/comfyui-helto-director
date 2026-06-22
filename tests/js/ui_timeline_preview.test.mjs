@@ -50,7 +50,7 @@ function testClearTimelineButtonEnablementHelper() {
   assert.equal(isDefaultEmptyTimeline(timeline), false);
 }
 
-function testSelectedPromptUsesFiveRowInspector() {
+function testSelectedPromptUsesShotAwareInspectorHeight() {
   const timeline = createDefaultVideoTimeline();
   timeline.director_track.sections.push({
     item_id: "section_001",
@@ -61,7 +61,7 @@ function testSelectedPromptUsesFiveRowInspector() {
   });
   timeline.ui_state.selected_item_id = "section_001";
 
-  assert.equal(getTimelineWidgetHeight(timeline), 456);
+  assert.equal(getTimelineWidgetHeight(timeline), 528);
 }
 
 function testAudioLanesExpandViewportToContent() {
@@ -507,7 +507,7 @@ function testViewportMeasurementIgnoresCollapsedChildWidth() {
 
 testTimelineHeightIsTripled();
 testClearTimelineButtonEnablementHelper();
-testSelectedPromptUsesFiveRowInspector();
+testSelectedPromptUsesShotAwareInspectorHeight();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();

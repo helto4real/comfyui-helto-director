@@ -3,10 +3,19 @@ import {
   ASSET_TYPE_AUDIO,
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
+  BOUNDARY_MODES,
   CROP_MODES,
   GLOBAL_PROMPT_POSITIONS,
+  LORA_MERGE_MODES,
+  MODEL_LORA_MODEL_LTX_2_3,
+  MODEL_LORA_MODEL_WAN_2_2,
+  MODEL_LORA_TARGET_HIGH_NOISE,
+  MODEL_LORA_TARGET_LOW_NOISE,
+  MODEL_LORA_TARGET_MAIN,
   SECTION_EDIT_MODES,
   SNAP_MODES,
+  SHOT_TYPES,
+  TAKE_STATUSES,
   TIMELINE_DISPLAY_MODES,
   VIDEO_GUIDANCE_FRAME_COUNTS,
   VIDEO_GUIDANCE_RANGES,
@@ -60,21 +69,36 @@ import {
   timeFromClientX,
 } from "./geometry.js";
 import {
+  acceptTake,
+  addTakeMetadata,
   addSection,
+  adjacentShotPairs,
   canFitLastDirectorSectionToDuration,
+  changeShotType,
+  clearShotLoraOverride,
+  createOrUpdateBoundaryBetweenShots,
+  createShot,
   deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
   fitLastDirectorSectionToDuration,
+  findBoundaryBetweenShots,
   findSection,
+  findShot,
+  findShotForSection,
   getSelectedItemIds,
   hasDirectorSectionOverflow,
   isItemSelected,
   moveSelectedItems,
+  renameShot,
   resizeAudioClip,
   resizeSection,
   selectItem,
   selectItemRange,
+  setClipInstanceFromAsset,
+  setProjectModelLoraStack,
+  setShotLoraMergeMode,
+  setTakeStatus,
   splitSelectedSection,
   toggleSelectItem,
   zoomToFit,
@@ -82,7 +106,7 @@ import {
 
 const TOOLBAR_HEIGHT = 28;
 const INSPECTOR_HEIGHT = 34;
-const INSPECTOR_EDITOR_HEIGHT = 188;
+const INSPECTOR_EDITOR_HEIGHT = 260;
 const ROOT_GAP = 6;
 const NODE_BODY_HORIZONTAL_PADDING = 20;
 const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";
@@ -262,6 +286,12 @@ export class TimelineRenderer {
       iconButton("image", "Add Image Section", () => this.openMediaPicker(ASSET_TYPE_IMAGE)),
       iconButton("video", "Add Video Section", () => this.openMediaPicker(ASSET_TYPE_VIDEO)),
       iconButton("audio", "Add Audio Clip", () => this.openMediaPicker(ASSET_TYPE_AUDIO)),
+      iconButton("shot", "Add Shot", () => {
+        this.commitMutation((timeline) => {
+          const start = Number(timeline.ui_state.playhead_time ?? 0);
+          createShot(timeline, { start_time: start, end_time: Math.min(Number(timeline.project.duration_seconds ?? 5), start + 1) });
+        }, "add shot");
+      }),
       toolbarSpacer(),
       this.renderToolbarMenu("display", "Display Mode", "layers", this.controller.timeline.ui_state.timeline_display_mode, TIMELINE_DISPLAY_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.timeline_display_mode = value; }, "settings change");
@@ -418,10 +448,63 @@ export class TimelineRenderer {
       track.append(item);
     }
 
+    for (const shot of timeline.sequence?.shots ?? []) {
+      track.append(this.renderShotBand(timeline, shot));
+    }
+    for (const [leftShot, rightShot] of adjacentShotPairs(timeline)) {
+      track.append(this.renderBoundaryControl(timeline, leftShot, rightShot));
+    }
     for (const section of timeline.director_track.sections) {
       track.append(this.renderSection(timeline, section));
     }
     return track;
+  }
+
+  renderShotBand(timeline, shot) {
+    const item = el("div", "htd-item htd-shot-band");
+    item.tabIndex = -1;
+    item.dataset.itemId = shot.shot_id;
+    item.style.left = `${secondsToPixels(shot.start_time, timeline, this.viewportWidth)}px`;
+    item.style.width = `${Math.max(18, durationToPixels(shot.end_time - shot.start_time, timeline, this.viewportWidth))}px`;
+    item.textContent = shot.name || shot.shot_id;
+    item.title = `${shot.name || shot.shot_id} (${shot.type})`;
+    item.setAttribute("aria-label", item.title);
+    item.classList.toggle("is-selected", isItemSelected(timeline, shot.shot_id));
+    item.classList.toggle("is-primary-selected", timeline.ui_state.selected_item_id === shot.shot_id);
+    item.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.commitMutation((currentTimeline) => selectItem(currentTimeline, shot.shot_id), "select", { pushUndo: false });
+      this.focusTimelineItem(shot.shot_id, item);
+    });
+    return item;
+  }
+
+  renderBoundaryControl(timeline, leftShot, rightShot) {
+    const boundary = findBoundaryBetweenShots(timeline, leftShot.shot_id, rightShot.shot_id);
+    const id = boundary?.boundary_id ?? `boundary-${leftShot.shot_id}-to-${rightShot.shot_id}`;
+    const wrapper = iconMenuControl({
+      id,
+      title: "Boundary Mode",
+      iconName: "boundary",
+      value: boundary?.mode ?? "Hard Cut",
+      options: BOUNDARY_MODES,
+      open: this.openMenu === id,
+      onToggle: () => {
+        this.openMenu = this.openMenu === id ? null : id;
+        this.render();
+      },
+      onChange: (nextValue) => {
+        this.openMenu = null;
+        this.commitMutation((currentTimeline) => {
+          createOrUpdateBoundaryBetweenShots(currentTimeline, leftShot.shot_id, rightShot.shot_id, { mode: nextValue });
+        }, "boundary change");
+      },
+    });
+    wrapper.classList.add("htd-boundary-control");
+    wrapper.style.left = `${secondsToPixels(rightShot.start_time, timeline, this.viewportWidth)}px`;
+    wrapper.title = `${leftShot.shot_id} to ${rightShot.shot_id}`;
+    return wrapper;
   }
 
   renderSection(timeline, section) {
@@ -512,8 +595,10 @@ export class TimelineRenderer {
     const inspector = el("div", "htd-inspector");
     const selected = timeline.director_track.sections.find((section) => section.item_id === timeline.ui_state.selected_item_id);
     const selectedAudio = findAudioClip(timeline, timeline.ui_state.selected_item_id);
-    inspector.classList.toggle("has-selection", Boolean(selected || selectedAudio));
-    if (!selected && !selectedAudio) return inspector;
+    const selectedShot = findShot(timeline, timeline.ui_state.selected_item_id);
+    const activeShot = selectedShot ?? (selected ? findShotForSection(timeline, selected.item_id) : null);
+    inspector.classList.toggle("has-selection", Boolean(selected || selectedAudio || selectedShot));
+    if (!selected && !selectedAudio && !selectedShot) return inspector;
 
     const panel = el("div", "htd-inspector-panel");
     if (selected?.type === ASSET_TYPE_IMAGE) {
@@ -525,6 +610,7 @@ export class TimelineRenderer {
           this.renderInspectorCompactField("Crop Mode:", this.renderIconSelectField(selected, "crop_mode", "Crop Mode", CROP_MODES, "crop")),
         ),
         this.renderPromptRow(selected),
+        activeShot ? this.renderShotInspector(timeline, activeShot) : this.container.ownerDocument.createDocumentFragment(),
       );
     } else if (selected?.type === ASSET_TYPE_VIDEO) {
       panel.classList.add("is-section-inspector");
@@ -544,12 +630,14 @@ export class TimelineRenderer {
             : null,
         ),
         this.renderPromptRow(selected),
+        activeShot ? this.renderShotInspector(timeline, activeShot) : this.container.ownerDocument.createDocumentFragment(),
       );
     } else if (selected?.type === "Text") {
       panel.classList.add("is-section-inspector");
       panel.append(
         inspectorTitle("Text Section"),
         this.renderPromptRow(selected),
+        activeShot ? this.renderShotInspector(timeline, activeShot) : this.container.ownerDocument.createDocumentFragment(),
       );
     } else if (selectedAudio) {
       panel.classList.add("is-audio-inspector");
@@ -565,9 +653,181 @@ export class TimelineRenderer {
         this.renderInspectorRow("Locked", this.renderCheckboxField(selectedAudio, "locked", "Locked")),
         this.renderMediaSummary(timeline, selectedAudio.audio, "Audio"),
       );
+    } else if (selectedShot) {
+      panel.classList.add("is-shot-inspector");
+      panel.append(this.renderShotInspector(timeline, selectedShot, { standalone: true }));
     }
     inspector.append(panel);
     return inspector;
+  }
+
+  renderShotInspector(timeline, shot, options = {}) {
+    const wrapper = el("div", `htd-shot-inspector${options.standalone ? " is-standalone" : ""}`);
+    const title = inspectorTitle(options.standalone ? "Shot" : "Shot Details");
+    const nameInput = el("input", "htd-field htd-shot-name");
+    nameInput.value = shot.name ?? "";
+    nameInput.placeholder = shot.shot_id;
+    nameInput.title = "Shot Name";
+    nameInput.addEventListener("change", () => {
+      this.commitMutation((currentTimeline) => renameShot(currentTimeline, shot.shot_id, nameInput.value), "shot change");
+    });
+    wrapper.append(
+      title,
+      this.renderInspectorControlRow(
+        this.renderInspectorCompactField("Name:", nameInput, "is-shot-name"),
+        this.renderInspectorCompactField("Type:", this.renderShotTypeField(shot), "is-shot-type"),
+        this.renderInspectorCompactField("LoRAs:", this.renderShotLoraModeField(shot), "is-shot-lora-mode"),
+      ),
+      this.renderShotClipField(timeline, shot),
+      this.renderShotTakes(timeline, shot),
+      this.renderShotLoraTargets(timeline, shot),
+    );
+    return wrapper;
+  }
+
+  renderShotTypeField(shot) {
+    return iconMenuControl({
+      id: `shot-type-${shot.shot_id}`,
+      title: "Shot Type",
+      iconName: "shot",
+      value: shot.type,
+      options: SHOT_TYPES,
+      placement: "above-end",
+      showValue: true,
+      open: this.openMenu === `shot-type-${shot.shot_id}`,
+      onToggle: () => {
+        const id = `shot-type-${shot.shot_id}`;
+        this.openMenu = this.openMenu === id ? null : id;
+        this.render();
+      },
+      onChange: (nextValue) => {
+        this.openMenu = null;
+        this.commitMutation((timeline) => changeShotType(timeline, shot.shot_id, nextValue), "shot change");
+      },
+    });
+  }
+
+  renderShotLoraModeField(shot) {
+    const value = shot.lora_overrides?.merge_mode ?? "Inherit Global";
+    return iconMenuControl({
+      id: `shot-lora-mode-${shot.shot_id}`,
+      title: "Shot LoRA Mode",
+      iconName: "lora",
+      value,
+      options: LORA_MERGE_MODES,
+      placement: "above-end",
+      showValue: true,
+      open: this.openMenu === `shot-lora-mode-${shot.shot_id}`,
+      onToggle: () => {
+        const id = `shot-lora-mode-${shot.shot_id}`;
+        this.openMenu = this.openMenu === id ? null : id;
+        this.render();
+      },
+      onChange: (nextValue) => {
+        this.openMenu = null;
+        this.commitMutation((timeline) => setShotLoraMergeMode(timeline, shot.shot_id, nextValue), "shot lora change");
+      },
+    });
+  }
+
+  renderShotClipField(timeline, shot) {
+    const row = el("div", "htd-shot-row");
+    const label = el("span", "htd-shot-row-label");
+    label.textContent = "Clip";
+    const videos = (timeline.assets ?? []).filter((asset) => asset.type === ASSET_TYPE_VIDEO);
+    const select = el("select", "htd-select htd-shot-clip-select");
+    const none = el("option");
+    none.value = "";
+    none.textContent = "No video asset";
+    select.append(none);
+    for (const asset of videos) {
+      const option = el("option");
+      option.value = asset.asset_id;
+      option.textContent = asset.name || asset.path || asset.asset_id;
+      select.append(option);
+    }
+    select.value = shot.clip_instance?.asset_id ?? "";
+    select.title = "Imported Clip Asset";
+    select.addEventListener("change", () => {
+      this.commitMutation((currentTimeline) => {
+        if (select.value) {
+          setClipInstanceFromAsset(currentTimeline, shot.shot_id, select.value);
+        } else {
+          const liveShot = findShot(currentTimeline, shot.shot_id);
+          if (liveShot) liveShot.clip_instance = null;
+        }
+      }, "shot clip change");
+    });
+    row.append(label, select);
+    return row;
+  }
+
+  renderShotTakes(timeline, shot) {
+    const block = el("div", "htd-shot-takes");
+    const header = el("div", "htd-shot-subheader");
+    const title = el("span");
+    title.textContent = "Takes";
+    header.append(title, button("Add Take", "Add Take Metadata", () => {
+      this.commitMutation((currentTimeline) => addTakeMetadata(currentTimeline, shot.shot_id), "add take");
+    }));
+    block.append(header);
+    const takes = shot.takes ?? [];
+    if (!takes.length) {
+      const empty = el("div", "htd-shot-empty");
+      empty.textContent = "No takes.";
+      block.append(empty);
+      return block;
+    }
+    for (const take of takes) {
+      const row = el("div", "htd-take-row");
+      const label = el("span", "htd-take-label");
+      const asset = take.asset_id ? timeline.assets?.find((candidate) => candidate.asset_id === take.asset_id) : null;
+      label.textContent = `${take.take_id}${asset ? ` · ${asset.name || asset.asset_id}` : ""}`;
+      label.title = take.asset_id || take.take_id;
+      const status = iconMenuControl({
+        id: `take-status-${take.take_id}`,
+        title: "Take Status",
+        iconName: "take",
+        value: take.status ?? "Candidate",
+        options: TAKE_STATUSES,
+        placement: "above-end",
+        showValue: true,
+        open: this.openMenu === `take-status-${take.take_id}`,
+        onToggle: () => {
+          const id = `take-status-${take.take_id}`;
+          this.openMenu = this.openMenu === id ? null : id;
+          this.render();
+        },
+        onChange: (nextValue) => {
+          this.openMenu = null;
+          this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, take.take_id, nextValue), "take change");
+        },
+      });
+      const accept = button("Accept", "Accept Take", () => {
+        this.commitMutation((currentTimeline) => acceptTake(currentTimeline, shot.shot_id, take.take_id), "accept take");
+      });
+      accept.disabled = !asset;
+      row.append(label, status, accept);
+      block.append(row);
+    }
+    return block;
+  }
+
+  renderShotLoraTargets(timeline, shot) {
+    const block = el("div", "htd-shot-loras");
+    const header = el("div", "htd-shot-subheader");
+    const title = el("span");
+    title.textContent = "Shot LoRA Targets";
+    header.append(title, button("Clear", "Clear Shot LoRA Override", () => {
+      this.commitMutation((currentTimeline) => clearShotLoraOverride(currentTimeline, shot.shot_id), "shot lora clear");
+    }));
+    block.append(header);
+    block.append(
+      this.renderLoraSummaryRow("LTX Main", shot.lora_overrides?.targets?.[MODEL_LORA_MODEL_LTX_2_3]?.[MODEL_LORA_TARGET_MAIN]),
+      this.renderLoraSummaryRow("WAN High", shot.lora_overrides?.targets?.[MODEL_LORA_MODEL_WAN_2_2]?.[MODEL_LORA_TARGET_HIGH_NOISE]),
+      this.renderLoraSummaryRow("WAN Low", shot.lora_overrides?.targets?.[MODEL_LORA_MODEL_WAN_2_2]?.[MODEL_LORA_TARGET_LOW_NOISE]),
+    );
+    return block;
   }
 
   renderPromptRow(item) {
@@ -916,6 +1176,7 @@ export class TimelineRenderer {
       this.renderSettingCheckbox("Show Section Labels", ["project", "display", "show_section_labels"]),
       this.renderSettingCheckbox("Show Thumbnails", ["project", "display", "show_thumbnails"]),
       this.renderSettingCheckbox("Show Audio Waveforms", ["project", "display", "show_audio_waveforms"]),
+      this.renderProjectLoraSettings(timeline),
     );
     modal.append(header, body);
     overlay.append(modal);
@@ -1261,6 +1522,55 @@ export class TimelineRenderer {
     return row;
   }
 
+  renderProjectLoraSettings(timeline) {
+    const block = el("div", "htd-project-loras");
+    const title = el("div", "htd-project-loras-title");
+    title.textContent = "Project Model LoRAs";
+    block.append(
+      title,
+      this.renderProjectLoraStackRow(timeline, "LTX Main", MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN),
+      this.renderProjectLoraStackRow(timeline, "WAN High", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE),
+      this.renderProjectLoraStackRow(timeline, "WAN Low", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_LOW_NOISE),
+    );
+    return block;
+  }
+
+  renderProjectLoraStackRow(timeline, labelText, modelKey, targetKey) {
+    const stack = timeline.project?.model_loras?.global?.[modelKey]?.[targetKey] ?? { loras: [], ui: {} };
+    const row = el("label", "htd-project-lora-row");
+    const label = el("span", "htd-project-lora-label");
+    label.textContent = labelText;
+    const count = el("span", "htd-lora-count");
+    count.textContent = `${stack.loras?.length ?? 0} LoRAs`;
+    const match = el("input", "htd-setting-text htd-lora-match");
+    match.value = stack.ui?.match ?? "";
+    match.placeholder = "Stack note";
+    match.title = `${labelText} LoRA stack note`;
+    match.addEventListener("change", () => {
+      this.commitMutation((currentTimeline) => {
+        setProjectModelLoraStack(currentTimeline, modelKey, targetKey, {
+          ...stack,
+          ui: { ...(stack.ui ?? {}), match: match.value },
+        });
+      }, "project lora change");
+    });
+    row.append(label, count, match);
+    return row;
+  }
+
+  renderLoraSummaryRow(labelText, stack) {
+    const row = el("div", "htd-lora-summary-row");
+    const label = el("span", "htd-shot-row-label");
+    label.textContent = labelText;
+    const value = el("span", "htd-lora-count");
+    const count = stack?.loras?.length ?? 0;
+    const note = stack?.ui?.match ? ` · ${stack.ui.match}` : "";
+    value.textContent = `${count} LoRAs${note}`;
+    value.title = stack?.loras?.map((lora) => lora.name).join(", ") || value.textContent;
+    row.append(label, value);
+    return row;
+  }
+
   startSectionDrag(event, section, mode) {
     this.startItemDrag(event, {
       itemId: section.item_id,
@@ -1404,7 +1714,7 @@ export class TimelineRenderer {
   }
 
   focusTimelineItem(itemId, fallbackTarget = null) {
-    const target = fallbackTarget ?? Array.from(this.container.querySelectorAll?.(".htd-item") ?? [])
+    const target = fallbackTarget ?? Array.from(this.container.querySelectorAll?.(".htd-item, .htd-shot-band") ?? [])
       .find((item) => item.dataset?.itemId === itemId);
     target?.focus?.({ preventScroll: true });
   }
@@ -1772,7 +2082,8 @@ function timelineComparisonPayload(timeline) {
 function getInspectorHeight(timeline) {
   const selected = timeline?.director_track?.sections?.find((section) => section.item_id === timeline?.ui_state?.selected_item_id);
   const selectedAudio = findAudioClip(timeline, timeline?.ui_state?.selected_item_id);
-  return selected || selectedAudio ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
+  const selectedShot = findShot(timeline, timeline?.ui_state?.selected_item_id);
+  return selected || selectedAudio || selectedShot ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
 }
 
 function positiveNumber(value) {
@@ -2169,6 +2480,10 @@ const ICONS = {
   image: `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m7 16 4-4 3 3 2-2 3 3"/><circle cx="15.5" cy="9.5" r="1.5"/></svg>`,
   video: `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="12" rx="2"/><path d="m16 10 4-2v8l-4-2z"/></svg>`,
   audio: `<svg viewBox="0 0 24 24"><path d="M6 15V9M10 18V6M14 16V8M18 14v-4"/></svg>`,
+  shot: `<svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M8 7V5M16 7V5M8 19v-2M16 19v-2"/><path d="M9 12h6"/></svg>`,
+  boundary: `<svg viewBox="0 0 24 24"><path d="M12 4v16"/><path d="M6 8h4M14 8h4M6 16h4M14 16h4"/></svg>`,
+  take: `<svg viewBox="0 0 24 24"><path d="M5 7h14v10H5z"/><path d="m9 10 4 2-4 2z"/><path d="M7 5h10"/></svg>`,
+  lora: `<svg viewBox="0 0 24 24"><path d="M6 17V7l6-3 6 3v10l-6 3z"/><path d="M9 9h6M9 13h6M12 9v8"/></svg>`,
   layers: `<svg viewBox="0 0 24 24"><path d="m12 4 8 4-8 4-8-4z"/><path d="m4 12 8 4 8-4"/><path d="m4 16 8 4 8-4"/></svg>`,
   trim: `<svg viewBox="0 0 24 24"><path d="M6 5v14M18 5v14M6 12h12"/><path d="m9 9-3 3 3 3M15 9l3 3-3 3"/></svg>`,
   magnet: `<svg viewBox="0 0 24 24"><path d="M7 5v7a5 5 0 0 0 10 0V5"/><path d="M7 9h4M13 9h4"/></svg>`,
@@ -2252,9 +2567,11 @@ function installStyles(documentRef) {
     .htd-root.is-private:not(.is-privacy-revealed) .htd-viewport,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-inspector { visibility: hidden; }
     .htd-root.is-private:not(.is-privacy-revealed) .htd-section-label,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-shot-band,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-audio-label,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-prompt,
-    .htd-root.is-private:not(.is-privacy-revealed) .htd-media-value { color: transparent !important; text-shadow: none !important; }
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-media-value,
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-lora-count { color: transparent !important; text-shadow: none !important; }
     .htd-root.is-private:not(.is-privacy-revealed) .htd-prompt::placeholder { color: transparent !important; }
     .htd-privacy-status { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 40; padding: 6px 8px; border: 1px solid #7a4f32; border-radius: 4px; background: #2b1d18; color: #ffd8c2; box-shadow: 0 8px 22px rgba(0,0,0,0.4); }
     .htd-toolbar { position: relative; z-index: 15; display: flex; gap: 4px; align-items: center; min-height: 28px; overflow: visible; }
@@ -2300,7 +2617,14 @@ function installStyles(documentRef) {
     .htd-item { touch-action: none; user-select: none; }
     .htd-gap { border: 1px dashed #3d4658; background: rgba(80, 88, 105, 0.16); }
     .htd-section { padding: 0; border: 1px solid rgba(255,255,255,0.28); cursor: grab; }
+    .htd-director-track .htd-section, .htd-director-track .htd-gap { top: 31px; height: calc(100% - 40px); }
     .htd-section-label { position: absolute; z-index: 3; top: 8px; left: 10px; right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,0.82); pointer-events: none; }
+    .htd-shot-band { position: absolute; top: 5px; height: 20px; padding: 0 8px; border: 1px solid #4f6077; border-radius: 4px; background: #1d2838; color: #dbe6f5; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; font: inherit; text-align: left; }
+    .htd-shot-band.is-selected { border-color: #f2d16b; color: #fff1b8; }
+    .htd-shot-band.is-primary-selected { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.72); }
+    .htd-boundary-control { position: absolute; z-index: 12; top: 27px; transform: translateX(-50%); }
+    .htd-boundary-control .htd-menu-button { width: 24px; min-width: 24px; height: 20px; border-color: #5e6a7f; background: #182232; }
+    .htd-boundary-control .htd-menu-list { top: 22px; }
     .htd-section-preview { position: absolute; inset: 0; z-index: 1; display: flex; align-items: stretch; gap: 2px; overflow: hidden; background: rgba(6,10,16,0.34); pointer-events: none; }
     .htd-section-preview-frame { flex: 0 0 auto; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(4,7,11,0.28); }
     .htd-section-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -2324,6 +2648,7 @@ function installStyles(documentRef) {
     .htd-inspector-panel { height: 100%; min-height: ${INSPECTOR_EDITOR_HEIGHT}px; box-sizing: border-box; padding: 7px; border: 1px solid #30394c; border-radius: 4px; background: rgba(17, 23, 34, 0.48); overflow: visible; }
     .htd-inspector-panel.is-section-inspector { display: flex; flex-direction: column; gap: 6px; align-content: start; }
     .htd-inspector-panel.is-audio-inspector { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)); grid-auto-rows: min-content; gap: 6px 8px; align-content: start; }
+    .htd-inspector-panel.is-shot-inspector { display: flex; flex-direction: column; gap: 6px; align-content: start; }
     .htd-inspector-title { grid-column: 1 / -1; color: #eef2f7; font-weight: 600; line-height: 16px; }
     .htd-inspector-row { min-width: 0; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
     .htd-inspector-row.is-prompt { flex: 1 1 auto; flex-direction: column; align-items: stretch; }
@@ -2352,6 +2677,24 @@ function installStyles(documentRef) {
     .htd-media-summary { grid-column: span 2; }
     .htd-inspector-panel.is-section-inspector .htd-media-summary { min-height: 24px; }
     .htd-media-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
+    .htd-shot-inspector { min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; border-top: 1px solid #30394c; }
+    .htd-shot-inspector.is-standalone { padding-top: 0; border-top: 0; }
+    .htd-shot-name { max-width: 170px; }
+    .htd-shot-row, .htd-lora-summary-row { min-width: 0; min-height: 24px; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
+    .htd-shot-row-label { flex: 0 0 74px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
+    .htd-shot-clip-select { max-width: 220px; }
+    .htd-shot-subheader { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #eef2f7; font-weight: 600; }
+    .htd-shot-subheader .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
+    .htd-shot-takes, .htd-shot-loras { min-width: 0; display: grid; gap: 4px; }
+    .htd-shot-empty { color: #8d98ab; font-size: 11px; }
+    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) auto auto; align-items: center; gap: 6px; }
+    .htd-take-label, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
+    .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
+    .htd-project-loras { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 7px; padding-top: 7px; border-top: 1px solid #30394c; }
+    .htd-project-loras-title { grid-column: 1 / -1; color: #eef2f7; font-weight: 600; }
+    .htd-project-lora-row { min-width: 0; display: grid; grid-template-columns: 70px 66px minmax(80px, 1fr); align-items: center; gap: 6px; color: #c7d0df; }
+    .htd-project-lora-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
+    .htd-lora-match { width: 100%; }
     .htd-settings-overlay { position: absolute; inset: 0; z-index: 20; display: flex; align-items: stretch; justify-content: center; background: rgba(8, 11, 17, 0.82); padding: 10px; box-sizing: border-box; }
     .htd-settings-modal { width: min(760px, 100%); min-height: 0; border: 1px solid #465064; border-radius: 6px; background: #121925; box-shadow: 0 12px 34px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
     .htd-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #30394c; }

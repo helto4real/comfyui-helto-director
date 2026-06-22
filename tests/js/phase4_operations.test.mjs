@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import {
+  ASSET_SOURCE_GENERATED,
+  ASSET_TYPE_VIDEO,
   MODEL_LORA_MODEL_LTX_2_3,
   MODEL_LORA_MODEL_WAN_2_2,
   MODEL_LORA_TARGET_HIGH_NOISE,
@@ -9,24 +11,40 @@ import {
 } from "../../web/timeline/schema.js";
 import { normalizeVideoTimeline } from "../../web/timeline/migration.js";
 import {
+  acceptTake,
   addAudioClip,
   addSection,
+  addTakeMetadata,
+  assignSectionToShot,
   autoStackAudioLanes,
   canFitLastDirectorSectionToDuration,
+  changeBoundaryMode,
+  changeShotType,
+  clearShotLoraOverride,
+  createOrUpdateBoundaryBetweenShots,
+  createShot,
   deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
   fitLastDirectorSectionToDuration,
+  findBoundaryBetweenShots,
+  findShotForSection,
   getSelectedItemIds,
   hasDirectorSectionOverflow,
   isItemSelected,
-  moveSelectedItems,
   moveAudioClip,
   moveSection,
+  moveSelectedItems,
+  renameShot,
   resizeAudioClip,
   resizeSection,
   selectItem,
   selectItemRange,
+  setClipInstanceFromAsset,
+  setProjectModelLoraStack,
+  setShotLoraMergeMode,
+  setShotLoraTargetStack,
+  setTakeStatus,
   splitSelectedSection,
   toggleSelectItem,
 } from "../../web/timeline/operations.js";
@@ -138,6 +156,33 @@ function testMigrationDerivesSelectedItemIdsFromPrimarySelection() {
 
   assert.deepEqual(normalized.ui_state.selected_item_ids, [section.item_id]);
   assert.equal(normalized.ui_state.selected_item_id, section.item_id);
+}
+
+function testSelectionNormalizationPreservesShotBoundaryAndTakeIds() {
+  const normalized = normalizeVideoTimeline({
+    type: "VIDEO_TIMELINE",
+    project: {},
+    sequence: {
+      shots: [{
+        shot_id: "shot_001",
+        start_time: 0,
+        end_time: 1,
+        takes: [{ take_id: "take_001", status: "Candidate" }],
+      }, {
+        shot_id: "shot_002",
+        start_time: 1,
+        end_time: 2,
+      }],
+      boundaries: [{ boundary_id: "boundary_001", left_shot_id: "shot_001", right_shot_id: "shot_002" }],
+    },
+    ui_state: {
+      selected_item_id: "take_001",
+      selected_item_ids: ["shot_001", "boundary_001", "take_001"],
+    },
+  });
+
+  assert.deepEqual(normalized.ui_state.selected_item_ids, ["shot_001", "boundary_001", "take_001"]);
+  assert.equal(normalized.ui_state.selected_item_id, "take_001");
 }
 
 function testDefaultTimelineHasSequenceAndModelTargetedLoras() {
@@ -280,6 +325,105 @@ function testMigrationIsIdempotentAndUsesDuplicateSuffixes() {
     "boundary_shot_A_B_to_shot_A_B_2",
   ]);
   assert.deepEqual(normalizedAgain.sequence, normalized.sequence);
+}
+
+function testShotOperationsCreateAssignBoundaryAndDelete() {
+  const timeline = createDefaultVideoTimeline();
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 1);
+  const firstShot = findShotForSection(timeline, first.item_id);
+  const secondShot = findShotForSection(timeline, second.item_id);
+
+  assert.ok(firstShot);
+  assert.ok(secondShot);
+  assert.deepEqual(firstShot.section_ids, [first.item_id]);
+
+  const manual = createShot(timeline, { shot_id: "shot_manual", name: "Manual", start_time: 2, end_time: 3 });
+  assert.equal(timeline.ui_state.selected_item_id, "shot_manual");
+  assert.equal(changeShotType(timeline, manual.shot_id, "Imported"), true);
+  assert.equal(renameShot(timeline, manual.shot_id, "Imported Clip"), true);
+  assert.equal(assignSectionToShot(timeline, second.item_id, manual.shot_id), true);
+
+  assert.equal(findShotForSection(timeline, second.item_id).shot_id, manual.shot_id);
+  assert.equal(timeline.sequence.shots.some((shot) => shot.shot_id === secondShot.shot_id), false);
+  assert.deepEqual(manual.section_ids, [second.item_id]);
+  assert.deepEqual([manual.start_time, manual.end_time], [1, 2]);
+
+  const boundary = createOrUpdateBoundaryBetweenShots(timeline, firstShot.shot_id, manual.shot_id, { mode: "Continuous Shot" });
+  assert.ok(boundary);
+  assert.equal(boundary.mode, "Continuous Shot");
+  assert.equal(changeBoundaryMode(timeline, boundary.boundary_id, "Transition"), true);
+  assert.equal(findBoundaryBetweenShots(timeline, firstShot.shot_id, manual.shot_id).mode, "Transition");
+
+  selectItem(timeline, manual.shot_id);
+  assert.equal(deleteSelectedItem(timeline), true);
+  assert.equal(timeline.director_track.sections.some((section) => section.item_id === second.item_id), false);
+  assert.equal(timeline.sequence.shots.some((shot) => shot.shot_id === manual.shot_id), false);
+  assert.equal(timeline.sequence.boundaries.length, 0);
+}
+
+function testTakeAndClipInstanceOperations() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addValidTextSection(timeline, 0);
+  const shot = findShotForSection(timeline, section.item_id);
+  timeline.assets.push({
+    asset_id: "asset_video_001",
+    type: ASSET_TYPE_VIDEO,
+    source_kind: ASSET_SOURCE_GENERATED,
+    path: "/tmp/generated.mp4",
+    name: "generated.mp4",
+  });
+
+  assert.equal(setClipInstanceFromAsset(timeline, shot.shot_id, "asset_video_001", { source_in: 0.5 }), true);
+  assert.equal(shot.type, "Imported");
+  assert.equal(shot.clip_instance.asset_id, "asset_video_001");
+  assert.equal(shot.clip_instance.source_in, 0.5);
+
+  const take = addTakeMetadata(timeline, shot.shot_id, {
+    take_id: "take_custom",
+    asset_id: "asset_video_001",
+    seed: 123,
+    resolved_loras: {
+      model_family: "LTX",
+      model_version: "2.3",
+      targets: { [MODEL_LORA_TARGET_MAIN]: [] },
+    },
+  });
+  assert.equal(take.take_id, "take_custom");
+  assert.equal(acceptTake(timeline, shot.shot_id, take.take_id), true);
+  assert.equal(shot.accepted_take_id, take.take_id);
+  assert.equal(take.status, "Accepted");
+  assert.equal(setTakeStatus(timeline, shot.shot_id, take.take_id, "Rejected"), true);
+  assert.equal(shot.accepted_take_id, null);
+  assert.equal(take.status, "Rejected");
+}
+
+function testProjectAndShotLoraOperations() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addValidTextSection(timeline, 0);
+  const shot = findShotForSection(timeline, section.item_id);
+  const stack = {
+    version: 1,
+    loras: [{ enabled: true, name: "style.safetensors", strength_model: 0.75, strength_clip: 0.5 }],
+    ui: { show_strengths: "dual", match: "style" },
+  };
+
+  assert.equal(setProjectModelLoraStack(timeline, MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN, stack), true);
+  assert.deepEqual(timeline.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras, stack.loras);
+  assert.equal(setProjectModelLoraStack(timeline, MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_HIGH_NOISE, stack), false);
+
+  assert.equal(setShotLoraMergeMode(timeline, shot.shot_id, "Replace Global"), true);
+  assert.equal(shot.lora_overrides.enabled, true);
+  assert.equal(shot.lora_overrides.merge_mode, "Replace Global");
+  assert.equal(setShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE, stack), true);
+  assert.equal(shot.lora_overrides.targets[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE].loras[0].name, "style.safetensors");
+  assert.equal(setShotLoraTargetStack(timeline, shot.shot_id, MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_MAIN, stack), false);
+  assert.equal(clearShotLoraOverride(timeline, shot.shot_id), true);
+  assert.deepEqual(shot.lora_overrides, {
+    enabled: false,
+    merge_mode: "Inherit Global",
+    targets: {},
+  });
 }
 
 function testMalformedOrMissingSequenceMigratesFromSections() {
@@ -624,6 +768,7 @@ testGapsRemainAllowedAndDetected();
 testSplitAndDuplicate();
 testSelectionHelpersKeepPrimaryInSync();
 testMigrationDerivesSelectedItemIdsFromPrimarySelection();
+testSelectionNormalizationPreservesShotBoundaryAndTakeIds();
 testDefaultTimelineHasSequenceAndModelTargetedLoras();
 testMigrationDropsLegacyLorasAndPreservesSections();
 testMigrationNormalizesPartialSequenceStructures();
@@ -631,6 +776,9 @@ testMigrationDerivesShotsFromFlatSections();
 testMigrationIsIdempotentAndUsesDuplicateSuffixes();
 testMalformedOrMissingSequenceMigratesFromSections();
 testExistingSequenceShotsArePreserved();
+testShotOperationsCreateAssignBoundaryAndDelete();
+testTakeAndClipInstanceOperations();
+testProjectAndShotLoraOperations();
 testValidationReportsGenericShotStructureIssues();
 testValidationChecksGenericLoraStructureAndLegacyRemoval();
 testValidationChecksTakeResolvedLorasAndBoundaryContinuity();
