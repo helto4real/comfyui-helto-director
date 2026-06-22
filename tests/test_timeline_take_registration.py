@@ -15,9 +15,14 @@ from shared.contracts.video_timeline import (
     TAKE_STATUS_REJECTED,
 )
 from shared.timeline import (
+    GENERATED_TAKE_CAPTURE_TYPE,
+    GeneratedCaptureError,
     TakeRegistrationError,
     accept_take,
+    build_generated_take_capture_sidecar,
+    build_take_capture_metadata,
     create_default_video_timeline,
+    generated_take_capture_to_registration,
     register_generated_take,
     register_take_for_asset,
     reject_take,
@@ -255,3 +260,207 @@ def test_register_take_for_stale_asset_reference_is_rejected():
             "shot_001",
             {"take_id": "take_missing", "asset_id": "missing_asset"},
         )
+
+
+def test_generated_take_capture_sidecar_pairs_asset_metadata_with_registration():
+    registration = {
+        "shot_id": "shot_001",
+        "asset": {
+            "name": "shot_001_take_001.mp4",
+            "metadata": {"sampler": "euler"},
+        },
+        "take": {
+            "take_id": "take_001",
+            "seed": 1234,
+            "model_family": "LTX",
+            "model_version": "2.3",
+            "plan_hash": "plan_hash",
+            "prompt_hash": "prompt_hash",
+        },
+    }
+
+    sidecar = build_generated_take_capture_sidecar(
+        registration,
+        media={
+            "type": ASSET_TYPE_VIDEO,
+            "path": "/tmp/outputs/shot_001_take_001.mp4",
+            "filename": "shot_001_take_001.mp4",
+            "mime_type": "video/mp4",
+            "frame_rate": 24.0,
+            "frame_count": 49,
+            "duration_seconds": 2.0,
+            "width": 1024,
+            "height": 576,
+        },
+    )
+
+    assert sidecar["type"] == GENERATED_TAKE_CAPTURE_TYPE
+    assert sidecar["media"]["frame_rate"] == 24.0
+    assert sidecar["registration"]["asset"]["source_kind"] == ASSET_SOURCE_GENERATED
+    assert sidecar["registration"]["asset"]["metadata"]["shot_id"] == "shot_001"
+    assert sidecar["registration"]["asset"]["metadata"]["take_id"] == "take_001"
+    assert "/tmp/outputs" not in json.dumps(sidecar)
+
+    registration_for_timeline = generated_take_capture_to_registration(
+        sidecar,
+        path="/tmp/outputs/shot_001_take_001.mp4",
+        accept=True,
+    )
+    result = register_generated_take(_timeline_with_shot(), registration_for_timeline)
+    timeline = result["timeline"]
+    asset = timeline["assets"][0]
+    take = _shot(timeline)["takes"][0]
+
+    assert result["accepted"] is True
+    assert asset["path"] == "/tmp/outputs/shot_001_take_001.mp4"
+    assert asset["metadata"]["frame_count"] == 49
+    assert take["take_id"] == "take_001"
+    assert take["status"] == TAKE_STATUS_ACCEPTED
+    assert validate_video_timeline(timeline)["is_valid"] is True
+
+
+def test_generated_take_capture_privacy_redacts_clear_names_paths_and_loras():
+    sidecar = build_generated_take_capture_sidecar(
+        {
+            "shot_id": "shot_001",
+            "privacy": {"privacy_mode": True},
+            "asset": {
+                "name": "private_character_output.mp4",
+                "metadata": {
+                    "private_path": "/private/character/output.mp4",
+                },
+            },
+            "take": {
+                "take_id": "take_private",
+                "model_family": "LTX",
+                "model_version": "2.3",
+                "resolved_loras": {
+                    "model_family": "LTX",
+                    "model_version": "2.3",
+                    "targets": {
+                        MODEL_LORA_TARGET_MAIN: [
+                            {"name": "secret_identity.safetensors", "strength_model": 0.9}
+                        ]
+                    },
+                },
+                "metadata": {"source_path": "/private/source.mov"},
+            },
+        },
+        media={
+            "type": ASSET_TYPE_VIDEO,
+            "filename": "private_character_output.mp4",
+            "name": "private character output",
+            "duration_seconds": 2.0,
+        },
+    )
+
+    rendered = json.dumps(sidecar)
+    assert "private_character" not in rendered
+    assert "secret_identity" not in rendered
+    assert "/private" not in rendered
+    assert sidecar["media"]["filename"] == "generated_private.mp4"
+    assert sidecar["registration"]["asset"]["name"] == "Private Generated Video"
+    row = sidecar["registration"]["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_MAIN][0]
+    assert row["name"] == "lora_001"
+    assert row["name_hash"]
+    assert sidecar["privacy"]["privacy_mode"] is True
+    assert "registration.take.resolved_loras.targets.*.name" in sidecar["privacy"]["redacted_fields"]
+
+
+def test_generated_take_capture_rejects_embedded_media_payloads():
+    with pytest.raises(GeneratedCaptureError, match="embedded media"):
+        build_generated_take_capture_sidecar(
+            {"shot_id": "shot_001", "take": {"take_id": "take_001"}},
+            media={
+                "type": ASSET_TYPE_VIDEO,
+                "thumbnail": "data:image/png;base64,AAAA",
+            },
+        )
+
+    with pytest.raises(GeneratedCaptureError, match="embedded media"):
+        build_generated_take_capture_sidecar(
+            {
+                "shot_id": "shot_001",
+                "asset": {"metadata": {"waveform": [0.0, 1.0]}},
+                "take": {"take_id": "take_001"},
+            },
+            media={"type": ASSET_TYPE_VIDEO},
+        )
+
+
+def test_runtime_take_registration_metadata_pairs_with_generated_capture_sidecar():
+    runtime_registration = build_take_capture_metadata(
+        {
+            "type": "LTX_TIMELINE_PLAN",
+            "project": {
+                "privacy": {"mode": False},
+                "global_prompt": {"prompt": "wide establishing shot"},
+            },
+            "resolved_output": {
+                "width": 768,
+                "height": 432,
+                "frame_rate": 24.0,
+                "frame_count": 49,
+                "duration_seconds": 2.0,
+            },
+            "prompt_plan": [
+                {"item_id": "section_001", "type": "Text", "runtime_prompt": "wide establishing shot"}
+            ],
+            "section_plan": [
+                {
+                    "item_id": "section_001",
+                    "type": "Text",
+                    "start_time": 0.0,
+                    "end_time": 2.0,
+                    "start_frame": 0,
+                    "end_frame_exclusive": 49,
+                    "frame_count": 49,
+                }
+            ],
+            "model_specific": {
+                "ltx": {
+                    "shot_context": {
+                        "shot_id": "shot_001",
+                        "duration_seconds": 2.0,
+                        "section_ids": ["section_001"],
+                    }
+                }
+            },
+        },
+        model_key="ltx",
+        model_family="LTX",
+        model_version="2.3",
+        source="LTX Runtime",
+        expected_asset_type=ASSET_TYPE_VIDEO,
+        seed=42,
+    )
+
+    sidecar = build_generated_take_capture_sidecar(
+        runtime_registration,
+        media={
+            "type": ASSET_TYPE_VIDEO,
+            "filename": "shot_001_take.mp4",
+            "mime_type": "video/mp4",
+            "frame_rate": 24.0,
+            "frame_count": 49,
+            "duration_seconds": 2.0,
+            "width": 768,
+            "height": 432,
+        },
+    )
+    registration = generated_take_capture_to_registration(
+        sidecar,
+        path="/tmp/outputs/shot_001_take.mp4",
+    )
+    result = register_generated_take(_timeline_with_shot(), registration)
+    timeline = result["timeline"]
+    asset = timeline["assets"][0]
+    take = _shot(timeline)["takes"][0]
+
+    assert sidecar["registration"]["shot_id"] == "shot_001"
+    assert asset["metadata"]["width"] == 768
+    assert asset["metadata"]["height"] == 432
+    assert take["seed"] == 42
+    assert take["model_family"] == "LTX"
+    assert take["model_version"] == "2.3"
+    assert validate_video_timeline(timeline)["is_valid"] is True

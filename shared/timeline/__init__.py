@@ -1,5 +1,13 @@
 from .defaults import create_default_video_timeline
 from .gaps import detect_director_gaps
+from .generated_capture import (
+    GENERATED_TAKE_CAPTURE_SCHEMA_VERSION,
+    GENERATED_TAKE_CAPTURE_TYPE,
+    GeneratedCaptureError,
+    build_generated_take_capture_sidecar,
+    generated_take_capture_to_registration,
+    normalize_generated_take_capture_sidecar,
+)
 from .migration import migrate_video_timeline
 from .normalize import normalize_video_timeline
 from .planner_context import create_resolved_lora_snapshot, resolve_runtime_lora_targets
@@ -34,11 +42,17 @@ __all__ = [
     "detect_director_gaps",
     "extract_shot_timeline",
     "frame_to_seconds",
+    "GENERATED_TAKE_CAPTURE_SCHEMA_VERSION",
+    "GENERATED_TAKE_CAPTURE_TYPE",
+    "GeneratedCaptureError",
     "build_generation_segments",
+    "build_generated_take_capture_sidecar",
     "build_take_capture_metadata",
+    "generated_take_capture_to_registration",
     "merge_prompts",
     "migrate_video_timeline",
     "normalize_video_timeline",
+    "normalize_generated_take_capture_sidecar",
     "register_generated_take",
     "register_take_for_asset",
     "reject_take",
