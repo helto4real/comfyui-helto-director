@@ -23,6 +23,8 @@ from ...segmented_executor import (
     trim_visible_segment_images,
 )
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
+from ...timeline.take_capture import build_take_capture_metadata
+from ..config import WAN_MODEL_FAMILY, WAN_MODEL_VERSION
 from .runtime import build_wan_runtime_outputs
 
 
@@ -211,6 +213,40 @@ def build_wan_segmented_executor_outputs(
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
             wan_debug = runtime_debug.get("wan", runtime_debug) if isinstance(runtime_debug, dict) else {}
             visual_debug = wan_debug.get("visual_conditioning", {}) if isinstance(wan_debug, dict) else {}
+            take_registration = build_take_capture_metadata(
+                segment_plan,
+                model_key="wan",
+                model_family=WAN_MODEL_FAMILY,
+                model_version=WAN_MODEL_VERSION,
+                source="WAN Segmented Executor",
+                resolved_loras=(
+                    wan_debug.get("loras", {}).get("take_snapshot")
+                    if isinstance(wan_debug, dict)
+                    else None
+                ),
+                seed=segment_seed_value,
+                settings={
+                    "steps": int(steps),
+                    "cfg": float(cfg),
+                    "sampler_name": str(sampler_name),
+                    "scheduler": str(scheduler),
+                    "denoise": float(denoise),
+                    "seed_mode": str(seed_mode),
+                    "phase_split_step": phase_split_step,
+                },
+                segment=segment,
+                model_specific={
+                    "runtime": "segmented",
+                    "segment_index": index,
+                    "backend": str(
+                        segment_plan.get("model_specific", {})
+                        .get("wan", {})
+                        .get("config", {})
+                        .get("runtime_backend_profile")
+                        or ""
+                    ),
+                },
+            )
             segment_debug.append({
                 "id": segment.get("id"),
                 "seed": segment_seed_value,
@@ -231,6 +267,7 @@ def build_wan_segmented_executor_outputs(
                 "bernini": wan_debug.get("bernini"),
                 "fmlf_advanced_i2v": wan_debug.get("fmlf_advanced_i2v"),
                 "loras": wan_debug.get("loras") or runtime_debug.get("loras") if isinstance(runtime_debug, dict) else {},
+                "take_registration": take_registration,
                 "visual_conditioning": {
                     "requested_keyframes": visual_debug.get("requested_keyframes") or [],
                     "applied_keyframes": visual_debug.get("applied_keyframes") or [],

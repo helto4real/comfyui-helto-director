@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 import shared.privacy as privacy
-from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_IMAGE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
+from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_IMAGE, MODEL_LORA_TARGET_HIGH_NOISE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
 from shared.privacy import BYTE_CHUNKED_ENVELOPE_SCHEMA, CRYPTO_AVAILABLE
 from shared.segmented_executor import (
     SegmentSpillStore,
@@ -1487,6 +1487,17 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
                     "media_decisions": [],
                 },
                 "bernini": None,
+                "loras": {
+                    "take_snapshot": {
+                        "model_family": "WAN",
+                        "model_version": "2.2",
+                        "targets": {
+                            MODEL_LORA_TARGET_HIGH_NOISE: [
+                                {"name": "segment_style.safetensors"}
+                            ],
+                        },
+                    },
+                },
             },
             "summary": {},
         }
@@ -1534,6 +1545,18 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
                     "prompt_relay_epsilon": 0.15,
                     "vram_unload_policy": "Off",
                 },
+                "timeline_structure": {
+                    "shots": [
+                        {
+                            "shot_id": "shot_section_001",
+                            "type": "Generated",
+                            "start_time": 0.0,
+                            "end_time": 5 / 8.0,
+                            "section_ids": ["section_001"],
+                        }
+                    ],
+                    "section_to_shot": {"section_001": "shot_section_001"},
+                },
                 "segmented_generation": {
                     "enabled": True,
                     "segments": [
@@ -1546,6 +1569,7 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
                             "generation_frame_count": 5,
                             "trim_leading_frames": 0,
                             "trim_trailing_frames": 0,
+                            "source_section_ids": ["section_001"],
                             "continuity": {"mode": "initial"},
                         }
                     ],
@@ -1577,6 +1601,12 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
     assert "timeline.spill" in stages
     assert "timeline.cleanup" in stages
     assert stages[-3:] == ["timeline.stitch", "timeline.audio", "timeline.done"]
+    take_registration = debug["segments"][0]["take_registration"]
+    assert take_registration["shot_id"] == "shot_section_001"
+    assert take_registration["segment_context"]["id"] == "gen_001"
+    assert take_registration["take"]["seed"] == 1
+    assert take_registration["take"]["metadata"]["settings"]["steps"] == 4
+    assert take_registration["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE][0]["name"] == "segment_style.safetensors"
 
 
 def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, tmp_path):

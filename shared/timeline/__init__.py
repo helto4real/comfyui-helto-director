@@ -10,6 +10,7 @@ from .shot_extraction import (
     extract_shot_timeline,
     select_shot_timeline_for_planning,
 )
+from .take_capture import build_take_capture_metadata
 from .take_registration import (
     TakeRegistrationError,
     accept_take,
@@ -29,6 +30,7 @@ __all__ = [
     "extract_shot_timeline",
     "frame_to_seconds",
     "build_generation_segments",
+    "build_take_capture_metadata",
     "merge_prompts",
     "migrate_video_timeline",
     "normalize_video_timeline",

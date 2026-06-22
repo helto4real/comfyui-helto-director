@@ -24,6 +24,7 @@ from ...timeline.planner_context import (
     create_resolved_lora_snapshot,
     resolve_runtime_lora_targets,
 )
+from ...timeline.take_capture import build_take_capture_metadata
 
 
 def build_ltx_runtime_outputs(
@@ -348,7 +349,19 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     lora_targets = (lora_report or {}).get("targets", {})
     main_loras = lora_targets.get(MODEL_LORA_TARGET_MAIN, {})
-    return {
+    take_registration = build_take_capture_metadata(
+        plan,
+        model_key="ltx",
+        model_family=LTX_MODEL_FAMILY,
+        model_version=LTX_MODEL_VERSION,
+        source="LTX Runtime",
+        resolved_loras=(lora_report or {}).get("take_snapshot"),
+        model_specific={
+            "runtime": "single",
+            "lora_source_scope": (lora_report or {}).get("source_scope"),
+        },
+    )
+    debug = {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
         "enabled": bool(plan.get("model_specific", {}).get("ltx", {}).get("config", {}).get("debug_mode")),
@@ -385,6 +398,10 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
         "status_events": list(status_events or []),
         "diagnostics": diagnostics,
     }
+    if take_registration is not None:
+        debug["take_registration"] = take_registration
+        debug["summary"]["take_registration_ready"] = take_registration.get("shot_id") is not None
+    return debug
 
 
 def _advanced_input_diagnostics(identity_anchor, sigmas) -> list[str]:

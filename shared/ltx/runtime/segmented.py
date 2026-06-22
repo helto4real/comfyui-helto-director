@@ -21,6 +21,8 @@ from ...segmented_executor import (
     trim_visible_segment_images,
 )
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
+from ...timeline.take_capture import build_take_capture_metadata
+from ..config import LTX_MODEL_FAMILY, LTX_MODEL_VERSION
 from .audio import (
     apply_native_source_video_audio_fallback,
     build_native_av_sampling_latent,
@@ -152,12 +154,13 @@ def build_ltx_segmented_executor_outputs(
             if use_native_audio:
                 sampling_latent, native_audio_debug = build_native_av_sampling_latent(video_latent, audio_latent)
                 native_audio_diagnostics.extend(native_audio_debug.get("diagnostics", []))
+            segment_seed_value = segment_seed(seed, index, seed_mode)
             sampled = sample_latent(
                 model=runtime_model,
                 positive=positive,
                 negative=runtime_negative,
                 latent=sampling_latent,
-                seed=segment_seed(seed, index, seed_mode),
+                seed=segment_seed_value,
                 steps=steps,
                 cfg=cfg,
                 sampler_name=sampler_name,
@@ -228,9 +231,35 @@ def build_ltx_segmented_executor_outputs(
                 segment_count=segment_count,
             )
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
+            take_registration = build_take_capture_metadata(
+                segment_plan,
+                model_key="ltx",
+                model_family=LTX_MODEL_FAMILY,
+                model_version=LTX_MODEL_VERSION,
+                source="LTX Segmented Executor",
+                resolved_loras=(
+                    runtime_debug.get("loras", {}).get("take_snapshot")
+                    if isinstance(runtime_debug, dict)
+                    else None
+                ),
+                seed=segment_seed_value,
+                settings={
+                    "steps": int(steps),
+                    "cfg": float(cfg),
+                    "sampler_name": str(sampler_name),
+                    "scheduler": str(scheduler),
+                    "denoise": float(denoise),
+                    "seed_mode": str(seed_mode),
+                },
+                segment=segment,
+                model_specific={
+                    "runtime": "segmented",
+                    "segment_index": index,
+                },
+            )
             segment_debug.append({
                 "id": segment.get("id"),
-                "seed": segment_seed(seed, index, seed_mode),
+                "seed": segment_seed_value,
                 "generation_frame_count": segment.get("generation_frame_count"),
                 "visible_frame_count": segment.get("visible_frame_count"),
                 "trim_leading_frames": segment.get("trim_leading_frames"),
@@ -256,6 +285,7 @@ def build_ltx_segmented_executor_outputs(
                 "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
                 "loras": runtime_debug.get("loras", []) if isinstance(runtime_debug, dict) else [],
+                "take_registration": take_registration,
                 "sampling": sampling_debug,
                 "native_audio": native_audio_debug,
             })

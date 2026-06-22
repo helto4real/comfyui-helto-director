@@ -49,6 +49,7 @@ def build_runtime_debug(
     model_patch_status: dict[str, Any] | None = None,
     status_events: list[dict[str, Any]] | None = None,
     fmlf_debug: dict[str, Any] | None = None,
+    take_registration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     wan = plan.get("model_specific", {}).get("wan", {})
     config = wan.get("config", {})
@@ -108,6 +109,11 @@ def build_runtime_debug(
         "validation": validation,
         "diagnostics": list(diagnostics),
     }
+    if take_registration is not None:
+        runtime_debug["take_registration"] = deepcopy(take_registration)
+        runtime_debug["summary"]["take_registration_ready"] = (
+            take_registration.get("shot_id") is not None
+        )
     runtime_debug["status"] = summarize_wan_runtime_status(plan, runtime_debug, validation)
     return runtime_debug
 

@@ -39,6 +39,7 @@ from shared.lora import config as lora_config_module
 from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline import create_default_video_timeline, create_resolved_lora_snapshot, validate_video_timeline
+from shared.timeline.take_capture import TAKE_CAPTURE_TYPE
 
 
 def _registered_node(node_id):
@@ -217,6 +218,30 @@ def _text_plan(duration=1.0, prompt="wide shot"):
         }
     )
     plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
+    assert validation["is_valid"] is True
+    return plan
+
+
+def _shot_text_plan(duration=1.0, prompt="wide shot", *, privacy_mode: bool = False):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = duration
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["project"]["privacy"]["mode"] = privacy_mode
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_001",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 0.0,
+            "end_time": duration,
+            "prompt": prompt,
+        }
+    )
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(),
+        shot_id="shot_section_001",
+    )
     assert validation["is_valid"] is True
     return plan
 
@@ -728,6 +753,60 @@ def test_ltx_runtime_applies_resolved_main_lora_stack(monkeypatch):
     assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"][0]["name"] == "style.safetensors"
     assert runtime_debug["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_MAIN][0]["name"] == "style.safetensors"
     assert runtime_debug["summary"]["lora_count"] == 1
+
+
+def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
+    def fake_apply_lora_config(*, model, clip, lora_config):
+        return model, clip, list(lora_config["loras"])
+
+    monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["style.safetensors"])
+    monkeypatch.setattr(ltx_runtime, "apply_lora_config", fake_apply_lora_config)
+    plan = _shot_text_plan(duration=2.0, prompt="secret hero prompt")
+    plan["model_specific"]["ltx"]["lora_resolution"]["single_generation_loras"] = {
+        MODEL_LORA_TARGET_MAIN: _lora_stack("style.safetensors"),
+    }
+
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    metadata = runtime_debug["take_registration"]
+    assert metadata["type"] == TAKE_CAPTURE_TYPE
+    assert metadata["shot_id"] == "shot_section_001"
+    assert metadata["expected_asset_type"] == ASSET_TYPE_VIDEO
+    assert metadata["take"]["status"] == "Candidate"
+    assert metadata["take"]["model_family"] == "LTX"
+    assert metadata["take"]["model_version"] == "2.3"
+    assert metadata["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_MAIN][0]["name"] == "style.safetensors"
+    assert metadata["shot_context"]["original_start_time"] == 0.0
+    assert metadata["shot_context"]["original_end_time"] == 2.0
+    assert metadata["shot_context"]["local_duration_seconds"] == 2.0
+    assert metadata["asset"]["source_kind"] == "Generated"
+    assert metadata["asset"].get("path") is None
+    assert "secret hero prompt" not in json.dumps(metadata)
+    assert "data:" not in json.dumps(metadata)
+    assert runtime_debug["summary"]["take_registration_ready"] is True
+
+
+def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monkeypatch):
+    def fake_apply_lora_config(*, model, clip, lora_config):
+        return model, clip, list(lora_config["loras"])
+
+    monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["private_style.safetensors"])
+    monkeypatch.setattr(ltx_runtime, "apply_lora_config", fake_apply_lora_config)
+    plan = _shot_text_plan(prompt="private prompt", privacy_mode=True)
+    plan["model_specific"]["ltx"]["lora_resolution"]["single_generation_loras"] = {
+        MODEL_LORA_TARGET_MAIN: _lora_stack("private_style.safetensors"),
+    }
+
+    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    metadata = runtime_debug["take_registration"]
+    row = metadata["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_MAIN][0]
+    assert row["name"] == "lora_001"
+    assert row["name_hash"]
+    assert metadata["privacy"]["privacy_mode"] is True
+    assert metadata["suggested_asset_name"] == "generated_video.mp4"
+    assert "private_style.safetensors" not in json.dumps(metadata)
+    assert "private prompt" not in json.dumps(metadata)
 
 
 def test_ltx_runtime_ignores_legacy_timeline_lora_fields(monkeypatch):

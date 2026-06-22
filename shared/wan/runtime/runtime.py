@@ -33,6 +33,7 @@ from ...timeline.planner_context import (
     create_resolved_lora_snapshot,
     resolve_runtime_lora_targets,
 )
+from ...timeline.take_capture import build_take_capture_metadata
 
 
 def build_wan_runtime_outputs(
@@ -137,6 +138,12 @@ def build_wan_runtime_outputs(
             media_decisions=media_decisions,
             model_patch_status=model_patch_status,
             status_events=status_reporter.snapshot(),
+            take_registration=_build_wan_take_registration(
+                plan,
+                lora_report,
+                source="WAN Runtime",
+                backend=resolved_backend,
+            ),
         )
         _attach_wan_lora_debug(runtime_debug, lora_report)
         if complete_status:
@@ -293,6 +300,12 @@ def build_wan_runtime_outputs(
         model_patch_status=model_patch_status,
         status_events=status_reporter.snapshot(),
         fmlf_debug=fmlf_debug,
+        take_registration=_build_wan_take_registration(
+            plan,
+            lora_report,
+            source="WAN Runtime",
+            backend=resolved_backend,
+        ),
     )
     _attach_wan_lora_debug(runtime_debug, lora_report)
     if complete_status:
@@ -776,6 +789,28 @@ def _attach_wan_lora_debug(runtime_debug: dict[str, Any], lora_report: dict[str,
         int(target.get("applied_count") or 0)
         for target in targets.values()
         if isinstance(target, dict)
+    )
+
+
+def _build_wan_take_registration(
+    plan: dict[str, Any],
+    lora_report: dict[str, Any],
+    *,
+    source: str,
+    backend: str,
+) -> dict[str, Any] | None:
+    return build_take_capture_metadata(
+        plan,
+        model_key="wan",
+        model_family=WAN_MODEL_FAMILY,
+        model_version=WAN_MODEL_VERSION,
+        source=source,
+        resolved_loras=(lora_report or {}).get("take_snapshot"),
+        model_specific={
+            "runtime": "single",
+            "backend": backend,
+            "lora_source_scope": (lora_report or {}).get("source_scope"),
+        },
     )
 
 

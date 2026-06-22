@@ -14,12 +14,14 @@ from PIL import Image
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
     MODEL_LORA_TARGET_HIGH_NOISE,
     MODEL_LORA_TARGET_LOW_NOISE,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
 )
 from shared.timeline import create_default_video_timeline
+from shared.timeline.take_capture import TAKE_CAPTURE_TYPE
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.runtime import runtime as wan_runtime
 from shared.wan.runtime.capabilities import select_keyframes_for_capabilities
@@ -69,6 +71,35 @@ def test_plan_only_runtime_succeeds_without_model_clip_or_vae():
     assert runtime_debug["summary"]["requested_backend"] == "Plan Only"
     assert runtime_debug["summary"]["resolved_backend"] == "Plan Only"
     assert _validation_codes(runtime_debug, "info").count("WAN_RUNTIME_BACKEND_PLAN_ONLY") >= 1
+
+
+def test_wan_shot_runtime_emits_take_registration_metadata():
+    plan, _validation, _debug = build_wan_timeline_plan(
+        _text_timeline(),
+        create_wan_timeline_config(debug_mode="Summary"),
+        shot_id="shot_section_text",
+    )
+    plan["model_specific"]["wan"]["lora_resolution"]["single_generation_loras"] = {
+        MODEL_LORA_TARGET_HIGH_NOISE: _lora_stack("hi.safetensors"),
+        MODEL_LORA_TARGET_LOW_NOISE: _lora_stack("low.safetensors"),
+    }
+
+    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+
+    metadata = runtime_debug["take_registration"]
+    assert metadata["type"] == TAKE_CAPTURE_TYPE
+    assert metadata["shot_id"] == "shot_section_text"
+    assert metadata["expected_asset_type"] == ASSET_TYPE_VIDEO
+    assert metadata["take"]["model_family"] == "WAN"
+    assert metadata["take"]["model_version"] == "2.2"
+    assert metadata["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE][0]["name"] == "hi.safetensors"
+    assert metadata["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE][0]["name"] == "low.safetensors"
+    assert metadata["shot_context"]["original_start_time"] == 0.0
+    assert metadata["shot_context"]["original_end_time"] == 1.0
+    assert metadata["model_specific"]["wan"]["backend"] == "Plan Only"
+    assert metadata["asset"].get("path") is None
+    assert "simple prompt" not in str(metadata)
+    assert runtime_debug["summary"]["take_registration_ready"] is True
 
 
 def test_auto_backend_resolves_to_plan_only_or_comfyui_core(tmp_path):
