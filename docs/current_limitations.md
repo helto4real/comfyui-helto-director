@@ -26,6 +26,18 @@ This nodepack is usable for LTX Timeline workflows and the supported WAN 2.2 Com
 - Legacy `lora_config_hi` and `lora_config_low` timeline workflows are no longer migrated. Old LoRA choices require manual reconfiguration into the model-targeted project/shot stacks.
 - LoRA changes across continuous, blended, or transition boundaries can cause visible style or identity seams.
 
+## Shot Generation, Takes, And Assembly
+
+- Shot-based generation is additive. Leaving planner `shot_id` empty keeps the existing full-timeline workflow.
+- Selecting a compatible shot in the timeline UI lets new Text/Image/Video Sections attach to that shot instead of creating a second wrapper shot.
+- The LTX and WAN planners can receive a selected `shot_id` and plan against a shot-local timeline with generic boundary context.
+- Take registration is currently manual or semi-automatic. Runtime/debug metadata can describe a take, but the Director timeline is not automatically mutated after graph execution.
+- Generated outputs are represented as `Generated` assets and nested shot takes. Workflow JSON stores asset references and metadata only.
+- Accepting a video take updates the shot's accepted take and clip-instance state without changing a generated shot into an imported shot.
+- Imported shots can reference existing video assets through clip instances and can participate in sequence assembly without generated takes.
+- Sequence assembly is a backend helper path for accepted generated takes and imported clips. Advanced transition rendering is still deferred or preserved as metadata/fallback behavior.
+- Assembly may need compatible clip sizes and frame rates, or it will rely on the documented fallback/resizing behavior.
+
 ## LTX
 
 - LTX 2.3 has Config, Planner, Runtime, prompt optimizer, source-video guidance, audio mixing/native-audio gating, and identity/reference helper nodes.

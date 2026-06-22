@@ -17,9 +17,12 @@ Restart ComfyUI after cloning.
 
 See [LTX 2.3 Timeline Workflow Guide](docs/examples/ltx_timeline_workflow_guide.md) for practical graph wiring, source-video extension, prompt optimizer, identity/reference helpers, audio modes, and privacy mode behavior.
 
+See [Shot, Take, and Sequence Workflow](docs/shot_take_sequence_workflow.md) for shot-based generation, take capture, accepted clips, imported shots, and sequence assembly.
+
 ## Quick Links
 
 - [Workflow examples](docs/workflows/README.md)
+- [Shot, take, and sequence workflow](docs/shot_take_sequence_workflow.md)
 - [Media picker setup](docs/picker_setup.md)
 - [Privacy mode limitations](docs/privacy_limitations.md)
 - [Current limitations](docs/current_limitations.md)
