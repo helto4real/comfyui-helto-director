@@ -825,6 +825,77 @@ def test_ltx_segmented_executor_uses_widget_schedule_without_sigmas(monkeypatch,
     }
 
 
+def test_ltx_segmented_executor_exposes_runtime_prompt_relay_debug(monkeypatch, tmp_path):
+    def fake_build_runtime_outputs(**kwargs):
+        segment_plan = kwargs["ltx_timeline_plan"]
+        local_prompts = [
+            str(prompt.get("runtime_prompt") or prompt.get("raw_prompt") or "").strip()
+            for prompt in segment_plan.get("prompt_plan", [])
+        ]
+        runtime_debug = {
+            "summary": {"section_count": len(segment_plan.get("section_plan", []))},
+            "prompt_relay": {
+                "full_prompt": " ".join(local_prompts),
+                "local_prompts": local_prompts,
+                "prompt_sections": [
+                    {"item_id": section.get("item_id"), "type": section.get("type")}
+                    for section in segment_plan.get("section_plan", [])
+                ],
+                "latent_ranges": [
+                    {"start": index, "end": index + 1, "length": 1}
+                    for index, _prompt in enumerate(local_prompts)
+                ],
+            },
+        }
+        return (
+            object(),
+            [],
+            [],
+            {"samples": torch.zeros((1, 16, 3, 1, 1))},
+            None,
+            None,
+            {
+                "clean_latent_frames": 3,
+                "hidden_reference_count": 0,
+                "hidden_reference_guard_latent_frames": 0,
+                "clean_pixel_frames": 5,
+            },
+            None,
+            runtime_debug,
+        )
+
+    _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
+    plan = _two_segment_executor_plan("ltx")
+    plan["project"]["privacy"]["mode"] = True
+
+    _images, _audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
+        model=object(),
+        clip=object(),
+        vae=object(),
+        ltx_timeline_plan=plan,
+        seed=1,
+        steps=12,
+        cfg=5.0,
+        sampler_name="euler",
+        scheduler="normal",
+        denoise=1.0,
+        seed_mode="Reuse Seed",
+    )
+
+    first, second = debug["segments"]
+    assert first["runtime_prompt_relay"]["local_prompts"] == ["first"]
+    assert first["runtime_prompt_relay"]["prompt_sections"] == [
+        {"item_id": "section_001", "type": "Text"}
+    ]
+    assert second["runtime_prompt_relay"]["local_prompts"] == [
+        "Continuing from the previous segment, same subject, setting, style, and motion. second"
+    ]
+    assert "second" in second["runtime_prompt_relay"]["full_prompt"]
+    assert second["runtime_prompt_relay"]["latent_ranges"] == [
+        {"start": 0, "end": 1, "length": 1}
+    ]
+
+
 def test_ltx_segmented_executor_rejects_connected_sigmas_without_sampling_steps():
     for sigmas in (torch.tensor([], dtype=torch.float32), torch.tensor([1.0], dtype=torch.float32)):
         try:

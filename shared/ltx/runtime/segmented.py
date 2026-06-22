@@ -284,6 +284,7 @@ def build_ltx_segmented_executor_outputs(
                 "character_reference_labels_guided": reference_guidance_debug["character_reference_labels_guided"],
                 "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
                 "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
+                "runtime_prompt_relay": deepcopy(runtime_debug.get("prompt_relay")) if isinstance(runtime_debug, dict) else None,
                 "loras": runtime_debug.get("loras", []) if isinstance(runtime_debug, dict) else [],
                 "take_registration": take_registration,
                 "sampling": sampling_debug,
