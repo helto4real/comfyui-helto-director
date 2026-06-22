@@ -1,7 +1,10 @@
 import {
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
+  PROJECT_STORAGE_SCHEMA_VERSION,
+  createDefaultProjectIdentity,
   deepClone,
+  projectDirectoryName,
 } from "./schema.js";
 import { normalizeVideoTimeline } from "./migration.js";
 import {
@@ -20,11 +23,11 @@ import {
 import { showMediaPreview } from "./media_preview.js";
 
 export const ROUTE_PREFIX = "/helto_director/library";
-export const TIMELINE_REPLACE_CONFIRMATION = "Replace current timeline?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.";
+export const PROJECT_REPLACE_CONFIRMATION = "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.";
 
-const TAB_TIMELINES = "timelines";
+const TAB_PROJECTS = "projects";
 const TAB_CHARACTERS = "characters";
-const TIMELINE_LIBRARY_ITEM_ID_KEY = "library_item_id";
+const PROJECT_LIBRARY_ITEM_ID_KEY = "library_item_id";
 const SORT_OPTIONS = [
   { value: "newest", label: "Recently Updated" },
   { value: "oldest", label: "Oldest First" },
@@ -57,7 +60,7 @@ export async function showDirectorLibrary(options = {}) {
   searchWrap.append(iconSvg(documentRef, "search"));
   const search = el(documentRef, "input", "htd-library-search");
   search.type = "search";
-  search.placeholder = "Search timelines...";
+  search.placeholder = "Search projects...";
   search.title = "Search library";
   searchWrap.append(search);
   const sort = el(documentRef, "select", "htd-library-sort");
@@ -68,17 +71,17 @@ export async function showDirectorLibrary(options = {}) {
     entry.textContent = option.label;
     sort.append(entry);
   }
-  const saveButton = iconButton(documentRef, "plus", "Add Current Timeline to Library", async (event) => {
+  const saveButton = iconButton(documentRef, "plus", "Save Project", async (event) => {
     if (state.tab === TAB_CHARACTERS) {
       await saveCurrentCharacters({ timeline, documentRef, setStatus, privacyMode });
       await refreshLibrary();
       return;
     }
-    const linkedId = linkedTimelineLibraryItemId(timeline);
+    const linkedId = linkedProjectLibraryItemId(timeline);
     if (linkedId) {
-      showTimelineSaveChoicePopup(documentRef, saveButton, {
+      showProjectSaveChoicePopup(documentRef, saveButton, {
         update: async () => {
-          await updateCurrentTimelineLibraryItem({
+          await updateCurrentProjectLibraryItem({
             timeline,
             itemId: linkedId,
             documentRef,
@@ -88,24 +91,25 @@ export async function showDirectorLibrary(options = {}) {
           await refreshLibrary();
         },
         saveAsNew: async () => {
-          await saveCurrentTimelineAsNew({
+          await saveCurrentProjectAsNew({
             timeline,
             documentRef,
             setStatus,
             privacyMode,
-            saveTimeline: options.onSaveTimeline,
+            saveProject: options.onSaveProject,
             callbacks: options,
+            forkProject: true,
           });
           await refreshLibrary();
         },
       });
     } else {
-      await saveCurrentTimelineAsNew({
+      await saveCurrentProjectAsNew({
         timeline,
         documentRef,
         setStatus,
         privacyMode,
-        saveTimeline: options.onSaveTimeline,
+        saveProject: options.onSaveProject,
         callbacks: options,
       });
       await refreshLibrary();
@@ -115,9 +119,9 @@ export async function showDirectorLibrary(options = {}) {
   controls.append(searchWrap, sort, saveButton);
 
   const tabs = el(documentRef, "div", "htd-library-tabs");
-  const timelinesTab = tabButton(documentRef, "Timelines", true);
+  const projectsTab = tabButton(documentRef, "Projects", true);
   const charactersTab = tabButton(documentRef, "Characters", false);
-  tabs.append(timelinesTab, charactersTab);
+  tabs.append(projectsTab, charactersTab);
 
   const body = el(documentRef, "div", "htd-library-body");
   const sidebar = el(documentRef, "div", "htd-library-sidebar");
@@ -132,14 +136,14 @@ export async function showDirectorLibrary(options = {}) {
   documentRef.body.append(overlay);
 
   const state = {
-    tab: TAB_TIMELINES,
+    tab: TAB_PROJECTS,
     search: "",
     sort: "newest",
     tag: "",
     filters: {},
     menuKey: "",
     renamingKey: "",
-    timelines: [],
+    projects: [],
     characters: [],
     selectedId: "",
   };
@@ -156,7 +160,7 @@ export async function showDirectorLibrary(options = {}) {
 
   const visibleItems = () => sortedLibraryItems(
     filterLibraryItems(
-      state.tab === TAB_TIMELINES ? state.timelines : state.characters,
+      state.tab === TAB_PROJECTS ? state.projects : state.characters,
       state.search,
       state.tag,
       state.filters,
@@ -171,10 +175,10 @@ export async function showDirectorLibrary(options = {}) {
     return items.find((item) => item.id === state.selectedId) ?? items[0] ?? null;
   };
 
-  const mergeTimelinePreview = (itemId, payload) => {
-    const index = state.timelines.findIndex((item) => item.id === itemId);
+  const mergeProjectPreview = (itemId, payload) => {
+    const index = state.projects.findIndex((item) => item.id === itemId);
     if (index < 0) return;
-    state.timelines[index] = applyTimelinePreviewPayload(state.timelines[index], payload);
+    state.projects[index] = applyProjectPreviewPayload(state.projects[index], payload);
   };
 
   const mergeCharacterPreview = (itemId, payload) => {
@@ -183,16 +187,16 @@ export async function showDirectorLibrary(options = {}) {
     state.characters[index] = applyCharacterPreviewPayload(state.characters[index], payload);
   };
 
-  const requestPrivateTimelinePreview = (item) => {
-    if (!shouldRequestPrivateTimelinePreview(item, privacyMode) || previewRequests.has(item.id)) return null;
-    const request = fetchTimelinePreview(item)
+  const requestPrivateProjectPreview = (item) => {
+    if (!shouldRequestPrivateProjectPreview(item, privacyMode) || previewRequests.has(item.id)) return null;
+    const request = fetchProjectPreview(item)
       .then((payload) => {
-        mergeTimelinePreview(item.id, payload);
+        mergeProjectPreview(item.id, payload);
         render();
       })
       .catch((error) => {
-        mergeTimelinePreview(item.id, { preview_assets: [], error });
-        console.warn("Helto Director private timeline preview failed", error);
+        mergeProjectPreview(item.id, { preview_assets: [], error });
+        console.warn("Helto Director private project preview failed", error);
       })
       .finally(() => {
         previewRequests.delete(item.id);
@@ -220,33 +224,33 @@ export async function showDirectorLibrary(options = {}) {
   };
 
   const requestPrivatePreview = (item) => {
-    requestPrivateTimelinePreview(item);
+    requestPrivateProjectPreview(item);
     requestPrivateCharacterPreview(item);
   };
 
   const render = () => {
     const currentSelected = selectedItem();
     requestPrivatePreview(currentSelected);
-    const linkedId = linkedTimelineLibraryItemId(timeline);
+    const linkedId = linkedProjectLibraryItemId(timeline);
     const saveTitle = state.tab === TAB_CHARACTERS
       ? "Add Current Character References to Library"
       : linkedId
-        ? "Save Current Timeline"
-        : "Add Current Timeline to Library";
+        ? "Update Project"
+        : "Save Project";
     saveButton.replaceChildren(iconSvg(documentRef, state.tab === TAB_CHARACTERS ? "character-plus" : linkedId ? "save" : "plus"));
     saveButton.title = saveTitle;
     saveButton.setAttribute("aria-label", saveButton.title);
-    timelinesTab.classList.toggle("is-active", state.tab === TAB_TIMELINES);
+    projectsTab.classList.toggle("is-active", state.tab === TAB_PROJECTS);
     charactersTab.classList.toggle("is-active", state.tab === TAB_CHARACTERS);
-    timelinesTab.setAttribute("aria-selected", state.tab === TAB_TIMELINES ? "true" : "false");
+    projectsTab.setAttribute("aria-selected", state.tab === TAB_PROJECTS ? "true" : "false");
     charactersTab.setAttribute("aria-selected", state.tab === TAB_CHARACTERS ? "true" : "false");
-    search.placeholder = state.tab === TAB_CHARACTERS ? "Search characters..." : "Search timelines...";
+    search.placeholder = state.tab === TAB_CHARACTERS ? "Search characters..." : "Search projects...";
     search.value = state.search;
     sort.value = state.sort;
     renderSidebar(documentRef, sidebar, {
       tab: state.tab,
-      items: state.tab === TAB_TIMELINES ? state.timelines : state.characters,
-      tags: visibleTags(state.tab === TAB_TIMELINES ? state.timelines : state.characters),
+      items: state.tab === TAB_PROJECTS ? state.projects : state.characters,
+      tags: visibleTags(state.tab === TAB_PROJECTS ? state.projects : state.characters),
       activeTag: state.tag,
       filters: state.filters,
       timeline,
@@ -269,7 +273,7 @@ export async function showDirectorLibrary(options = {}) {
       privacyMode,
       select: (item) => {
         state.selectedId = item.id;
-        requestPrivateTimelinePreview(item);
+        requestPrivateProjectPreview(item);
         render();
       },
       reveal: requestPrivatePreview,
@@ -308,8 +312,8 @@ export async function showDirectorLibrary(options = {}) {
     });
   };
 
-  timelinesTab.addEventListener("click", () => {
-    state.tab = TAB_TIMELINES;
+  projectsTab.addEventListener("click", () => {
+    state.tab = TAB_PROJECTS;
     state.tag = "";
     state.filters = {};
     state.selectedId = "";
@@ -342,7 +346,7 @@ export async function showDirectorLibrary(options = {}) {
 
   const refreshLibrary = async () => {
     const data = await fetchLibraryItems();
-    state.timelines = data.timelines.map(normalizeLibraryTimelineItem).filter(Boolean);
+    state.projects = data.projects.map(normalizeLibraryProjectItem).filter(Boolean);
     state.characters = data.characters.map(normalizeLibraryCharacterItem).filter(Boolean);
     if (state.selectedId && !visibleItems().some((item) => item.id === state.selectedId)) {
       state.selectedId = "";
@@ -383,17 +387,17 @@ export function clearDirectorLibraryDisplay(root) {
   return true;
 }
 
-export function normalizeLibraryTimelineItem(item) {
-  const hasSnapshot = Boolean(item?.timeline ?? item?.snapshot ?? item?.video_timeline ?? item?.payload);
-  const snapshot = hasSnapshot ? normalizeVideoTimeline(item?.timeline ?? item?.snapshot ?? item?.video_timeline ?? item?.payload) : null;
+export function normalizeLibraryProjectItem(item) {
+  const hasSnapshot = Boolean(item?.project ?? item?.snapshot ?? item?.video_timeline ?? item?.payload);
+  const snapshot = hasSnapshot ? normalizeVideoTimeline(item?.project ?? item?.snapshot ?? item?.video_timeline ?? item?.payload) : null;
   const summary = item?.summary && typeof item.summary === "object" && !Array.isArray(item.summary) ? item.summary : {};
   const isPrivate = Boolean(item?.is_private ?? item?.private);
   const previewAssets = isPrivate ? [] : normalizePreviewAssets(item?.preview_assets ?? item?.previewAssets);
   const previewAsset = snapshot ? firstTimelinePreviewAsset(snapshot) : previewAssets[0] ?? null;
   return {
     id: String(item?.id ?? item?.library_id ?? stableHash(JSON.stringify(snapshot))),
-    kind: TAB_TIMELINES,
-    title: String(item?.title ?? item?.name ?? snapshot?.project?.metadata?.title ?? "Untitled Timeline"),
+    kind: TAB_PROJECTS,
+    title: String(item?.title ?? item?.name ?? projectName(snapshot)),
     description: String(item?.description ?? summaryText(summary)),
     tags: normalizeTags(item?.tags ?? snapshot?.project?.metadata?.tags),
     updatedAt: timestampValue(item?.updated_at ?? item?.mtime ?? item?.created_at),
@@ -407,11 +411,12 @@ export function normalizeLibraryTimelineItem(item) {
   };
 }
 
-export function applyTimelinePreviewPayload(item, payload) {
+export function applyProjectPreviewPayload(item, payload) {
   const previewAssets = normalizePreviewAssets(payload?.preview_assets ?? payload?.previewAssets ?? payload?.item?.preview_assets ?? payload?.item?.previewAssets);
   const routeItem = payload?.item && typeof payload.item === "object" && !Array.isArray(payload.item) ? payload.item : null;
   return {
     ...item,
+    title: routeItem?.name ? String(routeItem.name) : item?.title,
     previewAssets,
     previewAsset: previewAssets[0] ?? item?.previewAsset ?? null,
     previewHydrated: true,
@@ -419,10 +424,10 @@ export function applyTimelinePreviewPayload(item, payload) {
   };
 }
 
-export function shouldRequestPrivateTimelinePreview(item, privacyMode) {
+export function shouldRequestPrivateProjectPreview(item, privacyMode) {
   return Boolean(
     privacyMode &&
-    item?.kind === TAB_TIMELINES &&
+    item?.kind === TAB_PROJECTS &&
     item?.isPrivate &&
     !item.previewHydrated,
   );
@@ -525,8 +530,8 @@ function renderGrid(documentRef, grid, options) {
     card.title = item.title;
     card.setAttribute("aria-label", item.title);
     card.append(selectionBadge(documentRef, selected?.id === item.id));
-    if (tab === TAB_TIMELINES) {
-      card.append(renderTimelineCardContent(documentRef, item, privacyMode, context));
+    if (tab === TAB_PROJECTS) {
+      card.append(renderProjectCardContent(documentRef, item, privacyMode, context));
     } else {
       card.append(renderCharacterCardContent(documentRef, item, timeline, privacyMode, context));
     }
@@ -561,14 +566,14 @@ function renderDetails(documentRef, details, item, tab, timeline, privacyMode, c
   if (tab === TAB_CHARACTERS) {
     renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context);
   } else {
-    renderTimelineDetails(documentRef, details, item, privacyMode);
+    renderProjectDetails(documentRef, details, item, privacyMode);
   }
 }
 
-function renderTimelineCardContent(documentRef, item, privacyMode, context) {
+function renderProjectCardContent(documentRef, item, privacyMode, context) {
   const fragment = documentRef.createDocumentFragment();
-  fragment.append(renderTimelineMediaStrip(documentRef, item, privacyMode));
-  const title = renderEditableLibraryTitle(documentRef, item, TAB_TIMELINES, context);
+  fragment.append(renderProjectMediaStrip(documentRef, item, privacyMode));
+  const title = renderEditableLibraryTitle(documentRef, item, TAB_PROJECTS, context);
   const meta = el(documentRef, "div", "htd-library-card-meta-line");
   meta.textContent = timelineMetaLine(item);
   const counts = el(documentRef, "div", "htd-library-card-counts");
@@ -576,9 +581,9 @@ function renderTimelineCardContent(documentRef, item, privacyMode, context) {
   const status = statusPill(documentRef, timelineStatus(item));
   const actionRow = el(documentRef, "div", "htd-library-card-actions");
   actionRow.append(
-    quickIconButton(documentRef, "load", "Load Saved Timeline", () => loadTimelineLibraryItem(item, context), "primary"),
-    quickIconButton(documentRef, "overwrite", "Overwrite Saved Timeline", async () => {
-      await updateCurrentTimelineLibraryItem({
+    quickIconButton(documentRef, "load", "Load Project", () => loadProjectLibraryItem(item, context), "primary"),
+    quickIconButton(documentRef, "overwrite", "Update Project", async () => {
+      await updateCurrentProjectLibraryItem({
         timeline: context.timeline,
         itemId: item.id,
         documentRef,
@@ -587,22 +592,22 @@ function renderTimelineCardContent(documentRef, item, privacyMode, context) {
       });
       await context.refresh?.();
     }, "positive"),
-    renderLibraryActionMenu(documentRef, `${TAB_TIMELINES}:${item.id}`, "More Timeline Actions", [
-      menuAction("edit", "Rename", () => beginLibraryRename(context, TAB_TIMELINES, item)),
-      menuAction("copy", "Duplicate Saved Timeline", async () => {
-        await duplicateLibraryItem(TAB_TIMELINES, item.id);
-        context.setStatus?.("Duplicated timeline.");
+    renderLibraryActionMenu(documentRef, `${TAB_PROJECTS}:${item.id}`, "More Project Actions", [
+      menuAction("edit", "Rename", () => beginLibraryRename(context, TAB_PROJECTS, item)),
+      menuAction("copy", "Duplicate Project", async () => {
+        await duplicateLibraryItem(TAB_PROJECTS, item.id);
+        context.setStatus?.("Duplicated project.");
         await context.refresh?.();
       }),
-      menuAction("download", "Export Timeline JSON", async () => {
-        const full = await fetchTimelineForUse(item);
+      menuAction("download", "Export Project JSON", async () => {
+        const full = await fetchProjectForUse(item);
         exportJson(documentRef, `${safeFilename(item.title)}.json`, full.timeline);
-        context.setStatus?.("Exported timeline JSON.");
+        context.setStatus?.("Exported project JSON.");
       }),
-      menuAction("delete", "Delete Saved Timeline", async () => {
+      menuAction("delete", "Delete Project", async () => {
         if (!confirmDelete(documentRef, `Delete "${item.title}"?`)) return;
-        await deleteLibraryItem(TAB_TIMELINES, item.id);
-        context.setStatus?.("Deleted timeline.");
+        await deleteLibraryItem(TAB_PROJECTS, item.id);
+        context.setStatus?.("Deleted project.");
         await context.refresh?.();
       }, "danger"),
     ], context),
@@ -670,7 +675,7 @@ function renderCharacterCardContent(documentRef, item, timeline, privacyMode, co
   return fragment;
 }
 
-function renderTimelineDetails(documentRef, details, item, privacyMode) {
+function renderProjectDetails(documentRef, details, item, privacyMode) {
   const name = el(documentRef, "div", "htd-library-detail-name");
   name.textContent = item.title;
   const meta = el(documentRef, "div", "htd-library-detail-meta");
@@ -718,7 +723,7 @@ function renderCharacterDetails(documentRef, details, item, timeline, privacyMod
   details.append(stack);
 }
 
-function renderTimelineMediaStrip(documentRef, item, privacyMode) {
+function renderProjectMediaStrip(documentRef, item, privacyMode) {
   const strip = el(documentRef, "div", "htd-library-media-strip");
   const assets = timelinePreviewAssets(item).slice(0, 3);
   if (!assets.length) {
@@ -963,7 +968,7 @@ function span(documentRef, text, className = "") {
 }
 
 function libraryFilters(tab, items, timeline) {
-  const definitions = tab === TAB_TIMELINES
+  const definitions = tab === TAB_PROJECTS
     ? [
         { key: "hasReferences", label: "Has References", icon: "image" },
         { key: "hasAudio", label: "Has Audio", icon: "music" },
@@ -983,7 +988,7 @@ function libraryFilters(tab, items, timeline) {
 }
 
 function filterMatches(item, key, tab, timeline) {
-  if (tab === TAB_TIMELINES) {
+  if (tab === TAB_PROJECTS) {
     if (key === "hasReferences") return timelineReferenceCount(item) > 0;
     if (key === "hasAudio") return timelineAudioCount(item) > 0;
     if (key === "missingMedia") return timelineHasMissingMedia(item);
@@ -1166,19 +1171,19 @@ function renderActions(documentRef, actions, context) {
   actions.replaceChildren();
 }
 
-async function loadTimelineLibraryItem(item, context) {
+async function loadProjectLibraryItem(item, context) {
   const confirmFn = context.documentRef.defaultView?.confirm ?? globalThis.confirm;
-  if (confirmFn && !confirmFn(TIMELINE_REPLACE_CONFIRMATION)) return;
-  const full = await fetchTimelineForUse(item);
-  replaceTimelineFromLibrary(context.callbacks, stampTimelineLibraryItemId(deepClone(full.timeline), item.id), full);
+  if (confirmFn && !confirmFn(PROJECT_REPLACE_CONFIRMATION)) return;
+  const full = await fetchProjectForUse(item);
+  replaceProjectFromLibrary(context.callbacks, stampProjectLibraryItemId(deepClone(full.timeline), item.id), full);
   context.close?.();
 }
 
-function replaceTimelineFromLibrary(options, nextTimeline, item) {
+function replaceProjectFromLibrary(options, nextTimeline, item) {
   if (typeof options.onReplaceTimeline === "function") {
     return options.onReplaceTimeline(nextTimeline, item);
   }
-  return options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace timeline from library") ?? null;
+  return options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace project from library") ?? null;
 }
 
 function addCharacterFromLibrary(options, item, libraryItem, insertTag) {
@@ -1215,7 +1220,7 @@ function renderPreview(documentRef, item, privacyMode, className) {
       openLibraryMediaPreview(documentRef, asset, item.title);
     });
   } else {
-    preview.append(iconSvg(documentRef, item.kind === TAB_TIMELINES ? "timeline" : "character"));
+    preview.append(iconSvg(documentRef, item.kind === TAB_PROJECTS ? "timeline" : "character"));
   }
   return preview;
 }
@@ -1225,11 +1230,11 @@ export function libraryPreviewAssetForItem(item) {
   return item.kind === TAB_CHARACTERS ? item.previewAsset ?? item.image ?? null : item.previewAsset ?? null;
 }
 
-export function linkedTimelineLibraryItemId(timeline) {
-  return String(timeline?.project?.metadata?.[TIMELINE_LIBRARY_ITEM_ID_KEY] ?? "").trim();
+export function linkedProjectLibraryItemId(timeline) {
+  return String(timeline?.project?.metadata?.[PROJECT_LIBRARY_ITEM_ID_KEY] ?? "").trim();
 }
 
-export function stampTimelineLibraryItemId(timeline, itemId) {
+export function stampProjectLibraryItemId(timeline, itemId) {
   if (!timeline || typeof timeline !== "object") return timeline;
   timeline.project ??= {};
   timeline.project.metadata = timeline.project.metadata && typeof timeline.project.metadata === "object" && !Array.isArray(timeline.project.metadata)
@@ -1237,21 +1242,67 @@ export function stampTimelineLibraryItemId(timeline, itemId) {
     : {};
   const id = String(itemId ?? "").trim();
   if (id) {
-    timeline.project.metadata[TIMELINE_LIBRARY_ITEM_ID_KEY] = id;
+    timeline.project.metadata[PROJECT_LIBRARY_ITEM_ID_KEY] = id;
   } else {
-    delete timeline.project.metadata[TIMELINE_LIBRARY_ITEM_ID_KEY];
+    delete timeline.project.metadata[PROJECT_LIBRARY_ITEM_ID_KEY];
   }
   return timeline;
 }
 
-export function clearTimelineLibraryItemId(timeline) {
-  return stampTimelineLibraryItemId(timeline, "");
+export function clearProjectLibraryItemId(timeline) {
+  return stampProjectLibraryItemId(timeline, "");
 }
 
-export function cloneTimelineForDirectorLibrary(timeline, itemId = "") {
+export function stampProjectName(timeline, name) {
+  if (!timeline || typeof timeline !== "object") return timeline;
+  timeline.project ??= {};
+  timeline.project.identity = timeline.project.identity && typeof timeline.project.identity === "object" && !Array.isArray(timeline.project.identity)
+    ? timeline.project.identity
+    : {};
+  timeline.project.identity.name = normalizedProjectName(name);
+  return timeline;
+}
+
+export function cloneProjectForDirectorLibrary(timeline, itemId = "", name = null, options = {}) {
   const clone = deepClone(timeline ?? {});
   pruneUnreferencedTimelineAssets(clone);
-  return stampTimelineLibraryItemId(clone, itemId);
+  if (options.forkProjectIdentity) forkProjectIdentity(clone, name);
+  if (name != null) stampProjectName(clone, name);
+  return stampProjectLibraryItemId(clone, itemId);
+}
+
+export function forkProjectIdentity(timeline, name = null) {
+  if (!timeline || typeof timeline !== "object") return timeline;
+  timeline.project ??= {};
+  const currentStorage = timeline.project.storage && typeof timeline.project.storage === "object" && !Array.isArray(timeline.project.storage)
+    ? timeline.project.storage
+    : {};
+  const identity = createDefaultProjectIdentity();
+  identity.name = normalizedProjectName(name ?? timeline.project.identity?.name);
+  timeline.project.identity = identity;
+  timeline.project.storage = {
+    ...currentStorage,
+    schema_version: PROJECT_STORAGE_SCHEMA_VERSION,
+    asset_root_directory: String(currentStorage.asset_root_directory ?? "").trim(),
+    project_directory_name: projectDirectoryName(identity.name, identity.project_id),
+  };
+  return timeline;
+}
+
+function normalizedProjectName(name) {
+  return String(name ?? "").trim() || "Untitled Project";
+}
+
+function projectName(timeline) {
+  return normalizedProjectName(timeline?.project?.identity?.name ?? timeline?.project?.metadata?.title ?? timeline?.project?.metadata?.name);
+}
+
+function promptForProjectName(documentRef, timeline) {
+  const promptFn = documentRef?.defaultView?.prompt ?? globalThis.prompt;
+  if (typeof promptFn !== "function") return projectName(timeline);
+  const value = promptFn("Project name", projectName(timeline));
+  if (value == null) return "";
+  return normalizedProjectName(value);
 }
 
 function pruneUnreferencedTimelineAssets(timeline) {
@@ -1277,17 +1328,30 @@ function collectTimelineAssetReferences(timeline) {
   for (const reference of getCharacterReferences(timeline)) {
     addAssetId(reference?.image);
   }
+  const shots = timeline?.sequence?.shots;
+  for (const shot of Array.isArray(shots) ? shots : []) {
+    if (!shot || typeof shot !== "object") continue;
+    addAssetId(shot.clip_instance);
+    const takes = shot.takes;
+    for (const take of Array.isArray(takes) ? takes : []) {
+      if (!take || typeof take !== "object") continue;
+      addAssetId(take);
+      addAssetId(take.clip_instance);
+    }
+  }
   return ids;
 }
 
-function stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId) {
+function stampCurrentProjectLibraryItemId(callbacks, timeline, itemId, name = null) {
   if (callbacks?.controller?.updateTimeline) {
     callbacks.controller.updateTimeline((current) => {
-      stampTimelineLibraryItemId(current, itemId);
-    }, "link library timeline", { rerender: false });
+      if (name != null) stampProjectName(current, name);
+      stampProjectLibraryItemId(current, itemId);
+    }, "link library project", { rerender: false });
     return;
   }
-  stampTimelineLibraryItemId(timeline, itemId);
+  if (name != null) stampProjectName(timeline, name);
+  stampProjectLibraryItemId(timeline, itemId);
 }
 
 function renderTags(documentRef, tags) {
@@ -1300,43 +1364,50 @@ function renderTags(documentRef, tags) {
   return row;
 }
 
-async function saveCurrentTimelineAsNew({ timeline, documentRef, setStatus, privacyMode, saveTimeline, callbacks }) {
+async function saveCurrentProjectAsNew({ timeline, documentRef, setStatus, privacyMode, saveProject, callbacks, forkProject = false }) {
   if (!timeline) return;
   try {
-    if (typeof saveTimeline === "function") {
-      await saveTimeline(cloneTimelineForDirectorLibrary(timeline, ""));
+    const name = promptForProjectName(documentRef, timeline);
+    if (!name) {
+      setStatus("Project save canceled.");
+      return;
+    }
+    if (typeof saveProject === "function") {
+      await saveProject(cloneProjectForDirectorLibrary(timeline, "", name, { forkProjectIdentity: Boolean(forkProject) }));
     } else {
-      const saveTimelinePayload = cloneTimelineForDirectorLibrary(timeline, "");
-      const data = await fetchLibraryJson(`${ROUTE_PREFIX}/timelines`, {
+      const projectPayload = cloneProjectForDirectorLibrary(timeline, "", name, { forkProjectIdentity: Boolean(forkProject) });
+      const data = await fetchLibraryJson(`${ROUTE_PREFIX}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: timelineName(saveTimelinePayload),
-          private: Boolean(privacyMode ?? saveTimelinePayload?.project?.privacy?.mode),
-          timeline: saveTimelinePayload,
+          name,
+          private: Boolean(privacyMode ?? projectPayload?.project?.privacy?.mode),
+          project: projectPayload,
         }),
       });
       const itemId = data?.item?.id;
-      if (itemId) stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId);
+      if (itemId) {
+        stampCurrentProjectLibraryItemId(callbacks, timeline, itemId, name);
+      }
     }
-    setStatus("Saved current timeline.");
+    setStatus("Saved project.");
   } catch (error) {
     const alertFn = documentRef.defaultView?.alert ?? globalThis.alert;
     alertFn?.(error.message);
-    setStatus(error.message || "Could not save current timeline.");
+    setStatus(error.message || "Could not save project.");
   }
 }
 
-async function updateCurrentTimelineLibraryItem({ timeline, itemId, documentRef, setStatus, callbacks }) {
+async function updateCurrentProjectLibraryItem({ timeline, itemId, documentRef, setStatus, callbacks }) {
   if (!timeline || !itemId) return;
   try {
-    await updateTimelineLibraryItem(itemId, timeline);
-    stampCurrentTimelineLibraryItemId(callbacks, timeline, itemId);
-    setStatus?.("Updated current library timeline.");
+    await updateProjectLibraryItem(itemId, timeline);
+    stampCurrentProjectLibraryItemId(callbacks, timeline, itemId);
+    setStatus?.("Updated project.");
   } catch (error) {
     const alertFn = documentRef.defaultView?.alert ?? globalThis.alert;
     alertFn?.(error.message);
-    setStatus?.(error.message || "Could not update timeline.");
+    setStatus?.(error.message || "Could not update project.");
   }
 }
 
@@ -1381,26 +1452,26 @@ async function copyTextWithPromptFallback(documentRef, value, label) {
   }
 }
 
-function showTimelineSaveChoicePopup(documentRef, anchor, actions) {
+function showProjectSaveChoicePopup(documentRef, anchor, actions) {
   documentRef.querySelector?.(".htd-library-save-popup")?.remove();
   const popup = el(documentRef, "div", "htd-library-save-popup");
   popup.setAttribute("role", "menu");
-  const update = textButton(documentRef, "", "Update Current Library Item", async (event) => {
+  const update = textButton(documentRef, "", "Update Current Project", async (event) => {
     event.stopPropagation();
     popup.remove();
     await actions.update?.();
   });
   update.classList.add("htd-library-menu-item", "is-positive");
   update.setAttribute("role", "menuitem");
-  update.append(iconSvg(documentRef, "save"), span(documentRef, "Update Current Library Item"));
-  const saveAsNew = textButton(documentRef, "", "Save As New", async (event) => {
+  update.append(iconSvg(documentRef, "save"), span(documentRef, "Update Current Project"));
+  const saveAsNew = textButton(documentRef, "", "Save Project As New", async (event) => {
     event.stopPropagation();
     popup.remove();
     await actions.saveAsNew?.();
   });
   saveAsNew.classList.add("htd-library-menu-item");
   saveAsNew.setAttribute("role", "menuitem");
-  saveAsNew.append(iconSvg(documentRef, "plus"), span(documentRef, "Save As New"));
+  saveAsNew.append(iconSvg(documentRef, "plus"), span(documentRef, "Save Project As New"));
   const cancel = textButton(documentRef, "", "Cancel", (event) => {
     event.stopPropagation();
     popup.remove();
@@ -1415,23 +1486,23 @@ function showTimelineSaveChoicePopup(documentRef, anchor, actions) {
 async function fetchLibraryItems() {
   const data = await fetchLibraryJson(`${ROUTE_PREFIX}/items`);
   return {
-    timelines: Array.isArray(data.timelines) ? data.timelines : [],
+    projects: Array.isArray(data.projects) ? data.projects : [],
     characters: Array.isArray(data.characters) ? data.characters : [],
   };
 }
 
-async function fetchTimelineForUse(item) {
+async function fetchProjectForUse(item) {
   if (item?.timeline) return item;
-  const data = await fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/use`, { method: "POST" });
-  const timeline = data.timeline ?? data.item?.timeline ?? data.item?.payload;
+  const data = await fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(item.id)}/use`, { method: "POST" });
+  const timeline = data.project ?? data.item?.project ?? data.item?.payload;
   return {
     ...item,
     timeline: normalizeVideoTimeline(timeline),
   };
 }
 
-async function fetchTimelinePreview(item) {
-  return fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
+async function fetchProjectPreview(item) {
+  return fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
 }
 
 async function fetchCharacterPreview(item) {
@@ -1448,26 +1519,26 @@ async function fetchCharacterForUse(item) {
   };
 }
 
-async function updateTimelineLibraryItem(itemId, timeline) {
-  const timelinePayload = cloneTimelineForDirectorLibrary(timeline, itemId);
-  return fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(itemId)}`, {
+async function updateProjectLibraryItem(itemId, timeline) {
+  const timelinePayload = cloneProjectForDirectorLibrary(timeline, itemId);
+  return fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(itemId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      name: timelineName(timelinePayload),
+      name: projectName(timelinePayload),
       private: Boolean(timelinePayload?.project?.privacy?.mode),
-      timeline: timelinePayload,
+      project: timelinePayload,
     }),
   });
 }
 
 async function duplicateLibraryItem(tab, itemId) {
-  const route = tab === TAB_CHARACTERS ? "characters" : "timelines";
+  const route = tab === TAB_CHARACTERS ? "characters" : "projects";
   return fetchLibraryJson(`${ROUTE_PREFIX}/${route}/${encodeURIComponent(itemId)}/duplicate`, { method: "POST" });
 }
 
 async function patchLibraryItem(tab, itemId, metadata) {
-  const route = tab === TAB_CHARACTERS ? "characters" : "timelines";
+  const route = tab === TAB_CHARACTERS ? "characters" : "projects";
   return fetchLibraryJson(`${ROUTE_PREFIX}/${route}/${encodeURIComponent(itemId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1476,7 +1547,7 @@ async function patchLibraryItem(tab, itemId, metadata) {
 }
 
 async function deleteLibraryItem(tab, itemId) {
-  const route = tab === TAB_CHARACTERS ? "characters" : "timelines";
+  const route = tab === TAB_CHARACTERS ? "characters" : "projects";
   return fetchLibraryJson(`${ROUTE_PREFIX}/${route}/${encodeURIComponent(itemId)}`, { method: "DELETE" });
 }
 
@@ -1493,7 +1564,7 @@ async function fetchLibraryJson(url, options) {
   return data;
 }
 
-function filterLibraryItems(items, query, tag, filters = {}, tab = TAB_TIMELINES, timeline = null) {
+function filterLibraryItems(items, query, tag, filters = {}, tab = TAB_PROJECTS, timeline = null) {
   const needle = String(query ?? "").trim().toLowerCase();
   return items.filter((item) => {
     const matchesTag = !tag || item.tags.includes(tag);
@@ -1616,11 +1687,6 @@ function formatSeconds(value) {
 function formatNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? String(Number(number.toFixed(2))) : "";
-}
-
-function timelineName(timeline) {
-  const metadata = timeline?.project?.metadata ?? {};
-  return String(metadata.title || metadata.name || "Untitled Timeline");
 }
 
 function confirmDelete(documentRef, message) {

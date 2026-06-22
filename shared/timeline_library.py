@@ -17,6 +17,7 @@ from .contracts.video_timeline import (
 )
 from .privacy import decrypt_state, encrypt_state
 from .timeline.normalize import normalize_video_timeline
+from .timeline.project_storage import generate_project_id, project_directory_name
 from .timeline.references import normalize_character_references
 from .timeline.validate import validate_video_timeline
 
@@ -24,12 +25,14 @@ from .timeline.validate import validate_video_timeline
 LIBRARY_FILE_NAME = "director_library.json"
 LIBRARY_SCHEMA_VERSION = "1.0"
 LIBRARY_VERSION = 1
-TIMELINE_KIND = "timeline"
+PROJECT_KIND = "project"
 CHARACTER_KIND = "character"
-TIMELINE_LIBRARY_ITEM_TYPE = "TIMELINE_LIBRARY_ITEM"
+PROJECT_LIBRARY_ITEM_TYPE = "PROJECT_LIBRARY_ITEM"
 CHARACTER_LIBRARY_ITEM_TYPE = "CHARACTER_LIBRARY_ITEM"
-ENTRY_KINDS = (TIMELINE_KIND, CHARACTER_KIND)
+ENTRY_KINDS = (PROJECT_KIND, CHARACTER_KIND)
 PREVIEW_ASSET_LIMIT = 3
+PRIVATE_PROJECT_NAME = "Private Project"
+DEFAULT_PROJECT_LIBRARY_NAME = "Untitled Project"
 
 _SENSITIVE_STRING_PREFIXES = ("data:", "blob:")
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
@@ -96,7 +99,7 @@ def list_items(base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]
     return {
         "schema_version": LIBRARY_SCHEMA_VERSION,
         "version": LIBRARY_VERSION,
-        "timelines": [_public_item(entry) for entry in library["timelines"]],
+        "projects": [_public_item(entry) for entry in library["projects"]],
         "characters": [_public_item(entry) for entry in library["characters"]],
     }
 
@@ -112,11 +115,13 @@ def create_item(
     metadata = metadata or {}
     now = _utc_now()
     normalized_payload = _normalize_payload(kind, payload)
+    name = _entry_name(kind, metadata.get("name"), None, normalized_payload, base_dir=base_dir)
+    _stamp_project_payload_name(kind, normalized_payload, name)
     summary = _summary_for(kind, normalized_payload)
     entry = _pack_entry(
         kind,
         item_id=str(metadata.get("id") or _new_id(kind)),
-        name=_coerce_text(metadata.get("name")) or _default_name(kind, normalized_payload),
+        name=name,
         description=_coerce_text(metadata.get("description")),
         tags=_coerce_tags(metadata.get("tags")),
         private=bool(metadata.get("private")),
@@ -149,11 +154,13 @@ def replace_item(
     entry = _find_entry(library, kind, item_id)
     created_at = str(entry.get("created_at") or _utc_now())
     normalized_payload = _normalize_payload(kind, payload)
+    name = _entry_name(kind, metadata.get("name"), entry, normalized_payload, base_dir=base_dir)
+    _stamp_project_payload_name(kind, normalized_payload, name)
     summary = _summary_for(kind, normalized_payload)
     replacement = _pack_entry(
         kind,
         item_id=item_id,
-        name=_coerce_text(metadata.get("name")) or str(entry.get("name") or _default_name(kind, normalized_payload)),
+        name=name,
         description=_coerce_text(metadata.get("description")),
         tags=_coerce_tags(metadata.get("tags", entry.get("tags", []))),
         private=bool(metadata.get("private", entry.get("private", False))),
@@ -182,11 +189,13 @@ def patch_item(
     entry = _find_entry(library, kind, item_id)
     current_payload = _unpack_payload(entry, base_dir=base_dir)
     next_payload = _normalize_payload(kind, payload if payload is not None else current_payload)
+    name = _entry_name(kind, metadata.get("name", _unpack_name(entry, base_dir=base_dir)), entry, next_payload, base_dir=base_dir)
+    _stamp_project_payload_name(kind, next_payload, name)
     summary = _summary_for(kind, next_payload)
     patched = _pack_entry(
         kind,
         item_id=item_id,
-        name=_coerce_text(metadata.get("name", entry.get("name"))) or _default_name(kind, next_payload),
+        name=name,
         description=_coerce_text(metadata.get("description", _unpack_description(entry, base_dir=base_dir))),
         tags=_coerce_tags(metadata.get("tags", entry.get("tags", []))),
         private=bool(metadata.get("private", entry.get("private", False))),
@@ -214,11 +223,14 @@ def duplicate_item(
     source = _find_entry(library, kind, item_id)
     payload = _unpack_payload(source, base_dir=base_dir)
     description = _coerce_text(metadata.get("description", _unpack_description(source, base_dir=base_dir)))
+    name = _coerce_text(metadata.get("name")) or f"{_unpack_name(source, base_dir=base_dir) or _default_name(kind, payload)} Copy"
+    _fork_project_payload_identity(kind, payload, name)
+    _stamp_project_payload_name(kind, payload, name)
     now = _utc_now()
     duplicate = _pack_entry(
         kind,
         item_id=str(metadata.get("id") or _new_id(kind)),
-        name=_coerce_text(metadata.get("name")) or f"{source.get('name') or _default_name(kind, payload)} Copy",
+        name=name,
         description=description,
         tags=_coerce_tags(metadata.get("tags", source.get("tags", []))),
         private=bool(metadata.get("private", source.get("private", False))),
@@ -267,15 +279,16 @@ def use_item(
     return _with_payload(entry, base_dir=base_dir)
 
 
-def preview_timeline_item(
+def preview_project_item(
     item_id: str,
     *,
     base_dir: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     library = load_library(base_dir)
-    entry = _find_entry(library, TIMELINE_KIND, item_id)
+    entry = _find_entry(library, PROJECT_KIND, item_id)
     payload = _unpack_payload(entry, base_dir=base_dir)
     item = _public_item(entry)
+    item["name"] = _unpack_name(entry, base_dir=base_dir)
     preview_assets = preview_assets_for_timeline(payload)
     if preview_assets:
         item["preview_assets"] = copy.deepcopy(preview_assets)
@@ -315,7 +328,7 @@ def _pack_entry(
         "id": str(item_id),
         "kind": kind,
         "type": _type_for_kind(kind),
-        "name": str(name),
+        "name": _public_entry_name(kind, name, private),
         "tags": tags,
         "private": bool(private),
         "is_private": bool(private),
@@ -324,10 +337,10 @@ def _pack_entry(
         "updated_at": updated_at,
     }
     if private:
-        entry["encrypted_payload"] = encrypt_state(
-            {"payload": payload, "description": description},
-            base_dir=base_dir,
-        )
+        state = {"payload": payload, "description": description}
+        if kind == PROJECT_KIND:
+            state["name"] = name
+        entry["encrypted_payload"] = encrypt_state(state, base_dir=base_dir)
     else:
         entry["description"] = description
         entry["payload"] = copy.deepcopy(payload)
@@ -339,8 +352,9 @@ def _with_payload(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] 
     payload = _unpack_payload(entry, base_dir=base_dir)
     item["description"] = _unpack_description(entry, base_dir=base_dir)
     item["payload"] = payload
-    if item["kind"] == TIMELINE_KIND:
-        item["timeline"] = payload
+    item["name"] = _unpack_name(entry, base_dir=base_dir)
+    if item["kind"] == PROJECT_KIND:
+        item["project"] = payload
     else:
         item["character"] = payload
     return item
@@ -361,7 +375,7 @@ def _public_item(entry: Mapping[str, Any]) -> dict[str, Any]:
         "updated_at": str(entry.get("updated_at") or ""),
         "last_used_at": entry.get("last_used_at") if entry.get("last_used_at") else None,
     }
-    if item["kind"] == TIMELINE_KIND and not item["is_private"]:
+    if item["kind"] == PROJECT_KIND and not item["is_private"]:
         preview_assets = preview_assets_for_timeline(entry.get("payload"))
         if preview_assets:
             item["preview_assets"] = preview_assets
@@ -384,9 +398,17 @@ def _unpack_description(entry: Mapping[str, Any], *, base_dir: str | os.PathLike
     return _coerce_text(entry.get("description"))
 
 
+def _unpack_name(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] | None = None) -> str:
+    kind = _normalize_kind(entry.get("kind"))
+    if kind == PROJECT_KIND and entry.get("private"):
+        state = decrypt_state(entry.get("encrypted_payload"), base_dir=base_dir)
+        return _coerce_text(state.get("name")) or _default_name(kind, _unpack_payload(entry, base_dir=base_dir))
+    return _coerce_text(entry.get("name"))
+
+
 def _normalize_payload(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     sanitized = _sanitize_embedded_media(copy.deepcopy(dict(payload)))
-    if kind == TIMELINE_KIND:
+    if kind == PROJECT_KIND:
         timeline = normalize_video_timeline(sanitized)
         _keep_referenced_assets_only(timeline)
         timeline["validation"] = validate_video_timeline(timeline)
@@ -480,6 +502,18 @@ def _timeline_media_references(timeline: Mapping[str, Any]) -> list[tuple[Any, s
     for reference in character_references if isinstance(character_references, list) else []:
         if isinstance(reference, Mapping):
             references.append((reference.get("image"), ASSET_TYPE_IMAGE))
+    sequence = _mapping_child(timeline, "sequence")
+    shots = sequence.get("shots")
+    for shot in shots if isinstance(shots, list) else []:
+        if not isinstance(shot, Mapping):
+            continue
+        references.append((shot.get("clip_instance"), ASSET_TYPE_VIDEO))
+        takes = shot.get("takes")
+        for take in takes if isinstance(takes, list) else []:
+            if not isinstance(take, Mapping):
+                continue
+            references.append((take, ASSET_TYPE_VIDEO))
+            references.append((take.get("clip_instance"), ASSET_TYPE_VIDEO))
     return references
 
 
@@ -634,7 +668,7 @@ def _is_suspicious_base64_field(key: str, value: Any) -> bool:
 
 
 def _summary_for(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    if kind == TIMELINE_KIND:
+    if kind == PROJECT_KIND:
         validation = payload.get("validation") if isinstance(payload.get("validation"), dict) else {}
         sections = payload.get("director_track", {}).get("sections", [])
         audio_tracks = payload.get("audio_tracks", [])
@@ -669,7 +703,7 @@ def _empty_library() -> dict[str, Any]:
     return {
         "schema_version": LIBRARY_SCHEMA_VERSION,
         "version": LIBRARY_VERSION,
-        "timelines": [],
+        "projects": [],
         "characters": [],
     }
 
@@ -678,10 +712,15 @@ def _normalize_library(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return _empty_library()
     library = _empty_library()
-    for key in ("timelines", "characters"):
+    project_items: list[dict[str, Any]] = []
+    for key in ("projects", "timelines"):
         items = payload.get(key)
         if isinstance(items, list):
-            library[key] = [dict(item) for item in items if isinstance(item, dict)]
+            project_items.extend(_normalized_entry(item, PROJECT_KIND) for item in items if isinstance(item, dict))
+    library["projects"] = project_items
+    character_items = payload.get("characters")
+    if isinstance(character_items, list):
+        library["characters"] = [_normalized_entry(item, CHARACTER_KIND) for item in character_items if isinstance(item, dict)]
     return library
 
 
@@ -712,7 +751,7 @@ def _collection(library: Mapping[str, Any], kind: str) -> list[dict[str, Any]]:
 
 
 def _collection_key(kind: str) -> str:
-    return "timelines" if kind == TIMELINE_KIND else "characters"
+    return "projects" if kind == PROJECT_KIND else "characters"
 
 
 def _find_entry(library: Mapping[str, Any], kind: str, item_id: str) -> dict[str, Any]:
@@ -733,21 +772,90 @@ def _replace_entry(library: dict[str, Any], kind: str, item_id: str, replacement
 
 def _normalize_kind(kind: Any) -> str:
     value = str(kind or "").strip().lower()
-    if value in {"timeline", "timelines", TIMELINE_LIBRARY_ITEM_TYPE.lower()}:
-        return TIMELINE_KIND
+    if value in {"project", "projects", PROJECT_LIBRARY_ITEM_TYPE.lower(), "timeline", "timelines", "timeline_library_item"}:
+        return PROJECT_KIND
     if value in {"character", "characters", CHARACTER_LIBRARY_ITEM_TYPE.lower()}:
         return CHARACTER_KIND
-    raise TimelineLibraryError("Library item kind must be 'timeline' or 'character'.")
+    raise TimelineLibraryError("Library item kind must be 'project' or 'character'.")
 
 
 def _type_for_kind(kind: Any) -> str:
-    return TIMELINE_LIBRARY_ITEM_TYPE if _normalize_kind(kind) == TIMELINE_KIND else CHARACTER_LIBRARY_ITEM_TYPE
+    return PROJECT_LIBRARY_ITEM_TYPE if _normalize_kind(kind) == PROJECT_KIND else CHARACTER_LIBRARY_ITEM_TYPE
 
 
 def _default_name(kind: str, payload: Mapping[str, Any]) -> str:
-    if kind == TIMELINE_KIND:
-        return "Untitled Timeline"
+    if kind == PROJECT_KIND:
+        project = payload.get("project") if isinstance(payload.get("project"), Mapping) else {}
+        identity = project.get("identity") if isinstance(project.get("identity"), Mapping) else {}
+        return _coerce_text(identity.get("name")) or DEFAULT_PROJECT_LIBRARY_NAME
     return str(payload.get("label") or "Untitled Character")
+
+
+def _entry_name(
+    kind: str,
+    requested_name: Any,
+    existing_entry: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+    *,
+    base_dir: str | os.PathLike[str] | None,
+) -> str:
+    requested = _coerce_text(requested_name)
+    if requested:
+        return requested
+    if existing_entry is not None:
+        existing = _unpack_name(existing_entry, base_dir=base_dir)
+        if existing and existing != PRIVATE_PROJECT_NAME:
+            return existing
+    return _default_name(kind, payload)
+
+
+def _stamp_project_payload_name(kind: str, payload: dict[str, Any], name: str) -> None:
+    if kind != PROJECT_KIND:
+        return
+    project = payload.setdefault("project", {})
+    if not isinstance(project, dict):
+        return
+    identity = project.setdefault("identity", {})
+    if not isinstance(identity, dict):
+        project["identity"] = identity = {}
+    identity["name"] = _coerce_text(name) or DEFAULT_PROJECT_LIBRARY_NAME
+
+
+def _fork_project_payload_identity(kind: str, payload: dict[str, Any], name: str) -> None:
+    if kind != PROJECT_KIND:
+        return
+    project = payload.setdefault("project", {})
+    if not isinstance(project, dict):
+        return
+    new_project_id = generate_project_id()
+    new_name = _coerce_text(name) or DEFAULT_PROJECT_LIBRARY_NAME
+    project["identity"] = {
+        "project_id": new_project_id,
+        "name": new_name,
+    }
+    storage = project.get("storage")
+    if not isinstance(storage, dict):
+        storage = {}
+    project["storage"] = {
+        **storage,
+        "asset_root_directory": _coerce_text(storage.get("asset_root_directory")),
+        "project_directory_name": project_directory_name(new_name, new_project_id),
+    }
+
+
+def _public_entry_name(kind: str, name: str, private: bool) -> str:
+    if kind == PROJECT_KIND and private:
+        return PRIVATE_PROJECT_NAME
+    return str(name)
+
+
+def _normalized_entry(entry: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    normalized = dict(entry)
+    normalized["kind"] = kind
+    normalized["type"] = _type_for_kind(kind)
+    if kind == PROJECT_KIND and normalized.get("private"):
+        normalized["name"] = PRIVATE_PROJECT_NAME
+    return normalized
 
 
 def _basename(path: Any) -> str:
@@ -794,8 +902,8 @@ __all__ = [
     "ENTRY_KINDS",
     "LIBRARY_FILE_NAME",
     "LIBRARY_SCHEMA_VERSION",
-    "TIMELINE_LIBRARY_ITEM_TYPE",
-    "TIMELINE_KIND",
+    "PROJECT_LIBRARY_ITEM_TYPE",
+    "PROJECT_KIND",
     "TimelineLibraryError",
     "config_dir",
     "create_item",
@@ -805,6 +913,7 @@ __all__ = [
     "list_items",
     "load_library",
     "patch_item",
+    "preview_project_item",
     "replace_item",
     "use_item",
 ]

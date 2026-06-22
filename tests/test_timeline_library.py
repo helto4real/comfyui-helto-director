@@ -15,63 +15,125 @@ from shared.timeline_library import (
     load_library,
     patch_item,
     preview_character_item,
-    preview_timeline_item,
+    preview_project_item,
     replace_item,
     use_item,
 )
 
 
 def test_library_defaults_without_config_file(tmp_path):
-    assert load_library(tmp_path) == {"schema_version": "1.0", "version": 1, "timelines": [], "characters": []}
-    assert list_items(tmp_path) == {"schema_version": "1.0", "version": 1, "timelines": [], "characters": []}
+    assert load_library(tmp_path) == {"schema_version": "1.0", "version": 1, "projects": [], "characters": []}
+    assert list_items(tmp_path) == {"schema_version": "1.0", "version": 1, "projects": [], "characters": []}
     assert not library_path(tmp_path).exists()
+
+
+def test_legacy_timelines_migrate_to_projects_on_load(tmp_path):
+    path = library_path(tmp_path)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "version": 1,
+                "timelines": [
+                    {
+                        "id": "legacy-timeline",
+                        "kind": "timeline",
+                        "type": "TIMELINE_LIBRARY_ITEM",
+                        "name": "Legacy Timeline",
+                        "private": False,
+                        "summary": {},
+                        "created_at": "2026-06-20T00:00:00Z",
+                        "updated_at": "2026-06-20T00:00:00Z",
+                        "payload": sample_timeline(prompt="legacy prompt"),
+                    }
+                ],
+                "characters": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    library = load_library(tmp_path)
+    assert "timelines" not in library
+    assert library["projects"][0]["kind"] == "project"
+    assert library["projects"][0]["type"] == "PROJECT_LIBRARY_ITEM"
+    assert list_items(tmp_path)["projects"][0]["name"] == "Legacy Timeline"
 
 
 def test_timeline_crud_duplicate_delete_and_use(tmp_path):
     created = create_item(
-        "timeline",
+        "project",
         sample_timeline(prompt="first prompt"),
         metadata={"id": "timeline-a", "name": "Timeline A", "description": "visible", "tags": ["demo"]},
         base_dir=tmp_path,
     )
 
     assert created["id"] == "timeline-a"
-    assert created["type"] == "TIMELINE_LIBRARY_ITEM"
+    assert created["type"] == "PROJECT_LIBRARY_ITEM"
     assert created["is_private"] is False
-    assert created["timeline"]["director_track"]["sections"][0]["prompt"] == "first prompt"
+    assert created["project"]["director_track"]["sections"][0]["prompt"] == "first prompt"
+    assert created["project"]["project"]["identity"]["name"] == "Timeline A"
     assert created["summary"]["section_count"] == 1
     assert created["summary"]["character_reference_count"] == 0
 
+    old_take_path = "/old/project/takes/shot_001/take.mp4"
+    replacement_timeline = sample_timeline(prompt="replacement prompt")
+    replacement_timeline["assets"].append(
+        {"asset_id": "accepted_take_asset", "type": "Video", "path": old_take_path, "name": "take.mp4"}
+    )
+    replacement_timeline["sequence"]["shots"].append(
+        {
+            "shot_id": "shot_001",
+            "type": "Generated",
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "section_ids": ["section-image"],
+            "takes": [{"take_id": "take_001", "status": "Accepted", "asset_id": "accepted_take_asset"}],
+            "accepted_take_id": "take_001",
+            "clip_instance": None,
+        }
+    )
+
     replaced = replace_item(
-        "timeline",
+        "project",
         "timeline-a",
-        sample_timeline(prompt="replacement prompt"),
+        replacement_timeline,
         metadata={"name": "Timeline B", "description": "updated"},
         base_dir=tmp_path,
     )
     assert replaced["name"] == "Timeline B"
-    assert replaced["timeline"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
+    assert replaced["project"]["project"]["identity"]["name"] == "Timeline B"
+    assert replaced["project"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
+    replaced_take_asset = next(asset for asset in replaced["project"]["assets"] if asset["asset_id"] == "accepted_take_asset")
+    assert replaced_take_asset["path"] == old_take_path
 
     patched = patch_item(
-        "timeline",
+        "project",
         "timeline-a",
         metadata={"description": "patched"},
         base_dir=tmp_path,
     )
     assert patched["description"] == "patched"
-    assert patched["timeline"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
+    assert patched["project"]["project"]["identity"]["name"] == "Timeline B"
+    assert patched["project"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
 
-    duplicate = duplicate_item("timeline", "timeline-a", metadata={"id": "timeline-b"}, base_dir=tmp_path)
+    duplicate = duplicate_item("project", "timeline-a", metadata={"id": "timeline-b"}, base_dir=tmp_path)
     assert duplicate["id"] == "timeline-b"
-    assert duplicate["timeline"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
+    assert duplicate["project"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
+    assert duplicate["project"]["project"]["identity"]["project_id"] != replaced["project"]["project"]["identity"]["project_id"]
+    assert duplicate["project"]["project"]["identity"]["name"] == "Timeline B Copy"
+    assert duplicate["project"]["project"]["storage"]["project_directory_name"] != replaced["project"]["project"]["storage"]["project_directory_name"]
+    assert duplicate["project"]["project"]["storage"]["asset_root_directory"] == replaced["project"]["project"]["storage"]["asset_root_directory"]
+    duplicate_take_asset = next(asset for asset in duplicate["project"]["assets"] if asset["asset_id"] == "accepted_take_asset")
+    assert duplicate_take_asset["path"] == old_take_path
 
-    used = use_item("timeline", "timeline-a", base_dir=tmp_path)
-    assert used["timeline"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
+    used = use_item("project", "timeline-a", base_dir=tmp_path)
+    assert used["project"]["director_track"]["sections"][0]["prompt"] == "replacement prompt"
     assert used["last_used_at"]
 
-    deleted = delete_item("timeline", "timeline-a", base_dir=tmp_path)
-    assert deleted == {"id": "timeline-a", "kind": "timeline"}
-    assert [item["id"] for item in list_items(tmp_path)["timelines"]] == ["timeline-b"]
+    deleted = delete_item("project", "timeline-a", base_dir=tmp_path)
+    assert deleted == {"id": "timeline-a", "kind": "project"}
+    assert [item["id"] for item in list_items(tmp_path)["projects"]] == ["timeline-b"]
 
 
 def test_character_crud_duplicate_delete_and_use(tmp_path):
@@ -110,15 +172,15 @@ def test_timeline_summary_and_validation_are_recomputed(tmp_path):
         "info": [],
     }
 
-    created = create_item("timeline", timeline, metadata={"id": "summary"}, base_dir=tmp_path)
+    created = create_item("project", timeline, metadata={"id": "summary"}, base_dir=tmp_path)
 
     assert created["summary"]["duration_seconds"] == pytest.approx(2.0)
     assert created["summary"]["frame_rate"] == pytest.approx(12.0)
     assert created["summary"]["section_count"] == 1
     assert created["summary"]["asset_count"] == 1
     assert created["summary"]["error_count"] == 0
-    assert created["timeline"]["validation"]["errors"] == []
-    assert created["timeline"]["validation"]["warnings"] == []
+    assert created["project"]["validation"]["errors"] == []
+    assert created["project"]["validation"]["warnings"] == []
 
 
 def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_items(tmp_path):
@@ -154,9 +216,9 @@ def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_i
         }
     )
 
-    create_item("timeline", timeline, metadata={"id": "preview-shell"}, base_dir=tmp_path)
+    create_item("project", timeline, metadata={"id": "preview-shell"}, base_dir=tmp_path)
 
-    item = list_items(tmp_path)["timelines"][0]
+    item = list_items(tmp_path)["projects"][0]
     assert item["preview_assets"] == [
         {
             "asset_id": "asset-image",
@@ -176,7 +238,7 @@ def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_i
         },
     ]
     assert "payload" not in item
-    assert "timeline" not in item
+    assert "project" not in item
     assert "thumbnail" not in json.dumps(item)
     assert "waveform" not in json.dumps(item)
     assert "preview_data" not in json.dumps(item)
@@ -185,7 +247,7 @@ def test_list_timeline_shell_includes_sanitized_preview_assets_for_non_private_i
 
 def test_replace_timeline_drops_orphan_assets_and_previews_direct_paths(tmp_path):
     create_item(
-        "timeline",
+        "project",
         sample_timeline(path="/media/old.png"),
         metadata={"id": "replace-orphan"},
         base_dir=tmp_path,
@@ -206,12 +268,12 @@ def test_replace_timeline_drops_orphan_assets_and_previews_direct_paths(tmp_path
         "name": "new-direct.png",
     }
 
-    replaced = replace_item("timeline", "replace-orphan", replacement, base_dir=tmp_path)
-    stored_payload = load_library(tmp_path)["timelines"][0]["payload"]
-    listed_item = list_items(tmp_path)["timelines"][0]
-    preview = preview_timeline_item("replace-orphan", base_dir=tmp_path)
+    replaced = replace_item("project", "replace-orphan", replacement, base_dir=tmp_path)
+    stored_payload = load_library(tmp_path)["projects"][0]["payload"]
+    listed_item = list_items(tmp_path)["projects"][0]
+    preview = preview_project_item("replace-orphan", base_dir=tmp_path)
 
-    assert replaced["timeline"]["assets"] == []
+    assert replaced["project"]["assets"] == []
     assert stored_payload["assets"] == []
     assert "old.png" not in json.dumps(stored_payload)
     assert "orphan.png" not in json.dumps(stored_payload)
@@ -243,11 +305,11 @@ def test_embedded_media_and_cache_payloads_are_sanitized_before_persistence(tmp_
         }
     )
 
-    created = create_item("timeline", timeline, metadata={"id": "sanitize"}, base_dir=tmp_path)
+    created = create_item("project", timeline, metadata={"id": "sanitize"}, base_dir=tmp_path)
     stored_text = library_path(tmp_path).read_text(encoding="utf-8")
 
-    asset = created["timeline"]["assets"][0]
-    section_image = created["timeline"]["director_track"]["sections"][0]["image"]
+    asset = created["project"]["assets"][0]
+    section_image = created["project"]["director_track"]["sections"][0]["image"]
     assert "thumbnail" not in asset
     assert "waveform" not in asset
     assert "image_data" not in asset
@@ -262,11 +324,11 @@ def test_private_timeline_encrypts_sensitive_payload_without_cleartext_leak(tmp_
     timeline = sample_timeline(prompt="secret prompt", path="/private/secret-reference.png")
 
     created = create_item(
-        "timeline",
+        "project",
         timeline,
         metadata={
             "id": "private-timeline",
-            "name": "Private",
+            "name": "Secret Project Name",
             "description": "secret description",
             "private": True,
         },
@@ -277,16 +339,21 @@ def test_private_timeline_encrypts_sensitive_payload_without_cleartext_leak(tmp_
     assert "secret prompt" not in stored_text
     assert "/private/secret-reference.png" not in stored_text
     assert "secret description" not in stored_text
+    assert "Secret Project Name" not in stored_text
     assert "encrypted_payload" in stored_text
-    assert "payload" not in load_library(tmp_path)["timelines"][0]
-    public_item = list_items(tmp_path)["timelines"][0]
+    assert "payload" not in load_library(tmp_path)["projects"][0]
+    public_item = list_items(tmp_path)["projects"][0]
+    assert public_item["name"] == "Private Project"
     assert "preview_assets" not in public_item
     assert "/private/secret-reference.png" not in json.dumps(public_item)
-    assert created["timeline"]["director_track"]["sections"][0]["prompt"] == "secret prompt"
+    assert "Secret Project Name" not in json.dumps(public_item)
+    assert created["name"] == "Secret Project Name"
+    assert created["project"]["director_track"]["sections"][0]["prompt"] == "secret prompt"
     assert created["description"] == "secret description"
 
-    used = use_item("timeline", "private-timeline", base_dir=tmp_path)
-    assert used["timeline"]["assets"][0]["path"] == "/private/secret-reference.png"
+    used = use_item("project", "private-timeline", base_dir=tmp_path)
+    assert used["name"] == "Secret Project Name"
+    assert used["project"]["assets"][0]["path"] == "/private/secret-reference.png"
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
@@ -302,16 +369,16 @@ def test_private_timeline_preview_decrypts_without_mutating_or_leaking_items_she
         }
     )
     create_item(
-        "timeline",
+        "project",
         timeline,
         metadata={"id": "private-preview", "name": "Private Preview", "private": True},
         base_dir=tmp_path,
     )
 
-    before = load_library(tmp_path)["timelines"][0]
-    public_item = list_items(tmp_path)["timelines"][0]
-    preview = preview_timeline_item("private-preview", base_dir=tmp_path)
-    after = load_library(tmp_path)["timelines"][0]
+    before = load_library(tmp_path)["projects"][0]
+    public_item = list_items(tmp_path)["projects"][0]
+    preview = preview_project_item("private-preview", base_dir=tmp_path)
+    after = load_library(tmp_path)["projects"][0]
 
     assert "preview_assets" not in public_item
     assert "/private/reveal-reference.png" not in json.dumps(public_item)
@@ -319,6 +386,7 @@ def test_private_timeline_preview_decrypts_without_mutating_or_leaking_items_she
     assert "last_used_at" not in after
     assert before == after
     assert preview["item"]["is_private"] is True
+    assert preview["item"]["name"] == "Private Preview"
     assert preview["item"]["preview_assets"] == preview["preview_assets"]
     assert preview["preview_assets"] == [
         {
@@ -404,8 +472,8 @@ def test_route_prefix_and_registration_shape():
     assert "register_timeline_library_routes()" in source
     assert '"register_timeline_library_routes"' in source
     route_source = Path(timeline_library_routes.__file__).read_text(encoding="utf-8")
-    assert '/timelines" + "/{item_id}/preview"' in route_source
-    assert "preview_timeline_item(request.match_info" in route_source
+    assert '/projects" + "/{item_id}/preview"' in route_source
+    assert "preview_project_item(request.match_info" in route_source
     assert '/characters" + "/{item_id}/preview"' in route_source
     assert "preview_character_item(request.match_info" in route_source
 

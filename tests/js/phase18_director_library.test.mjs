@@ -20,20 +20,21 @@ import {
 } from "../../web/timeline/references.js";
 import {
   ROUTE_PREFIX,
-  TIMELINE_REPLACE_CONFIRMATION,
+  PROJECT_REPLACE_CONFIRMATION,
   applyCharacterPreviewPayload,
-  applyTimelinePreviewPayload,
+  applyProjectPreviewPayload,
   clearDirectorLibraryDisplay,
-  clearTimelineLibraryItemId,
-  cloneTimelineForDirectorLibrary,
+  clearProjectLibraryItemId,
+  cloneProjectForDirectorLibrary,
+  forkProjectIdentity,
   libraryPreviewAssetForItem,
   libraryDialogClassName,
-  linkedTimelineLibraryItemId,
+  linkedProjectLibraryItemId,
   normalizeLibraryCharacterItem,
-  normalizeLibraryTimelineItem,
+  normalizeLibraryProjectItem,
   shouldRequestPrivateCharacterPreview,
-  shouldRequestPrivateTimelinePreview,
-  stampTimelineLibraryItemId,
+  shouldRequestPrivateProjectPreview,
+  stampProjectLibraryItemId,
 } from "../../web/timeline/library.js";
 import { thumbnailUrl } from "../../web/timeline/media_cache.js";
 
@@ -178,7 +179,7 @@ function testCharacterLibraryHelpersAddReplaceAndDetectLoaded() {
 
 function testLibraryItemNormalizationAndPrivacyHelpers() {
   const timeline = createDefaultVideoTimeline();
-  timeline.project.metadata.title = "Scene One";
+  timeline.project.identity.name = "Scene One";
   timeline.project.metadata.tags = ["drama"];
   const previewSection = addSection(timeline, "Image", 0);
   previewSection.image = { asset_id: "image_001" };
@@ -190,9 +191,9 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
     name: "scene.png",
   });
 
-  const item = normalizeLibraryTimelineItem({
+  const item = normalizeLibraryProjectItem({
     id: "timeline_1",
-    timeline,
+    project: timeline,
     updated_at: "2026-06-20T10:00:00Z",
   });
   const character = normalizeLibraryCharacterItem(characterItem());
@@ -200,9 +201,9 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   assert.equal(item.title, "Scene One");
   assert.equal(item.tags[0], "drama");
   assert.equal(item.previewAsset.path, "/tmp/scene.png");
-  const shellItem = normalizeLibraryTimelineItem({
+  const shellItem = normalizeLibraryProjectItem({
     id: "timeline_shell",
-    name: "Shell Timeline",
+    name: "Shell Project",
     preview_assets: [
       {
         asset_id: "shell_image",
@@ -225,7 +226,7 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   assert.equal(shellItem.previewAsset.path, "/tmp/shell.png");
   assert.equal(shellItem.previewAssets.length, 1);
   assert.equal("thumbnail" in shellItem.previewAsset, false);
-  const privateShellItem = normalizeLibraryTimelineItem({
+  const privateShellItem = normalizeLibraryProjectItem({
     id: "private_shell",
     name: "Private Shell",
     is_private: true,
@@ -233,9 +234,9 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   });
   assert.equal(privateShellItem.previewAsset, null);
   assert.equal(privateShellItem.previewAssets.length, 0);
-  assert.equal(shouldRequestPrivateTimelinePreview(privateShellItem, true), true);
-  assert.equal(shouldRequestPrivateTimelinePreview(privateShellItem, false), false);
-  const hydratedPrivateShellItem = applyTimelinePreviewPayload(privateShellItem, {
+  assert.equal(shouldRequestPrivateProjectPreview(privateShellItem, true), true);
+  assert.equal(shouldRequestPrivateProjectPreview(privateShellItem, false), false);
+  const hydratedPrivateShellItem = applyProjectPreviewPayload(privateShellItem, {
     item: {
       id: "private_shell",
       is_private: true,
@@ -256,7 +257,7 @@ function testLibraryItemNormalizationAndPrivacyHelpers() {
   assert.equal(hydratedPrivateShellItem.previewAssets.length, 1);
   assert.equal(hydratedPrivateShellItem.previewHydrated, true);
   assert.equal("thumbnail" in hydratedPrivateShellItem.previewAsset, false);
-  assert.equal(shouldRequestPrivateTimelinePreview(hydratedPrivateShellItem, true), false);
+  assert.equal(shouldRequestPrivateProjectPreview(hydratedPrivateShellItem, true), false);
   assert.equal(character.title, "Hero");
   assert.equal(character.image.path, "/library/hero.png");
   assert.equal(character.previewAsset.path, "/library/hero.png");
@@ -355,12 +356,12 @@ function testPrivateCharacterPreviewHydratesImageShell() {
 
 function testTimelineLibraryIdentityHelpers() {
   const timeline = createDefaultVideoTimeline();
-  assert.equal(linkedTimelineLibraryItemId(timeline), "");
-  assert.equal(stampTimelineLibraryItemId(timeline, "timeline_abc"), timeline);
-  assert.equal(linkedTimelineLibraryItemId(timeline), "timeline_abc");
+  assert.equal(linkedProjectLibraryItemId(timeline), "");
+  assert.equal(stampProjectLibraryItemId(timeline, "timeline_abc"), timeline);
+  assert.equal(linkedProjectLibraryItemId(timeline), "timeline_abc");
   assert.equal(timeline.project.metadata.library_item_id, "timeline_abc");
-  clearTimelineLibraryItemId(timeline);
-  assert.equal(linkedTimelineLibraryItemId(timeline), "");
+  clearProjectLibraryItemId(timeline);
+  assert.equal(linkedProjectLibraryItemId(timeline), "");
   assert.equal("library_item_id" in timeline.project.metadata, false);
 }
 
@@ -388,21 +389,53 @@ function testTimelineLibrarySaveClonePrunesUnreferencedAssets() {
     { asset_id: "stale_section_image_field", type: "Image", path: "/media/stale.png" },
     { asset_id: "orphan_image", type: "Image", path: "/media/orphan.png" },
   );
+  const oldTakePath = "/old/project/takes/shot_001/take.mp4";
+  timeline.assets.push({ asset_id: "accepted_take_asset", type: "Video", path: oldTakePath });
+  timeline.sequence.shots.push({
+    shot_id: "shot_001",
+    type: "Generated",
+    takes: [{ take_id: "take_001", status: "Accepted", asset_id: "accepted_take_asset" }],
+    accepted_take_id: "take_001",
+    clip_instance: null,
+  });
 
-  const updatePayload = cloneTimelineForDirectorLibrary(timeline, "timeline_live");
+  const updatePayload = cloneProjectForDirectorLibrary(timeline, "timeline_live");
   assert.notEqual(updatePayload, timeline);
   assert.deepEqual(
     updatePayload.assets.map((asset) => asset.asset_id),
-    ["section_image", "section_video", "clip_audio", "reference_image"],
+    ["section_image", "section_video", "clip_audio", "reference_image", "accepted_take_asset"],
   );
+  assert.equal(updatePayload.assets.find((asset) => asset.asset_id === "accepted_take_asset")?.path, oldTakePath);
   assert.equal(updatePayload.project.metadata.library_item_id, "timeline_live");
-  assert.equal(timeline.assets.length, 7);
+  assert.equal(timeline.assets.length, 8);
   assert.equal("library_item_id" in timeline.project.metadata, false);
 
-  stampTimelineLibraryItemId(timeline, "existing_library_item");
-  const saveAsNewPayload = cloneTimelineForDirectorLibrary(timeline, "");
+  stampProjectLibraryItemId(timeline, "existing_library_item");
+  const saveAsNewPayload = cloneProjectForDirectorLibrary(timeline, "");
   assert.equal("library_item_id" in saveAsNewPayload.project.metadata, false);
   assert.equal(timeline.project.metadata.library_item_id, "existing_library_item");
+
+  const stableDirectoryName = timeline.project.storage.project_directory_name;
+  const renamedPayload = cloneProjectForDirectorLibrary(timeline, "", "Renamed Project");
+  assert.equal(renamedPayload.project.identity.name, "Renamed Project");
+  assert.equal(renamedPayload.project.storage.project_directory_name, stableDirectoryName);
+  assert.equal(timeline.project.identity.name, "Untitled Project");
+
+  const oldProjectId = timeline.project.identity.project_id;
+  const forkedPayload = cloneProjectForDirectorLibrary(timeline, "", "Forked Project", { forkProjectIdentity: true });
+  assert.notEqual(forkedPayload.project.identity.project_id, oldProjectId);
+  assert.equal(forkedPayload.project.identity.name, "Forked Project");
+  assert.notEqual(forkedPayload.project.storage.project_directory_name, stableDirectoryName);
+  assert.ok(forkedPayload.project.storage.project_directory_name.includes(forkedPayload.project.identity.project_id));
+  assert.equal(forkedPayload.assets.find((asset) => asset.asset_id === "accepted_take_asset")?.path, oldTakePath);
+  assert.equal(timeline.project.identity.project_id, oldProjectId);
+
+  const forkTarget = createDefaultVideoTimeline();
+  const forkTargetId = forkTarget.project.identity.project_id;
+  const forkedTarget = forkProjectIdentity(forkTarget, "Manual Fork");
+  assert.equal(forkedTarget, forkTarget);
+  assert.notEqual(forkTarget.project.identity.project_id, forkTargetId);
+  assert.equal(forkTarget.project.identity.name, "Manual Fork");
 }
 
 function testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia() {
@@ -414,7 +447,7 @@ function testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia() {
     { asset_id: "visible_image", type: "Image", path: "/media/visible.png", name: "visible.png" },
   );
 
-  const item = normalizeLibraryTimelineItem({ id: "timeline_preview", timeline });
+  const item = normalizeLibraryProjectItem({ id: "timeline_preview", project: timeline });
   assert.equal(item.previewAsset.path, "/media/visible.png");
   assert.equal(libraryPreviewAssetForItem(item).path, "/media/visible.png");
 
@@ -422,7 +455,7 @@ function testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia() {
   const directSection = addSection(directTimeline, "Image", 0);
   directSection.image = { file_path: "/media/direct.png", name: "direct.png" };
   directTimeline.assets.push({ asset_id: "orphan_image", type: "Image", path: "/media/orphan.png" });
-  const directItem = normalizeLibraryTimelineItem({ id: "timeline_direct_preview", timeline: directTimeline });
+  const directItem = normalizeLibraryProjectItem({ id: "timeline_direct_preview", project: directTimeline });
   assert.equal(directItem.previewAsset.path, "/media/direct.png");
 }
 
@@ -433,34 +466,34 @@ function testRendererAndLibraryContractStrings() {
 
   assert.equal(ROUTE_PREFIX, "/helto_director/library");
   assert.equal(
-    TIMELINE_REPLACE_CONFIRMATION,
-    "Replace current timeline?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.",
+    PROJECT_REPLACE_CONFIRMATION,
+    "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.",
   );
   assert.equal(rendererSource.includes('showDirectorLibrary,'), true);
-  assert.equal(rendererSource.includes('cloneTimelineForDirectorLibrary,'), true);
+  assert.equal(rendererSource.includes('cloneProjectForDirectorLibrary,'), true);
   assert.equal(rendererSource.includes('iconButton("library", "Director Library", () => this.openDirectorLibrary())'), true);
   const directorLibraryButtonIndex = rendererSource.indexOf('iconButton("library", "Director Library", () => this.openDirectorLibrary())');
-  const timelineSaveButtonIndex = rendererSource.indexOf("timelineLibraryButton,", directorLibraryButtonIndex);
+  const timelineSaveButtonIndex = rendererSource.indexOf("projectLibraryButton,", directorLibraryButtonIndex);
   assert.notEqual(directorLibraryButtonIndex, -1);
   assert.notEqual(timelineSaveButtonIndex, -1);
   assert.equal(rendererSource.includes("controller: this.controller,"), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/items`)'), true);
-  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/timelines/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
+  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
   assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
   assert.equal(librarySource.includes("card.addEventListener(\"pointerenter\", revealPreview);"), true);
-  assert.equal(librarySource.includes('options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace timeline from library")'), true);
+  assert.equal(librarySource.includes('options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace project from library")'), true);
   assert.equal(librarySource.includes("addCharacterLibraryItemToTimeline(timeline, item"), true);
   assert.equal(librarySource.includes("replaceTimelineCharacterReferenceFromLibraryItem(timeline, referenceId, item)"), true);
   assert.equal(librarySource.includes('overlay.className = libraryDialogClassName(privacyMode);'), true);
-  assert.equal(librarySource.includes('const saveButton = iconButton(documentRef, "plus", "Add Current Timeline to Library"'), true);
-  assert.equal(librarySource.includes('showTimelineSaveChoicePopup(documentRef, saveButton'), true);
-  assert.equal(librarySource.includes('stampTimelineLibraryItemId(deepClone(full.timeline), item.id)'), true);
-  assert.equal(librarySource.includes('updateCurrentTimelineLibraryItem({'), true);
-  assert.equal(librarySource.includes('renderEditableLibraryTitle(documentRef, item, TAB_TIMELINES, context)'), true);
-  assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_TIMELINES}:${item.id}`, "More Timeline Actions"'), true);
+  assert.equal(librarySource.includes('const saveButton = iconButton(documentRef, "plus", "Save Project"'), true);
+  assert.equal(librarySource.includes('showProjectSaveChoicePopup(documentRef, saveButton'), true);
+  assert.equal(librarySource.includes('stampProjectLibraryItemId(deepClone(full.timeline), item.id)'), true);
+  assert.equal(librarySource.includes('updateCurrentProjectLibraryItem({'), true);
+  assert.equal(librarySource.includes('renderEditableLibraryTitle(documentRef, item, TAB_PROJECTS, context)'), true);
+  assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_PROJECTS}:${item.id}`, "More Project Actions"'), true);
   assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_CHARACTERS}:${item.id}`, "More Character Actions"'), true);
   assert.equal(librarySource.includes('panel.append(header, controls, tabs, body, status, actions);'), true);
-  assert.equal(librarySource.includes('renderTimelineMediaStrip(documentRef, item, privacyMode)'), true);
+  assert.equal(librarySource.includes('renderProjectMediaStrip(documentRef, item, privacyMode)'), true);
   assert.equal(librarySource.includes('renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context)'), true);
   assert.equal(librarySource.includes('import { showMediaPreview } from "./media_preview.js";'), true);
   assert.equal(librarySource.includes("function openLibraryMediaPreview(documentRef, asset, caption)"), true);
@@ -473,30 +506,30 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-preview img"), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-strip-thumb img"), true);
   assert.equal(rendererSource.includes('const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";'), true);
-  assert.equal(rendererSource.includes("const timelineLibraryItemId = timelineLibraryItemIdFor(this.controller.timeline);"), true);
-  assert.equal(rendererSource.includes('const timelineLibraryButton = iconButton('), true);
-  assert.equal(rendererSource.includes('timelineLibraryItemId ? "library-update" : "library-add"'), true);
-  assert.equal(rendererSource.includes('timelineLibraryItemId ? "Update Current Timeline in Library" : "Add Current Timeline to Library"'), true);
-  assert.equal(rendererSource.includes("async () => this.saveCurrentTimelineToLibrary(timelineLibraryButton)"), true);
-  assert.equal(rendererSource.includes('timelineLibraryButton.classList.add("htd-timeline-library-save-button");'), true);
-  assert.equal(rendererSource.includes('timelineLibraryButton.classList.toggle("is-active", Boolean(timelineLibraryItemId));'), true);
-  assert.equal(rendererSource.includes('async saveCurrentTimelineToLibrary(control = null)'), true);
-  assert.equal(rendererSource.includes('const itemId = timelineLibraryItemIdFor(this.controller.timeline);'), true);
-  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines/${encodeURIComponent(itemId)}`'), true);
+  assert.equal(rendererSource.includes("const projectLibraryItemId = projectLibraryItemIdFor(this.controller.timeline);"), true);
+  assert.equal(rendererSource.includes('const projectLibraryButton = iconButton('), true);
+  assert.equal(rendererSource.includes('projectLibraryItemId ? "library-update" : "library-add"'), true);
+  assert.equal(rendererSource.includes('projectLibraryItemId ? "Update Project" : "Save Project"'), true);
+  assert.equal(rendererSource.includes("async () => this.saveCurrentProjectToLibrary(projectLibraryButton)"), true);
+  assert.equal(rendererSource.includes('projectLibraryButton.classList.add("htd-project-library-save-button");'), true);
+  assert.equal(rendererSource.includes('projectLibraryButton.classList.toggle("is-active", Boolean(projectLibraryItemId));'), true);
+  assert.equal(rendererSource.includes('async saveCurrentProjectToLibrary(control = null)'), true);
+  assert.equal(rendererSource.includes('const itemId = projectLibraryItemIdFor(this.controller.timeline);'), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`'), true);
   assert.equal(rendererSource.includes('method: "PUT"'), true);
-  assert.equal(rendererSource.includes("body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, itemId))"), true);
-  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines`'), true);
+  assert.equal(rendererSource.includes("body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId))"), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects`'), true);
   assert.equal(rendererSource.includes('method: "POST"'), true);
-  assert.equal(rendererSource.includes('body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, ""))'), true);
+  assert.equal(rendererSource.includes('body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name))'), true);
   assert.equal(rendererSource.includes('const nextItemId = String(data?.item?.id ?? "").trim();'), true);
-  assert.equal(rendererSource.includes("this.stampCurrentTimelineLibraryItemId(nextItemId);"), true);
-  assert.equal(rendererSource.includes("stampTimelineLibraryItemId(timeline, itemId)"), true);
+  assert.equal(rendererSource.includes("this.stampCurrentProjectLibraryItemId(nextItemId);"), true);
+  assert.equal(rendererSource.includes("stampProjectLibraryItemId(timeline, itemId)"), true);
   assert.equal(rendererSource.includes('iconButton("library-add", "Add Reference to Director Library"'), true);
   assert.equal(rendererSource.includes('iconButton("library-update", "Update Director Library Character"'), true);
   assert.equal(rendererSource.includes("stampReferenceLibraryItemId(timeline, reference, itemId)"), true);
   assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`'), true);
   assert.equal(librarySource.includes("function collectTimelineAssetReferences(timeline)"), true);
-  assert.equal(librarySource.includes("cloneTimelineForDirectorLibrary(timeline, itemId)"), true);
+  assert.equal(librarySource.includes("cloneProjectForDirectorLibrary(timeline, itemId)"), true);
 }
 
 await testLibraryTimelineReplacementSyncsWidgetsAndUndo();

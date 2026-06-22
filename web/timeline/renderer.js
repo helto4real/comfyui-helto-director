@@ -34,7 +34,7 @@ import {
   replacePickedSectionMedia,
 } from "./media_actions.js";
 import {
-  cloneTimelineForDirectorLibrary,
+  cloneProjectForDirectorLibrary,
   showDirectorLibrary,
 } from "./library.js";
 import { showMediaPicker } from "./media_picker.js";
@@ -308,11 +308,11 @@ export class TimelineRenderer {
     const selectedIds = getSelectedItemIds(this.controller.timeline);
     const selectedSection = selectedIds.some((itemId) => findSection(this.controller.timeline, itemId));
     const deleteButton = iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete"));
-    const timelineLibraryItemId = timelineLibraryItemIdFor(this.controller.timeline);
-    const timelineLibraryButton = iconButton(
-      timelineLibraryItemId ? "library-update" : "library-add",
-      timelineLibraryItemId ? "Update Current Timeline in Library" : "Add Current Timeline to Library",
-      async () => this.saveCurrentTimelineToLibrary(timelineLibraryButton),
+    const projectLibraryItemId = projectLibraryItemIdFor(this.controller.timeline);
+    const projectLibraryButton = iconButton(
+      projectLibraryItemId ? "library-update" : "library-add",
+      projectLibraryItemId ? "Update Project" : "Save Project",
+      async () => this.saveCurrentProjectToLibrary(projectLibraryButton),
     );
     const repairButtons = hasOverflow
       ? [
@@ -327,8 +327,8 @@ export class TimelineRenderer {
     promptOptimizerButton.classList.add("htd-prompt-optimizer-button");
     clearTimelineButton.classList.add("htd-clear-timeline-button", "is-danger");
     deleteButton.classList.toggle("is-danger", Boolean(selectedSection));
-    timelineLibraryButton.classList.add("htd-timeline-library-save-button");
-    timelineLibraryButton.classList.toggle("is-active", Boolean(timelineLibraryItemId));
+    projectLibraryButton.classList.add("htd-project-library-save-button");
+    projectLibraryButton.classList.toggle("is-active", Boolean(projectLibraryItemId));
     referenceManagerButton.classList.add("htd-reference-manager-button");
     referencePresentButton.classList.add("htd-reference-present-button");
     referencePresentButton.classList.toggle("is-active", referenceCount > 0 && referencesEnabled);
@@ -368,7 +368,7 @@ export class TimelineRenderer {
       }),
       toolbarSpacer(),
       iconButton("library", "Director Library", () => this.openDirectorLibrary()),
-      timelineLibraryButton,
+      projectLibraryButton,
       clearTimelineButton,
       referenceManagerButton,
       referencePresentButton,
@@ -1410,8 +1410,6 @@ export class TimelineRenderer {
 
     const body = el("div", "htd-settings-body");
     body.append(
-      this.renderProjectNameSetting(timeline),
-      this.renderSettingReadonly("Project ID", timeline.project.identity?.project_id ?? ""),
       this.renderProjectAssetRootSetting(timeline),
       this.renderSettingReadonly("Project Folder", projectFolderDisplay(timeline, this.isPrivacyRevealed(timeline))),
       this.renderSettingSelect("Default Crop Mode", ["project", "default_crop_mode"], CROP_MODES),
@@ -1631,43 +1629,46 @@ export class TimelineRenderer {
     alertFn?.(error?.message || "Could not update Director Library character.");
   }
 
-  async saveCurrentTimelineToLibrary(control = null) {
-    this.controller.flushDebouncedCommit("timeline library save", { rerender: false });
-    const itemId = timelineLibraryItemIdFor(this.controller.timeline);
+  async saveCurrentProjectToLibrary(control = null) {
+    this.controller.flushDebouncedCommit("project library save", { rerender: false });
+    const itemId = projectLibraryItemIdFor(this.controller.timeline);
     await withDisabledControl(control, async () => {
       try {
         if (itemId) {
-          await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines/${encodeURIComponent(itemId)}`, {
+          await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, itemId)),
+            body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId)),
           });
-          this.stampCurrentTimelineLibraryItemId(itemId, { rerender: false });
+          this.stampCurrentProjectLibraryItemId(itemId, { rerender: false });
           return;
         }
-        const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/timelines`, {
+        const name = promptForProjectName(this.container.ownerDocument, this.controller.timeline);
+        if (!name) return;
+        const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(timelineLibraryPayload(this.controller.timeline, "")),
+          body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name)),
         });
         const nextItemId = String(data?.item?.id ?? "").trim();
-        if (!nextItemId) throw new Error("Director Library did not return a timeline id.");
-        this.stampCurrentTimelineLibraryItemId(nextItemId);
+        if (!nextItemId) throw new Error("Director Library did not return a project id.");
+        stampProjectName(this.controller.timeline, name);
+        this.stampCurrentProjectLibraryItemId(nextItemId);
       } catch (error) {
-        this.alertTimelineLibraryError(error);
+        this.alertProjectLibraryError(error);
       }
     });
   }
 
-  stampCurrentTimelineLibraryItemId(itemId, options = {}) {
+  stampCurrentProjectLibraryItemId(itemId, options = {}) {
     this.commitMutation((timeline) => {
-      stampTimelineLibraryItemId(timeline, itemId);
-    }, "link library timeline", { pushUndo: false, ...options });
+      stampProjectLibraryItemId(timeline, itemId);
+    }, "link library project", { pushUndo: false, ...options });
   }
 
-  alertTimelineLibraryError(error) {
+  alertProjectLibraryError(error) {
     const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
-    alertFn?.(error?.message || "Could not update Director Library timeline.");
+    alertFn?.(error?.message || "Could not update Director Library project.");
   }
 
   openReferenceManager() {
@@ -1751,13 +1752,6 @@ export class TimelineRenderer {
       this.commitMutation((timeline) => setPath(timeline, path, value), "settings change");
     }));
     return row;
-  }
-
-  renderProjectNameSetting(timeline) {
-    if (timeline.project?.privacy?.mode && !this.isPrivacyRevealed(timeline)) {
-      return this.renderSettingReadonly("Project Name", "Private project");
-    }
-    return this.renderSettingText("Project Name", ["project", "identity", "name"]);
   }
 
   renderProjectAssetRootSetting(timeline) {
@@ -2848,11 +2842,11 @@ function referenceLibraryItemId(reference) {
   return String(reference?.image?.metadata?.library_item_id ?? "").trim();
 }
 
-function timelineLibraryItemIdFor(timeline) {
+function projectLibraryItemIdFor(timeline) {
   return String(timeline?.project?.metadata?.library_item_id ?? "").trim();
 }
 
-function stampTimelineLibraryItemId(timeline, itemId) {
+function stampProjectLibraryItemId(timeline, itemId) {
   if (!timeline || typeof timeline !== "object") return timeline;
   timeline.project ??= {};
   timeline.project.metadata = timeline.project.metadata && typeof timeline.project.metadata === "object" && !Array.isArray(timeline.project.metadata)
@@ -2876,18 +2870,39 @@ function referenceLibraryPayload(reference, privacyMode) {
   };
 }
 
-function timelineLibraryPayload(timeline, itemId) {
-  const payloadTimeline = cloneTimelineForDirectorLibrary(timeline, itemId);
+function projectLibraryPayload(timeline, itemId, name = null) {
+  const payloadTimeline = cloneProjectForDirectorLibrary(timeline, itemId, name);
   return {
-    name: timelineLibraryName(payloadTimeline),
+    name: projectName(payloadTimeline),
     private: Boolean(payloadTimeline?.project?.privacy?.mode),
-    timeline: payloadTimeline,
+    project: payloadTimeline,
   };
 }
 
-function timelineLibraryName(timeline) {
-  const metadata = timeline?.project?.metadata ?? {};
-  return String(metadata.title || metadata.name || "Untitled Timeline");
+function stampProjectName(timeline, name) {
+  if (!timeline || typeof timeline !== "object") return timeline;
+  timeline.project ??= {};
+  timeline.project.identity = timeline.project.identity && typeof timeline.project.identity === "object" && !Array.isArray(timeline.project.identity)
+    ? timeline.project.identity
+    : {};
+  timeline.project.identity.name = normalizedProjectName(name);
+  return timeline;
+}
+
+function projectName(timeline) {
+  return normalizedProjectName(timeline?.project?.identity?.name ?? timeline?.project?.metadata?.title ?? timeline?.project?.metadata?.name);
+}
+
+function normalizedProjectName(name) {
+  return String(name ?? "").trim() || "Untitled Project";
+}
+
+function promptForProjectName(documentRef, timeline) {
+  const promptFn = documentRef?.defaultView?.prompt ?? globalThis.prompt;
+  if (typeof promptFn !== "function") return projectName(timeline);
+  const value = promptFn("Project name", projectName(timeline));
+  if (value == null) return "";
+  return normalizedProjectName(value);
 }
 
 function cloneReferenceForLibrary(reference) {
@@ -3276,8 +3291,8 @@ function installStyles(documentRef) {
     .htd-reference-strength-row { min-width: 0; display: flex; align-items: center; gap: 6px; color: #c7d0df; }
     .htd-reference-strength-label { flex: 0 0 auto; color: #9ba8bd; }
     .htd-reference-actions { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
-    .htd-timeline-library-save-button { color: #8fb7ff; }
-    .htd-timeline-library-save-button.is-active { color: #7de0a0; }
+    .htd-project-library-save-button { color: #8fb7ff; }
+    .htd-project-library-save-button.is-active { color: #7de0a0; }
     .htd-reference-library-action { color: #8fb7ff; }
     .htd-reference-library-action.is-active { color: #7de0a0; }
     .htd-reference-overlay.privacy-mode .htd-reference-thumb img,

@@ -8,7 +8,7 @@ from aiohttp import web
 try:
     from ..shared.timeline_library import (
         CHARACTER_KIND,
-        TIMELINE_KIND,
+        PROJECT_KIND,
         TimelineLibraryError,
         create_item,
         delete_item,
@@ -16,14 +16,14 @@ try:
         list_items,
         patch_item,
         preview_character_item,
-        preview_timeline_item,
+        preview_project_item,
         replace_item,
         use_item,
     )
 except Exception:
     from shared.timeline_library import (
         CHARACTER_KIND,
-        TIMELINE_KIND,
+        PROJECT_KIND,
         TimelineLibraryError,
         create_item,
         delete_item,
@@ -31,7 +31,7 @@ except Exception:
         list_items,
         patch_item,
         preview_character_item,
-        preview_timeline_item,
+        preview_project_item,
         replace_item,
         use_item,
     )
@@ -76,54 +76,54 @@ def register_timeline_library_routes() -> bool:
         except Exception as exc:
             return _error_response(exc)
 
-    @routes.post(f"{ROUTE_PREFIX}/timelines")
-    async def post_timeline(request):
-        return await _create_typed_item(request, TIMELINE_KIND)
+    @routes.post(f"{ROUTE_PREFIX}/projects")
+    async def post_project(request):
+        return await _create_typed_item(request, PROJECT_KIND)
 
     @routes.post(f"{ROUTE_PREFIX}/characters")
     async def post_character(request):
         return await _create_typed_item(request, CHARACTER_KIND)
 
-    @routes.put(f"{ROUTE_PREFIX}/timelines" + "/{item_id}")
-    async def put_timeline(request):
-        return await _replace_typed_item(request, TIMELINE_KIND)
+    @routes.put(f"{ROUTE_PREFIX}/projects" + "/{item_id}")
+    async def put_project(request):
+        return await _replace_typed_item(request, PROJECT_KIND)
 
     @routes.put(f"{ROUTE_PREFIX}/characters" + "/{item_id}")
     async def put_character(request):
         return await _replace_typed_item(request, CHARACTER_KIND)
 
-    @routes.patch(f"{ROUTE_PREFIX}/timelines" + "/{item_id}")
-    async def patch_timeline(request):
-        return await _patch_typed_item(request, TIMELINE_KIND)
+    @routes.patch(f"{ROUTE_PREFIX}/projects" + "/{item_id}")
+    async def patch_project(request):
+        return await _patch_typed_item(request, PROJECT_KIND)
 
     @routes.patch(f"{ROUTE_PREFIX}/characters" + "/{item_id}")
     async def patch_character(request):
         return await _patch_typed_item(request, CHARACTER_KIND)
 
-    @routes.post(f"{ROUTE_PREFIX}/timelines" + "/{item_id}/duplicate")
-    async def duplicate_timeline(request):
-        return await _duplicate_typed_item(request, TIMELINE_KIND)
+    @routes.post(f"{ROUTE_PREFIX}/projects" + "/{item_id}/duplicate")
+    async def duplicate_project(request):
+        return await _duplicate_typed_item(request, PROJECT_KIND)
 
     @routes.post(f"{ROUTE_PREFIX}/characters" + "/{item_id}/duplicate")
     async def duplicate_character(request):
         return await _duplicate_typed_item(request, CHARACTER_KIND)
 
-    @routes.delete(f"{ROUTE_PREFIX}/timelines" + "/{item_id}")
-    async def delete_timeline(request):
-        return await _delete_typed_item(request, TIMELINE_KIND)
+    @routes.delete(f"{ROUTE_PREFIX}/projects" + "/{item_id}")
+    async def delete_project(request):
+        return await _delete_typed_item(request, PROJECT_KIND)
 
     @routes.delete(f"{ROUTE_PREFIX}/characters" + "/{item_id}")
     async def delete_character(request):
         return await _delete_typed_item(request, CHARACTER_KIND)
 
-    @routes.post(f"{ROUTE_PREFIX}/timelines" + "/{item_id}/use")
-    async def use_timeline(request):
-        return await _use_typed_item(request, TIMELINE_KIND)
+    @routes.post(f"{ROUTE_PREFIX}/projects" + "/{item_id}/use")
+    async def use_project(request):
+        return await _use_typed_item(request, PROJECT_KIND)
 
-    @routes.post(f"{ROUTE_PREFIX}/timelines" + "/{item_id}/preview")
-    async def preview_timeline(request):
+    @routes.post(f"{ROUTE_PREFIX}/projects" + "/{item_id}/preview")
+    async def preview_project(request):
         try:
-            preview = preview_timeline_item(request.match_info["item_id"])
+            preview = preview_project_item(request.match_info["item_id"])
             return web.json_response({"ok": True, **preview})
         except Exception as exc:
             return _error_response(exc)
@@ -223,11 +223,11 @@ async def _json_payload(request, *, empty_ok: bool = False) -> dict[str, Any]:
 
 def _kind_from_payload(data: dict[str, Any]) -> str:
     kind = str(data.get("kind") or data.get("type") or "").strip().lower()
-    if kind in {"timeline", "timelines"}:
-        return TIMELINE_KIND
+    if kind in {"project", "projects"}:
+        return PROJECT_KIND
     if kind in {"character", "characters"}:
         return CHARACTER_KIND
-    raise TimelineLibraryError("Request must include kind: 'timeline' or 'character'.")
+    raise TimelineLibraryError("Request must include kind: 'project' or 'character'.")
 
 
 def _entry_payload(data: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -239,8 +239,8 @@ def _entry_payload(data: dict[str, Any], kind: str) -> dict[str, Any]:
 
 def _optional_entry_payload(data: dict[str, Any], kind: str) -> dict[str, Any] | None:
     keys = (kind, f"{kind}_payload", "payload")
-    if kind == TIMELINE_KIND:
-        keys = ("timeline", "video_timeline", "payload")
+    if kind == PROJECT_KIND:
+        keys = ("project", "video_timeline", "payload")
     elif kind == CHARACTER_KIND:
         keys = ("character", "reference", "payload")
     for key in keys:

@@ -192,8 +192,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("fetchProjectTakeCaptures(timeline, shot.shot_id"), true);
   assert.equal(rendererSource.includes("Attach Project Capture As Take"), true);
   assert.equal(rendererSource.includes("Attach And Accept Project Capture"), true);
-  assert.equal(rendererSource.includes("Project Name"), true);
-  assert.equal(rendererSource.includes("Project ID"), true);
+  assert.equal(rendererSource.includes("Project Name"), false);
+  assert.equal(rendererSource.includes("Project ID"), false);
   assert.equal(rendererSource.includes("Asset Root Directory"), true);
   assert.equal(rendererSource.includes("Project Folder"), true);
   assert.equal(rendererSource.includes("projectFolderDisplay(timeline"), true);
