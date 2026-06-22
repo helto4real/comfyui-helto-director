@@ -71,6 +71,7 @@ import {
 } from "./geometry.js";
 import {
   acceptTake,
+  addTakeMetadata,
   attachVideoAssetAsTake,
   addSection,
   adjacentShotPairs,
@@ -673,6 +674,10 @@ export class TimelineRenderer {
     shotIdInput.value = shot.shot_id ?? "";
     shotIdInput.readOnly = true;
     shotIdInput.title = "Shot ID";
+    shotIdInput.setAttribute("aria-label", "Shot ID");
+    const copyShotIdButton = button("Copy", "Copy Shot ID For Planner Input", () => {
+      copyTextToClipboard(this.container.ownerDocument, shot.shot_id ?? "");
+    });
     const nameInput = el("input", "htd-field htd-shot-name");
     nameInput.value = shot.name ?? "";
     nameInput.placeholder = shot.shot_id;
@@ -684,6 +689,7 @@ export class TimelineRenderer {
       title,
       this.renderInspectorControlRow(
         this.renderInspectorCompactField("ID:", shotIdInput, "is-shot-id"),
+        copyShotIdButton,
         this.renderInspectorCompactField("Name:", nameInput, "is-shot-name"),
       ),
       this.renderInspectorControlRow(
@@ -691,9 +697,11 @@ export class TimelineRenderer {
         this.renderInspectorCompactField("Type:", this.renderShotTypeField(shot), "is-shot-type"),
         this.renderInspectorCompactField("LoRAs:", this.renderShotLoraModeField(shot), "is-shot-lora-mode"),
       ),
+      this.renderAssemblyReadiness(timeline, shot),
       this.renderShotBoundaryContext(timeline, shot),
       this.renderShotClipField(timeline, shot),
       this.renderAttachTakeField(timeline, shot),
+      this.renderRegisterTakeFromMetadata(timeline, shot),
       this.renderShotTakes(timeline, shot),
       this.renderShotLoraTargets(timeline, shot),
     );
@@ -814,6 +822,35 @@ export class TimelineRenderer {
     return row;
   }
 
+  renderRegisterTakeFromMetadata(timeline, shot) {
+    const row = el("div", "htd-shot-row htd-register-take");
+    const label = el("span", "htd-shot-row-label");
+    label.textContent = "Metadata";
+    const input = el("input", "htd-field htd-register-take-input");
+    input.placeholder = "Take metadata JSON";
+    input.title = "Register Take From Metadata";
+    input.setAttribute("aria-label", "Register Take From Metadata JSON");
+    const register = button("Register", "Register Take From Metadata", () => {
+      const payload = parseTakeRegistrationInput(input.value);
+      if (!payload) return;
+      this.commitMutation((currentTimeline) => {
+        const liveShot = findShot(currentTimeline, shot.shot_id);
+        const registration = payload.registration && typeof payload.registration === "object" ? payload.registration : payload;
+        const takeData = registration.take && typeof registration.take === "object" ? registration.take : registration;
+        const registrationAsset = registration.asset && typeof registration.asset === "object" ? registration.asset : null;
+        const assetId = registration.asset_id ?? takeData.asset_id ?? registrationAsset?.asset_id;
+        const nextTake = {
+          ...takeData,
+          asset_id: assetId == null ? takeData.asset_id : String(assetId),
+        };
+        if (liveShot) addTakeMetadata(currentTimeline, liveShot.shot_id, nextTake);
+      }, "register take metadata");
+      input.value = "";
+    });
+    row.append(label, input, register);
+    return row;
+  }
+
   renderShotTakes(timeline, shot) {
     const block = el("div", "htd-shot-takes");
     const header = el("div", "htd-shot-subheader");
@@ -834,7 +871,10 @@ export class TimelineRenderer {
       const asset = take.asset_id ? timeline.assets?.find((candidate) => candidate.asset_id === take.asset_id) : null;
       const privacyRevealed = this.isPrivacyRevealed(timeline);
       label.textContent = takeSummaryLabel(timeline, take, privacyRevealed);
-      label.title = privacyRevealed ? (take.asset_id || take.take_id) : take.take_id;
+      label.title = privacyRevealed ? (take.asset_id || take.take_id) : "Private take";
+      const assetSummary = el("span", "htd-take-asset-summary");
+      assetSummary.textContent = assetSummaryLabel(asset, privacyRevealed);
+      assetSummary.title = privacyRevealed ? (asset?.path || asset?.name || asset?.asset_id || assetSummary.textContent) : assetSummary.textContent;
       const status = iconMenuControl({
         id: `take-status-${take.take_id}`,
         title: "Take Status",
@@ -866,10 +906,21 @@ export class TimelineRenderer {
         this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, take.take_id, "Candidate"), "take change");
       });
       restore.disabled = take.status === "Candidate";
-      row.append(label, status, accept, reject, restore);
+      row.append(label, assetSummary, status, accept, reject, restore);
       block.append(row);
     }
     return block;
+  }
+
+  renderAssemblyReadiness(timeline, shot) {
+    const row = el("div", "htd-shot-row htd-assembly-readiness");
+    const label = el("span", "htd-shot-row-label");
+    label.textContent = "Assembly";
+    const value = el("span", "htd-assembly-status");
+    value.textContent = assemblyReadinessStatus(timeline, shot);
+    value.title = "Assembly Readiness State";
+    row.append(label, value);
+    return row;
   }
 
   renderShotBoundaryContext(timeline, shot) {
@@ -2135,6 +2186,19 @@ function shotGenerationStatus(timeline, shot) {
   return "Needs generation";
 }
 
+function assemblyReadinessStatus(timeline, shot) {
+  const accepted = (shot.takes ?? []).find((take) => take.take_id === shot.accepted_take_id);
+  if (accepted && assetForId(timeline, accepted.asset_id)) return "Ready: accepted take";
+  if (accepted) return "Blocked: missing take asset";
+  if (shot.clip_instance?.asset_id) {
+    return assetForId(timeline, shot.clip_instance.asset_id)
+      ? "Ready: clip instance"
+      : "Blocked: missing clip asset";
+  }
+  if ((shot.takes ?? []).some((take) => take.status === "Candidate")) return "Needs accepted take";
+  return "Needs generated or imported clip";
+}
+
 function shotBoundaryContext(timeline, shot) {
   const shots = [...(timeline.sequence?.shots ?? [])]
     .sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time) || String(a.shot_id).localeCompare(String(b.shot_id)));
@@ -2158,15 +2222,20 @@ function boundaryWarningForShot(timeline, context) {
 }
 
 function takeSummaryLabel(timeline, take, privacyRevealed) {
-  const parts = [take.take_id];
+  const parts = [privacyRevealed ? take.take_id : takeStatusLabel(take)];
   const asset = assetForId(timeline, take.asset_id);
   if (asset) parts.push(assetDisplayLabel(asset, privacyRevealed, "Video Asset"));
   const model = [take.model_family, take.model_version].filter(Boolean).join(" ");
-  if (model) parts.push(model);
-  if (take.seed != null) parts.push(`seed ${take.seed}`);
+  if (model) parts.push(privacyRevealed ? model : "Model");
+  if (take.seed != null) parts.push(privacyRevealed ? `seed ${take.seed}` : "Seeded");
   const loraCount = resolvedLoraCount(take.resolved_loras);
   if (loraCount > 0) parts.push(`${loraCount} LoRA${loraCount === 1 ? "" : "s"}`);
   return parts.join(" · ");
+}
+
+function takeStatusLabel(take) {
+  const status = TAKE_STATUSES.includes(take?.status) ? take.status : "Candidate";
+  return `${status} take`;
 }
 
 function assetDisplayLabel(asset, privacyRevealed, fallback = "Asset") {
@@ -2175,11 +2244,48 @@ function assetDisplayLabel(asset, privacyRevealed, fallback = "Asset") {
   return asset.name || asset.path || asset.file_path || asset.asset_id || fallback;
 }
 
+function assetSummaryLabel(asset, privacyRevealed) {
+  if (!asset) return "Missing asset";
+  if (!privacyRevealed) return asset.source_kind === "Generated" ? "Generated video" : "Private asset";
+  return assetDisplayLabel(asset, true, asset.source_kind === "Generated" ? "Generated Video" : "Video Asset");
+}
+
 function resolvedLoraCount(resolvedLoras) {
   const targets = resolvedLoras?.targets && typeof resolvedLoras.targets === "object" && !Array.isArray(resolvedLoras.targets)
     ? resolvedLoras.targets
     : {};
   return Object.values(targets).reduce((count, stack) => count + (Array.isArray(stack) ? stack.length : 0), 0);
+}
+
+function parseTakeRegistrationInput(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function copyTextToClipboard(documentRef, text) {
+  const value = String(text ?? "");
+  const clipboard = documentRef?.defaultView?.navigator?.clipboard ?? globalThis.navigator?.clipboard;
+  if (clipboard?.writeText) {
+    clipboard.writeText(value).catch(() => {});
+    return;
+  }
+  const textarea = documentRef?.createElement?.("textarea");
+  if (!textarea) return;
+  textarea.value = value;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  documentRef.body?.append(textarea);
+  textarea.select();
+  documentRef.execCommand?.("copy");
+  textarea.remove();
 }
 
 function assetForId(timeline, assetId) {
@@ -2836,12 +2942,15 @@ function installStyles(documentRef) {
     .htd-shot-row-label { flex: 0 0 74px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9ba8bd; }
     .htd-shot-clip-select { max-width: 220px; }
     .htd-generated-take-select { max-width: 220px; }
+    .htd-register-take-input { max-width: 240px; }
+    .htd-assembly-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-shot-subheader { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #eef2f7; font-weight: 600; }
     .htd-shot-subheader .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-shot-takes, .htd-shot-loras { min-width: 0; display: grid; gap: 4px; }
     .htd-shot-empty { color: #8d98ab; font-size: 11px; }
-    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(140px, 1fr) auto auto auto auto; align-items: center; gap: 6px; }
-    .htd-take-label, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
+    .htd-take-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(82px, 0.45fr) auto auto auto auto; align-items: center; gap: 6px; }
+    .htd-take-label, .htd-take-asset-summary, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
+    .htd-take-asset-summary { color: #aab4c4; }
     .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-project-loras { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 7px; padding-top: 7px; border-top: 1px solid #30394c; }
     .htd-project-loras-title { grid-column: 1 / -1; color: #eef2f7; font-weight: 600; }
