@@ -55,7 +55,7 @@ export function normalizeVideoTimeline(value) {
   normalized.assets = normalizeAssets(normalized.assets);
   normalized.director_track = normalizeDirectorTrack(normalized.director_track);
   normalized.audio_tracks = normalizeAudioTracks(normalized.audio_tracks);
-  normalized.sequence = normalizeSequence(normalized.sequence);
+  normalized.sequence = normalizeSequence(normalized.sequence, normalized.director_track.sections);
   normalizeProjectMetadata(normalized);
   normalizeProjectModelLoras(normalized);
   normalizePrivacy(normalized);
@@ -174,7 +174,9 @@ function normalizeTimelineLoraConfig(config) {
   };
 }
 
-function normalizeSequence(sequence) {
+const SECTION_SHOT_TOUCH_TOLERANCE_SECONDS = 1e-6;
+
+function normalizeSequence(sequence, sections = []) {
   const normalized = fillMissing(
     sequence && typeof sequence === "object" && !Array.isArray(sequence) ? sequence : {},
     createDefaultSequence(),
@@ -182,14 +184,82 @@ function normalizeSequence(sequence) {
   normalized.sequence_id = String(normalized.sequence_id || SEQUENCE_ID_MAIN);
   normalized.name = String(normalized.name || SEQUENCE_NAME_MAIN);
   const shots = Array.isArray(normalized.shots) ? normalized.shots : [];
-  normalized.shots = shots
-    .filter((shot) => shot && typeof shot === "object" && !Array.isArray(shot))
-    .map((shot, index) => normalizeShot(shot, index));
-  const boundaries = Array.isArray(normalized.boundaries) ? normalized.boundaries : [];
-  normalized.boundaries = boundaries
-    .filter((boundary) => boundary && typeof boundary === "object" && !Array.isArray(boundary))
-    .map((boundary, index) => normalizeBoundary(boundary, index));
+  const shotItems = shots
+    .filter((shot) => shot && typeof shot === "object" && !Array.isArray(shot));
+  if (!shotItems.length && Array.isArray(sections) && sections.length) {
+    normalized.shots = deriveShotsFromSections(sections);
+    normalized.boundaries = deriveBoundariesFromSections(sections, normalized.shots);
+  } else {
+    normalized.shots = shotItems.map((shot, index) => normalizeShot(shot, index));
+    const boundaries = Array.isArray(normalized.boundaries) ? normalized.boundaries : [];
+    normalized.boundaries = boundaries
+      .filter((boundary) => boundary && typeof boundary === "object" && !Array.isArray(boundary))
+      .map((boundary, index) => normalizeBoundary(boundary, index));
+  }
   return normalized;
+}
+
+function deriveShotsFromSections(sections) {
+  const usedShotIds = new Set();
+  return sections.map((section, index) => {
+    const fallbackSectionId = `section_${String(index + 1).padStart(3, "0")}`;
+    const sectionId = section.item_id == null || section.item_id === ""
+      ? fallbackSectionId
+      : String(section.item_id);
+    const shotId = uniqueTimelineId(
+      `shot_${sanitizeTimelineId(sectionId, fallbackSectionId)}`,
+      usedShotIds,
+    );
+    return normalizeShot({
+      ...createDefaultShot(index + 1),
+      shot_id: shotId,
+      start_time: section.start_time,
+      end_time: section.end_time,
+      section_ids: [sectionId],
+    }, index);
+  });
+}
+
+function deriveBoundariesFromSections(sections, shots) {
+  const usedBoundaryIds = new Set();
+  const boundaries = [];
+  const count = Math.max(0, Math.min(sections.length, shots.length) - 1);
+  for (let index = 0; index < count; index += 1) {
+    const leftEnd = asNumber(sections[index]?.end_time, null);
+    const rightStart = asNumber(sections[index + 1]?.start_time, null);
+    if (leftEnd == null || rightStart == null) continue;
+    if (Math.abs(leftEnd - rightStart) > SECTION_SHOT_TOUCH_TOLERANCE_SECONDS) continue;
+    const leftShotId = shots[index].shot_id;
+    const rightShotId = shots[index + 1].shot_id;
+    const boundaryId = uniqueTimelineId(
+      `boundary_${leftShotId}_to_${rightShotId}`,
+      usedBoundaryIds,
+    );
+    boundaries.push(normalizeBoundary({
+      ...createDefaultBoundary(boundaries.length + 1),
+      boundary_id: boundaryId,
+      left_shot_id: leftShotId,
+      right_shot_id: rightShotId,
+      mode: "Hard Cut",
+    }, boundaries.length));
+  }
+  return boundaries;
+}
+
+function sanitizeTimelineId(value, fallback) {
+  const sanitized = String(value ?? "").replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return sanitized || fallback;
+}
+
+function uniqueTimelineId(baseId, usedIds) {
+  let candidate = baseId;
+  let suffix = 2;
+  while (usedIds.has(candidate)) {
+    candidate = `${baseId}_${suffix}`;
+    suffix += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
 }
 
 function normalizeShot(shot, index) {

@@ -180,6 +180,276 @@ def test_normalization_fills_sequence_shot_boundary_and_take_defaults():
     assert boundary["mode"] == BOUNDARY_MODE_HARD_CUT
 
 
+def test_normalization_migrates_flat_sections_to_generated_shots():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {
+            "model_loras": {
+                "lora_config_hi": {
+                    "loras": [{"enabled": True, "name": "hi.safetensors"}]
+                },
+                "lora_config_low": {
+                    "loras": [{"enabled": True, "name": "low.safetensors"}]
+                },
+            }
+        },
+        "assets": [
+            {
+                "asset_id": "image_001",
+                "type": ASSET_TYPE_IMAGE,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": "/mnt/media/reference.png",
+            },
+            {
+                "asset_id": "video_001",
+                "type": ASSET_TYPE_VIDEO,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": "/mnt/media/source.mp4",
+            },
+        ],
+        "director_track": {
+            "sections": [
+                {
+                    "item_id": "intro",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "prompt": "intro prompt",
+                    "metadata": {"custom": True},
+                },
+                {
+                    "item_id": "image/ref",
+                    "type": SECTION_TYPE_IMAGE,
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                    "image": {"asset_id": "image_001"},
+                    "prompt": "image prompt",
+                    "custom_note": "keep",
+                },
+                {
+                    "item_id": "video ref",
+                    "type": SECTION_TYPE_VIDEO,
+                    "start_time": 3.0,
+                    "end_time": 4.0,
+                    "video": {"asset_id": "video_001"},
+                    "prompt": "video prompt",
+                    "source_in": 0.5,
+                },
+            ]
+        },
+        "audio_tracks": [
+            {
+                "track_id": "music",
+                "clips": [
+                    {
+                        "item_id": "audio_1",
+                        "audio": "/mnt/media/music.wav",
+                        "start_time": 0.0,
+                        "end_time": 4.0,
+                    }
+                ],
+            }
+        ],
+    }
+
+    normalized = normalize_video_timeline(timeline)
+    sequence = normalized["sequence"]
+    shots = sequence["shots"]
+    boundaries = sequence["boundaries"]
+    model_loras = normalized["project"]["model_loras"]
+
+    assert normalized["director_track"]["sections"][0]["prompt"] == "intro prompt"
+    assert normalized["director_track"]["sections"][1]["image"] == {
+        "asset_id": "image_001"
+    }
+    assert normalized["director_track"]["sections"][1]["custom_note"] == "keep"
+    assert normalized["director_track"]["sections"][2]["source_in"] == 0.5
+    assert normalized["audio_tracks"][0]["clips"][0]["audio"] == "/mnt/media/music.wav"
+    assert [shot["shot_id"] for shot in shots] == [
+        "shot_intro",
+        "shot_image_ref",
+        "shot_video_ref",
+    ]
+    assert [shot["section_ids"] for shot in shots] == [
+        ["intro"],
+        ["image/ref"],
+        ["video ref"],
+    ]
+    assert [(shot["start_time"], shot["end_time"]) for shot in shots] == [
+        (0.0, 1.0),
+        (1.0, 2.0),
+        (3.0, 4.0),
+    ]
+    assert all(shot["type"] == SHOT_TYPE_GENERATED for shot in shots)
+    assert all(shot["takes"] == [] for shot in shots)
+    assert all(shot["accepted_take_id"] is None for shot in shots)
+    assert all(shot["clip_instance"] is None for shot in shots)
+    assert boundaries == [
+        {
+            "boundary_id": "boundary_shot_intro_to_shot_image_ref",
+            "left_shot_id": "shot_intro",
+            "right_shot_id": "shot_image_ref",
+            "mode": BOUNDARY_MODE_HARD_CUT,
+            "tail_frames": 5,
+            "blend_frames": 3,
+            "transition_prompt": "",
+            "reuse_character_refs": True,
+            "reuse_style": True,
+            "metadata": {},
+        }
+    ]
+    assert "lora_config_hi" not in model_loras
+    assert "lora_config_low" not in model_loras
+    assert model_loras["global"][MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN]["loras"] == []
+    assert model_loras["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE]["loras"] == []
+    assert model_loras["global"][MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_LOW_NOISE]["loras"] == []
+    assert "image" not in shots[1]
+    assert "video" not in shots[2]
+    assert "thumbnail" not in json.dumps(sequence)
+    assert "waveform" not in json.dumps(sequence)
+
+
+def test_flat_section_migration_is_idempotent_and_uses_duplicate_suffixes():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {},
+        "director_track": {
+            "sections": [
+                {
+                    "item_id": "A/B",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "prompt": "first",
+                },
+                {
+                    "item_id": "A B",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 1.0000005,
+                    "end_time": 2.0,
+                    "prompt": "second",
+                },
+                {
+                    "item_id": "gap",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 2.25,
+                    "end_time": 3.0,
+                    "prompt": "third",
+                },
+            ]
+        },
+    }
+
+    normalized = normalize_video_timeline(timeline)
+    normalized_again = normalize_video_timeline(normalized)
+
+    assert [shot["shot_id"] for shot in normalized["sequence"]["shots"]] == [
+        "shot_A_B",
+        "shot_A_B_2",
+        "shot_gap",
+    ]
+    assert [boundary["boundary_id"] for boundary in normalized["sequence"]["boundaries"]] == [
+        "boundary_shot_A_B_to_shot_A_B_2"
+    ]
+    assert normalized_again["sequence"] == normalized["sequence"]
+
+
+def test_malformed_or_missing_sequence_migrates_from_sections():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {},
+        "sequence": "not-a-sequence",
+        "director_track": {
+            "sections": [
+                {
+                    "item_id": "section_001",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "prompt": "text",
+                }
+            ]
+        },
+    }
+    missing_sequence = {key: value for key, value in timeline.items() if key != "sequence"}
+
+    normalized_malformed = normalize_video_timeline(timeline)
+    normalized_missing = normalize_video_timeline(missing_sequence)
+
+    assert normalized_malformed["sequence"]["shots"][0]["shot_id"] == "shot_section_001"
+    assert normalized_missing["sequence"] == normalized_malformed["sequence"]
+
+
+def test_existing_sequence_shots_are_preserved_instead_of_regenerated():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {},
+        "director_track": {
+            "sections": [
+                {
+                    "item_id": "section_001",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "prompt": "text",
+                }
+            ]
+        },
+        "sequence": {
+            "shots": [
+                {
+                    "shot_id": "shot_authored",
+                    "start_time": 10.0,
+                    "end_time": 11.0,
+                    "section_ids": ["custom_section"],
+                }
+            ],
+            "boundaries": [
+                {
+                    "boundary_id": "boundary_authored",
+                    "left_shot_id": "shot_previous",
+                    "right_shot_id": "shot_authored",
+                    "mode": BOUNDARY_MODE_HARD_CUT,
+                }
+            ],
+        },
+    }
+
+    normalized = normalize_video_timeline(timeline)
+
+    assert [shot["shot_id"] for shot in normalized["sequence"]["shots"]] == [
+        "shot_authored"
+    ]
+    assert normalized["sequence"]["shots"][0]["start_time"] == 10.0
+    assert normalized["sequence"]["shots"][0]["section_ids"] == ["custom_section"]
+    assert [boundary["boundary_id"] for boundary in normalized["sequence"]["boundaries"]] == [
+        "boundary_authored"
+    ]
+
+
+def test_json_roundtrip_preserves_migrated_sequence_data():
+    timeline = {
+        "type": VIDEO_TIMELINE_TYPE,
+        "project": {},
+        "director_track": {
+            "sections": [
+                {
+                    "item_id": "section_001",
+                    "type": SECTION_TYPE_TEXT,
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "prompt": "text",
+                }
+            ]
+        },
+    }
+
+    normalized = normalize_video_timeline(timeline)
+    roundtripped = normalize_video_timeline(json.dumps(normalized))
+
+    assert roundtripped["sequence"] == normalized["sequence"]
+
+
 def test_normalization_drops_legacy_lora_fields_and_creates_model_targets():
     timeline = create_default_video_timeline()
     timeline["project"]["model_loras"] = {

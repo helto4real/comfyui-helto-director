@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from math import ceil
+import re
 from typing import Any
 
 from ..contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_SOURCE_KINDS,
     ASSET_TYPES,
+    BOUNDARY_MODE_HARD_CUT,
     BOUNDARY_MODES,
     CROP_MODE_PROJECT_DEFAULT,
     DEFAULT_AUDIO_FADE_IN_SECONDS,
@@ -47,6 +49,8 @@ from .migration import migrate_video_timeline
 from .references import normalize_character_references
 from ..lora.config import normalize_lora_config
 
+SECTION_SHOT_TOUCH_TOLERANCE_SECONDS = 1e-6
+
 
 def normalize_video_timeline(timeline: Any) -> dict:
     migrated = migrate_video_timeline(timeline)
@@ -58,7 +62,10 @@ def normalize_video_timeline(timeline: Any) -> dict:
     normalized["audio_tracks"] = _normalize_audio_tracks(
         normalized.get("audio_tracks")
     )
-    normalized["sequence"] = _normalize_sequence(normalized.get("sequence"))
+    normalized["sequence"] = _normalize_sequence(
+        normalized.get("sequence"),
+        normalized["director_track"]["sections"],
+    )
     _normalize_project_metadata(normalized)
     _normalize_project_model_loras(normalized)
     _normalize_privacy(normalized)
@@ -173,25 +180,113 @@ def _normalize_director_track(track: Any) -> dict:
     return normalized
 
 
-def _normalize_sequence(sequence: Any) -> dict:
+def _normalize_sequence(sequence: Any, sections: list[dict] | None = None) -> dict:
     if not isinstance(sequence, dict):
         sequence = {}
     normalized = _fill_missing(sequence, create_default_sequence())
     normalized["sequence_id"] = str(normalized.get("sequence_id") or SEQUENCE_ID_MAIN)
     normalized["name"] = str(normalized.get("name") or SEQUENCE_NAME_MAIN)
     shots = normalized.get("shots")
-    normalized["shots"] = [
-        _normalize_shot(shot, index)
-        for index, shot in enumerate(shots if isinstance(shots, list) else [])
+    shot_items = [
+        shot
+        for shot in (shots if isinstance(shots, list) else [])
         if isinstance(shot, dict)
     ]
-    boundaries = normalized.get("boundaries")
-    normalized["boundaries"] = [
-        _normalize_boundary(boundary, index)
-        for index, boundary in enumerate(boundaries if isinstance(boundaries, list) else [])
-        if isinstance(boundary, dict)
-    ]
+    should_derive_from_sections = not shot_items and bool(sections)
+    if should_derive_from_sections:
+        normalized["shots"] = _derive_shots_from_sections(sections or [])
+        normalized["boundaries"] = _derive_boundaries_from_sections(
+            sections or [],
+            normalized["shots"],
+        )
+    else:
+        normalized["shots"] = [
+            _normalize_shot(shot, index)
+            for index, shot in enumerate(shot_items)
+        ]
+        boundaries = normalized.get("boundaries")
+        normalized["boundaries"] = [
+            _normalize_boundary(boundary, index)
+            for index, boundary in enumerate(
+                boundaries if isinstance(boundaries, list) else []
+            )
+            if isinstance(boundary, dict)
+        ]
     return normalized
+
+
+def _derive_shots_from_sections(sections: list[dict]) -> list[dict]:
+    used_shot_ids: set[str] = set()
+    shots = []
+    for index, section in enumerate(sections):
+        section_id = section.get("item_id")
+        if section_id is None or section_id == "":
+            section_id = f"section_{index + 1:03d}"
+        section_id_text = str(section_id)
+        shot_id = _unique_timeline_id(
+            f"shot_{_sanitize_timeline_id(section_id_text, f'section_{index + 1:03d}')}",
+            used_shot_ids,
+        )
+        shot = create_default_shot(index + 1)
+        shot.update(
+            {
+                "shot_id": shot_id,
+                "start_time": section.get("start_time"),
+                "end_time": section.get("end_time"),
+                "section_ids": [section_id_text],
+            }
+        )
+        shots.append(_normalize_shot(shot, index))
+    return shots
+
+
+def _derive_boundaries_from_sections(
+    sections: list[dict],
+    shots: list[dict],
+) -> list[dict]:
+    used_boundary_ids: set[str] = set()
+    boundaries = []
+    for index in range(max(0, min(len(sections), len(shots)) - 1)):
+        left_section = sections[index]
+        right_section = sections[index + 1]
+        left_end = _as_float(left_section.get("end_time"), None)
+        right_start = _as_float(right_section.get("start_time"), None)
+        if left_end is None or right_start is None:
+            continue
+        if abs(left_end - right_start) > SECTION_SHOT_TOUCH_TOLERANCE_SECONDS:
+            continue
+        left_shot_id = shots[index]["shot_id"]
+        right_shot_id = shots[index + 1]["shot_id"]
+        boundary_id = _unique_timeline_id(
+            f"boundary_{left_shot_id}_to_{right_shot_id}",
+            used_boundary_ids,
+        )
+        boundary = create_default_boundary(len(boundaries) + 1)
+        boundary.update(
+            {
+                "boundary_id": boundary_id,
+                "left_shot_id": left_shot_id,
+                "right_shot_id": right_shot_id,
+                "mode": BOUNDARY_MODE_HARD_CUT,
+            }
+        )
+        boundaries.append(_normalize_boundary(boundary, len(boundaries)))
+    return boundaries
+
+
+def _sanitize_timeline_id(value: Any, fallback: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "")).strip("_")
+    return sanitized or fallback
+
+
+def _unique_timeline_id(base_id: str, used_ids: set[str]) -> str:
+    candidate = base_id
+    suffix = 2
+    while candidate in used_ids:
+        candidate = f"{base_id}_{suffix}"
+        suffix += 1
+    used_ids.add(candidate)
+    return candidate
 
 
 def _normalize_shot(shot: dict, index: int) -> dict:
@@ -321,9 +416,12 @@ def _normalize_optional_lora_targets(targets: Any) -> dict[str, Any]:
 
 def _normalize_section(section: dict, index: int) -> dict:
     normalized = deepcopy(section)
-    normalized.setdefault("item_id", f"section_{index + 1:03d}")
-    normalized.setdefault("start_time", 0.0)
-    normalized.setdefault("end_time", normalized["start_time"])
+    if normalized.get("item_id") is None or normalized.get("item_id") == "":
+        normalized["item_id"] = f"section_{index + 1:03d}"
+    if normalized.get("start_time") is None:
+        normalized["start_time"] = 0.0
+    if normalized.get("end_time") is None:
+        normalized["end_time"] = normalized["start_time"]
 
     section_type = normalized.get("type")
     if section_type == SECTION_TYPE_IMAGE:

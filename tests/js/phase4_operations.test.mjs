@@ -161,7 +161,10 @@ function testMigrationDropsLegacyLorasAndPreservesSections() {
   assert.equal("lora_config_low" in normalized.project.model_loras, false);
   assert.equal(normalized.project.model_loras.schema_version, 2);
   assert.equal(normalized.director_track.sections.length, 1);
-  assert.deepEqual(normalized.sequence.shots, []);
+  assert.deepEqual(normalized.sequence.shots.map((shot) => shot.section_ids), [[timeline.director_track.sections[0].item_id]]);
+  assert.deepEqual(normalized.project.model_loras.global[MODEL_LORA_MODEL_LTX_2_3][MODEL_LORA_TARGET_MAIN].loras, []);
+  assert.deepEqual(normalized.project.model_loras.global[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_HIGH_NOISE].loras, []);
+  assert.deepEqual(normalized.project.model_loras.global[MODEL_LORA_MODEL_WAN_2_2][MODEL_LORA_TARGET_LOW_NOISE].loras, []);
 }
 
 function testMigrationNormalizesPartialSequenceStructures() {
@@ -193,6 +196,119 @@ function testMigrationNormalizesPartialSequenceStructures() {
   assert.equal(shot.clip_instance.asset_id, "42");
   assert.equal(shot.clip_instance.speed, 1);
   assert.equal(normalized.sequence.boundaries[0].mode, "Hard Cut");
+}
+
+function testMigrationDerivesShotsFromFlatSections() {
+  const normalized = normalizeVideoTimeline({
+    type: "VIDEO_TIMELINE",
+    project: {},
+    assets: [
+      { asset_id: "image_001", type: "Image", source_kind: "FilePath", path: "/mnt/media/reference.png" },
+      { asset_id: "video_001", type: "Video", source_kind: "FilePath", path: "/mnt/media/source.mp4" },
+    ],
+    director_track: {
+      sections: [
+        { item_id: "intro", type: "Text", start_time: 0, end_time: 1, prompt: "intro prompt" },
+        { item_id: "image/ref", type: "Image", start_time: 1, end_time: 2, image: { asset_id: "image_001" }, prompt: "image prompt", custom_note: "keep" },
+        { item_id: "video ref", type: "Video", start_time: 3, end_time: 4, video: { asset_id: "video_001" }, prompt: "video prompt", source_in: 0.5 },
+      ],
+    },
+    audio_tracks: [{ track_id: "music", clips: [{ item_id: "audio_1", audio: "/mnt/media/music.wav", start_time: 0, end_time: 4 }] }],
+  });
+
+  assert.deepEqual(normalized.director_track.sections.map((section) => section.prompt), [
+    "intro prompt",
+    "image prompt",
+    "video prompt",
+  ]);
+  assert.equal(normalized.director_track.sections[1].custom_note, "keep");
+  assert.equal(normalized.audio_tracks[0].clips[0].audio, "/mnt/media/music.wav");
+  assert.deepEqual(normalized.sequence.shots.map((shot) => shot.shot_id), [
+    "shot_intro",
+    "shot_image_ref",
+    "shot_video_ref",
+  ]);
+  assert.deepEqual(normalized.sequence.shots.map((shot) => shot.section_ids), [
+    ["intro"],
+    ["image/ref"],
+    ["video ref"],
+  ]);
+  assert.deepEqual(normalized.sequence.shots.map((shot) => [shot.start_time, shot.end_time]), [
+    [0, 1],
+    [1, 2],
+    [3, 4],
+  ]);
+  assert.deepEqual(normalized.sequence.boundaries.map((boundary) => boundary.boundary_id), [
+    "boundary_shot_intro_to_shot_image_ref",
+  ]);
+  assert.equal("image" in normalized.sequence.shots[1], false);
+  assert.equal("video" in normalized.sequence.shots[2], false);
+  assert.equal(JSON.stringify(normalized.sequence).includes("thumbnail"), false);
+  assert.equal(JSON.stringify(normalized.sequence).includes("waveform"), false);
+}
+
+function testMigrationIsIdempotentAndUsesDuplicateSuffixes() {
+  const timeline = {
+    type: "VIDEO_TIMELINE",
+    project: {},
+    director_track: {
+      sections: [
+        { item_id: "A/B", type: "Text", start_time: 0, end_time: 1, prompt: "first" },
+        { item_id: "A B", type: "Text", start_time: 1.0000005, end_time: 2, prompt: "second" },
+        { item_id: "gap", type: "Text", start_time: 2.25, end_time: 3, prompt: "third" },
+      ],
+    },
+  };
+
+  const normalized = normalizeVideoTimeline(timeline);
+  const normalizedAgain = normalizeVideoTimeline(normalized);
+
+  assert.deepEqual(normalized.sequence.shots.map((shot) => shot.shot_id), [
+    "shot_A_B",
+    "shot_A_B_2",
+    "shot_gap",
+  ]);
+  assert.deepEqual(normalized.sequence.boundaries.map((boundary) => boundary.boundary_id), [
+    "boundary_shot_A_B_to_shot_A_B_2",
+  ]);
+  assert.deepEqual(normalizedAgain.sequence, normalized.sequence);
+}
+
+function testMalformedOrMissingSequenceMigratesFromSections() {
+  const timeline = {
+    type: "VIDEO_TIMELINE",
+    project: {},
+    sequence: "not-a-sequence",
+    director_track: {
+      sections: [{ item_id: "section_001", type: "Text", start_time: 0, end_time: 1, prompt: "text" }],
+    },
+  };
+  const { sequence: _sequence, ...missingSequence } = timeline;
+
+  const normalizedMalformed = normalizeVideoTimeline(timeline);
+  const normalizedMissing = normalizeVideoTimeline(missingSequence);
+
+  assert.equal(normalizedMalformed.sequence.shots[0].shot_id, "shot_section_001");
+  assert.deepEqual(normalizedMissing.sequence, normalizedMalformed.sequence);
+}
+
+function testExistingSequenceShotsArePreserved() {
+  const normalized = normalizeVideoTimeline({
+    type: "VIDEO_TIMELINE",
+    project: {},
+    director_track: {
+      sections: [{ item_id: "section_001", type: "Text", start_time: 0, end_time: 1, prompt: "text" }],
+    },
+    sequence: {
+      shots: [{ shot_id: "shot_authored", start_time: 10, end_time: 11, section_ids: ["custom_section"] }],
+      boundaries: [{ boundary_id: "boundary_authored", left_shot_id: "shot_previous", right_shot_id: "shot_authored", mode: "Hard Cut" }],
+    },
+  });
+
+  assert.deepEqual(normalized.sequence.shots.map((shot) => shot.shot_id), ["shot_authored"]);
+  assert.equal(normalized.sequence.shots[0].start_time, 10);
+  assert.deepEqual(normalized.sequence.shots[0].section_ids, ["custom_section"]);
+  assert.deepEqual(normalized.sequence.boundaries.map((boundary) => boundary.boundary_id), ["boundary_authored"]);
 }
 
 function testGroupDeleteRemovesMixedSelection() {
@@ -384,6 +500,10 @@ testMigrationDerivesSelectedItemIdsFromPrimarySelection();
 testDefaultTimelineHasSequenceAndModelTargetedLoras();
 testMigrationDropsLegacyLorasAndPreservesSections();
 testMigrationNormalizesPartialSequenceStructures();
+testMigrationDerivesShotsFromFlatSections();
+testMigrationIsIdempotentAndUsesDuplicateSuffixes();
+testMalformedOrMissingSequenceMigratesFromSections();
+testExistingSequenceShotsArePreserved();
 testGroupDeleteRemovesMixedSelection();
 testGroupMoveClampsSectionsAndMovesUnlockedAudio();
 testGroupDuplicatePreservesOffsetsAndSelectsCopies();
