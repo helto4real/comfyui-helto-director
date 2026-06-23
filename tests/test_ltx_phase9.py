@@ -18,14 +18,18 @@ from PIL import Image
 
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
+    ASSET_SOURCE_GENERATED,
     ASSET_TYPE_AUDIO,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_CONTINUOUS_SHOT,
+    BOUNDARY_MODE_TRANSITION,
     MODEL_LORA_TARGET_MAIN,
     QUALITY_PRESET_QUICK_DRAFT,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
+    TAKE_STATUS_ACCEPTED,
     VIDEO_GUIDANCE_RANGE_FULL_SOURCE,
     VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
     VIDEO_TIMING_FIT_TO_SECTION,
@@ -35,9 +39,11 @@ from shared.contracts.video_timeline import (
 )
 from shared.ltx import build_ltx_runtime_outputs, build_ltx_timeline_plan, create_ltx_timeline_config
 from shared.ltx.runtime import runtime as ltx_runtime
+from shared.ltx.runtime import segmented as ltx_segmented
 from shared.lora import config as lora_config_module
 from shared.ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
+from shared.segmented_executor import build_segment_plan
 from shared.timeline import (
     GENERATION_MODE_FORCE_FULL_TIMELINE,
     GENERATION_MODE_FORCE_SELECTED,
@@ -46,7 +52,7 @@ from shared.timeline import (
     create_resolved_lora_snapshot,
     validate_video_timeline,
 )
-from shared.timeline.take_capture import TAKE_CAPTURE_TYPE
+from shared.timeline.take_capture import TAKE_CAPTURE_TYPE, build_take_capture_metadata
 
 
 def _registered_node(node_id):
@@ -244,6 +250,104 @@ def _shot_text_plan(duration=1.0, prompt="wide shot", *, privacy_mode: bool = Fa
     )
     assert validation["is_valid"] is True
     return plan
+
+
+def _two_shot_boundary_plan(
+    previous_clip_path: Path,
+    *,
+    mode: str = BOUNDARY_MODE_CONTINUOUS_SHOT,
+    tail_frames: int = 6,
+    transition_prompt: str = "",
+):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["project"]["frame_rate"] = 24.0
+    timeline["project"]["quality_preset"] = QUALITY_PRESET_QUICK_DRAFT
+    timeline["assets"].append(
+        {
+            "asset_id": "asset_previous_take",
+            "type": ASSET_TYPE_VIDEO,
+            "source_kind": ASSET_SOURCE_GENERATED,
+            "path": str(previous_clip_path),
+            "name": previous_clip_path.name,
+        }
+    )
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_001",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "previous shot",
+            },
+            {
+                "item_id": "section_002",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "next shot",
+            },
+        ]
+    )
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_previous",
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_001"],
+            "takes": [
+                {
+                    "take_id": "take_previous",
+                    "asset_id": "asset_previous_take",
+                    "status": TAKE_STATUS_ACCEPTED,
+                }
+            ],
+            "accepted_take_id": "take_previous",
+        },
+        {
+            "shot_id": "shot_next",
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "section_ids": ["section_002"],
+        },
+    ]
+    timeline["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_previous_next",
+            "left_shot_id": "shot_previous",
+            "right_shot_id": "shot_next",
+            "mode": mode,
+            "tail_frames": tail_frames,
+            "blend_frames": 3,
+            "transition_prompt": transition_prompt,
+        }
+    ]
+    timeline["ui_state"]["selected_item_id"] = "shot_next"
+    plan, validation, _debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(debug_mode=True),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+    assert validation["is_valid"] is True
+    return plan
+
+
+def _single_segment_for_plan(plan: dict):
+    frame_count = int(plan["resolved_output"]["frame_count"])
+    return {
+        "id": "gen_001",
+        "index": 0,
+        "start_frame": 0,
+        "end_frame_exclusive": frame_count,
+        "frame_count": frame_count,
+        "visible_frame_count": frame_count,
+        "generation_frame_count": frame_count,
+        "trim_leading_frames": 0,
+        "trim_trailing_frames": 0,
+        "source_section_ids": [entry.get("item_id") for entry in plan.get("section_plan", [])],
+        "continuity": {"mode": "initial", "continuity_frame_count": 0},
+    }
 
 
 def test_ltx_runtime_skipped_plan_returns_no_take_registration_without_model_inputs():
@@ -901,11 +1005,12 @@ def test_ltx_runtime_reports_shot_continuity_debug():
     plan["model_specific"]["ltx"]["continuity_context"] = {
         "policy": "continuous",
         "source_status": "available",
-        "model_status": "unsupported",
+        "model_status": "applied",
         "boundary_id": "boundary_continuous",
         "source_shot_id": "shot_previous",
         "target_shot_id": "shot_section_001",
         "tail_frames": 6,
+        "effective_tail_frames": 9,
         "blend_frames": 0,
         "clip_reference": {
             "source_kind": "accepted_take",
@@ -914,12 +1019,164 @@ def test_ltx_runtime_reports_shot_continuity_debug():
             "asset_id": "asset_previous_take",
         },
     }
+    plan["model_specific"]["ltx"]["boundary_conditioning"] = {
+        "policy": "continuous",
+        "mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
+        "model_status": "applied",
+        "boundary_id": "boundary_continuous",
+        "source_shot_id": "shot_previous",
+        "target_shot_id": "shot_section_001",
+        "asset_id": "asset_previous_take",
+        "requested_tail_frames": 6,
+        "effective_tail_frames": 9,
+    }
 
     *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert runtime_debug["summary"]["shot_continuity_policy"] == "continuous"
-    assert runtime_debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert runtime_debug["summary"]["shot_continuity_status"] == "applied"
+    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
     assert runtime_debug["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
+
+
+def test_ltx_runtime_injects_transient_previous_tail_guide_and_take_metadata(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _two_shot_boundary_plan(video_path, tail_frames=6)
+
+    (
+        *_prefix,
+        guide_data,
+        source_images,
+        _source_audio,
+        _source_fps,
+        source_count,
+        runtime_debug,
+    ) = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert source_count == 0
+    assert tuple(source_images.shape[:3]) == (
+        1,
+        plan["resolved_output"]["height"],
+        plan["resolved_output"]["width"],
+    )
+    refs = [entry for entry in guide_data["reference_images"] if entry["kind"] == "boundary_conditioning"]
+    assert len(refs) == 1
+    reference = refs[0]
+    assert reference["transient"] is True
+    assert reference["insert_frame"] == 0
+    assert reference["boundary_id"] == "boundary_previous_next"
+    assert reference["source_shot_id"] == "shot_previous"
+    assert reference["target_shot_id"] == "shot_next"
+    assert reference["requested_tail_frames"] == 6
+    assert reference["effective_tail_frames"] == 9
+    assert reference["selected_frame_count"] == 9
+    assert guide_data["insert_frames"] == [0]
+    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_debug["boundary_conditioning"]["media_item_id"] == "boundary_tail_boundary_previous_next"
+    assert runtime_debug["guide_data"]["references"][0]["kind"] == "boundary_conditioning"
+    assert runtime_debug["guide_data"]["references"][0]["selected_frame_count"] == 9
+    assert "image" not in runtime_debug["guide_data"]["references"][0]
+    assert "path" not in runtime_debug["guide_data"]["references"][0]
+
+    metadata = runtime_debug["take_registration"]
+    boundary_metadata = metadata["take"]["metadata"]["model_specific"]["ltx"]["boundary_conditioning"]
+    assert boundary_metadata["model_status"] == "applied"
+    assert boundary_metadata["boundary_id"] == "boundary_previous_next"
+    assert boundary_metadata["effective_tail_frames"] == 9
+    assert "path" not in boundary_metadata
+
+
+def test_ltx_segment_plan_preserves_and_applies_transient_boundary_guide(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _two_shot_boundary_plan(video_path, tail_frames=6)
+    segment_plan = build_segment_plan(
+        plan,
+        _single_segment_for_plan(plan),
+        model_key="ltx",
+    )
+
+    (
+        *_prefix,
+        guide_data,
+        _source_images,
+        _source_audio,
+        _source_fps,
+        _source_count,
+        runtime_debug,
+    ) = build_ltx_runtime_outputs(**_runtime_args(segment_plan))
+
+    refs = [entry for entry in guide_data["reference_images"] if entry["kind"] == "boundary_conditioning"]
+    debug_refs = [
+        entry
+        for entry in runtime_debug["guide_data"]["references"]
+        if entry["kind"] == "boundary_conditioning"
+    ]
+    assert len(refs) == 1
+    assert guide_data["insert_frames"] == [0]
+    assert runtime_debug["summary"]["guide_count"] == 1
+    assert runtime_debug["summary"]["applied_guides"] == 1
+    assert debug_refs == [
+        {
+            "id": "boundary_tail_boundary_previous_next",
+            "kind": "boundary_conditioning",
+            "section_type": SECTION_TYPE_VIDEO,
+            "insert_frame": 0,
+            "strength": 1.0,
+            "transient": True,
+            "boundary_id": "boundary_previous_next",
+            "boundary_mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
+            "boundary_policy": "continuous",
+            "source_shot_id": "shot_previous",
+            "target_shot_id": "shot_next",
+            "requested_tail_frames": 6,
+            "effective_tail_frames": 9,
+            "selected_frame_count": 9,
+            "requested_frame_count": 9,
+            "guidance_range": VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+        }
+    ]
+
+
+def test_ltx_segmented_take_metadata_includes_boundary_conditioning(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _two_shot_boundary_plan(video_path, tail_frames=6)
+    segment = _single_segment_for_plan(plan)
+    segment_plan = build_segment_plan(plan, segment, model_key="ltx")
+
+    metadata = build_take_capture_metadata(
+        segment_plan,
+        model_key="ltx",
+        model_family="LTX",
+        model_version="2.3",
+        source="LTX Segmented Executor",
+        segment=segment,
+        model_specific=ltx_segmented._segment_take_model_specific(segment_plan, 0),
+    )
+
+    boundary_metadata = metadata["take"]["metadata"]["model_specific"]["ltx"]["boundary_conditioning"]
+    assert boundary_metadata["model_status"] == "applied"
+    assert boundary_metadata["boundary_id"] == "boundary_previous_next"
+    assert boundary_metadata["source_shot_id"] == "shot_previous"
+    assert boundary_metadata["target_shot_id"] == "shot_next"
+    assert boundary_metadata["effective_tail_frames"] == 9
+    assert "path" not in boundary_metadata
+
+
+def test_ltx_transition_boundary_plan_merges_prompt_before_runtime(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=12)
+    plan = _two_shot_boundary_plan(
+        video_path,
+        mode=BOUNDARY_MODE_TRANSITION,
+        tail_frames=6,
+        transition_prompt="dissolve through rain",
+    )
+
+    assert plan["model_specific"]["ltx"]["boundary_conditioning"]["transition_prompt_applied"] is True
+    assert plan["prompt_plan"][0]["runtime_prompt"] == "dissolve through rain. next shot"
 
 
 def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monkeypatch):

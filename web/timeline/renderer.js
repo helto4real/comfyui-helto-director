@@ -87,6 +87,7 @@ import {
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
   fitLastDirectorSectionToDuration,
+  findBoundary,
   findBoundaryBetweenShots,
   findSection,
   findShot,
@@ -566,16 +567,24 @@ export class TimelineRenderer {
       open: this.openMenu === id,
       onToggle: () => {
         this.openMenu = this.openMenu === id ? null : id;
-        this.render();
+        if (boundary) {
+          this.commitMutation((currentTimeline) => selectItem(currentTimeline, boundary.boundary_id), "select", { pushUndo: false });
+        } else {
+          this.render();
+        }
       },
       onChange: (nextValue) => {
         this.openMenu = null;
         this.commitMutation((currentTimeline) => {
-          createOrUpdateBoundaryBetweenShots(currentTimeline, leftShot.shot_id, rightShot.shot_id, { mode: nextValue });
+          const liveBoundary = createOrUpdateBoundaryBetweenShots(currentTimeline, leftShot.shot_id, rightShot.shot_id, { mode: nextValue });
+          if (liveBoundary) selectItem(currentTimeline, liveBoundary.boundary_id);
         }, "boundary change");
       },
     });
     wrapper.classList.add("htd-boundary-control");
+    wrapper.dataset.itemId = boundary?.boundary_id ?? id;
+    wrapper.classList.toggle("is-selected", Boolean(boundary && isItemSelected(timeline, boundary.boundary_id)));
+    wrapper.classList.toggle("is-primary-selected", Boolean(boundary && timeline.ui_state.selected_item_id === boundary.boundary_id));
     wrapper.style.left = `${secondsToPixels(rightShot.start_time, timeline, this.viewportWidth)}px`;
     wrapper.title = `${shotDisplayLabel(timeline, leftShot)} to ${shotDisplayLabel(timeline, rightShot)}`;
     return wrapper;
@@ -671,9 +680,10 @@ export class TimelineRenderer {
     const selected = timeline.director_track.sections.find((section) => section.item_id === timeline.ui_state.selected_item_id);
     const selectedAudio = findAudioClip(timeline, timeline.ui_state.selected_item_id);
     const selectedShot = findShot(timeline, timeline.ui_state.selected_item_id);
+    const selectedBoundary = findBoundary(timeline, timeline.ui_state.selected_item_id);
     const activeShot = selectedShot ?? (selected ? findShotForSection(timeline, selected.item_id) : null);
-    inspector.classList.toggle("has-selection", Boolean(selected || selectedAudio || selectedShot));
-    if (!selected && !selectedAudio && !selectedShot) return inspector;
+    inspector.classList.toggle("has-selection", Boolean(selected || selectedAudio || selectedShot || selectedBoundary));
+    if (!selected && !selectedAudio && !selectedShot && !selectedBoundary) return inspector;
 
     const panel = el("div", "htd-inspector-panel");
     if (selected?.type === ASSET_TYPE_IMAGE) {
@@ -728,9 +738,68 @@ export class TimelineRenderer {
     } else if (selectedShot) {
       panel.classList.add("is-shot-inspector");
       panel.append(this.renderShotInspector(timeline, selectedShot, { standalone: true }));
+    } else if (selectedBoundary) {
+      panel.classList.add("is-boundary-inspector");
+      panel.append(this.renderBoundaryInspector(timeline, selectedBoundary));
     }
     inspector.append(panel);
     return inspector;
+  }
+
+  renderBoundaryInspector(timeline, boundary) {
+    const leftShot = findShot(timeline, boundary.left_shot_id);
+    const rightShot = findShot(timeline, boundary.right_shot_id);
+    const title = [leftShot, rightShot].every(Boolean)
+      ? `${shotDisplayLabel(timeline, leftShot)} to ${shotDisplayLabel(timeline, rightShot)}`
+      : "Boundary";
+    const wrapper = el("div", "htd-boundary-inspector");
+    wrapper.append(
+      inspectorTitle(title),
+      this.renderInspectorControlRow(
+        this.renderInspectorCompactField("Mode:", this.renderBoundaryModeField(boundary), "is-boundary-mode"),
+        this.renderInspectorCompactField("Tail:", this.renderNumberField(boundary, "tail_frames", "Tail Frames", { min: 0, step: 1 })),
+        this.renderInspectorCompactField("Blend:", this.renderNumberField(boundary, "blend_frames", "Blend Frames", { min: 0, step: 1 })),
+      ),
+      this.renderInspectorControlRow(
+        this.renderInspectorCompactField("Character Refs:", this.renderCheckboxField(boundary, "reuse_character_refs", "Reuse Character References"), "is-boundary-toggle"),
+        this.renderInspectorCompactField("Style:", this.renderCheckboxField(boundary, "reuse_style", "Reuse Style"), "is-boundary-toggle"),
+      ),
+      this.renderInspectorRow(
+        "Transition",
+        this.renderTextField(boundary, "transition_prompt", "Transition Prompt", {
+          multiline: true,
+          rows: 3,
+          className: "htd-field htd-boundary-prompt",
+        }),
+        "is-transition-prompt",
+      ),
+    );
+    return wrapper;
+  }
+
+  renderBoundaryModeField(boundary) {
+    const id = `boundary-inspector-mode-${boundary.boundary_id}`;
+    return iconMenuControl({
+      id,
+      title: "Boundary Mode",
+      iconName: "boundary",
+      value: boundary.mode,
+      options: BOUNDARY_MODES,
+      placement: "above-end",
+      showValue: true,
+      open: this.openMenu === id,
+      onToggle: () => {
+        this.openMenu = this.openMenu === id ? null : id;
+        this.render();
+      },
+      onChange: (nextValue) => {
+        this.openMenu = null;
+        this.commitMutation((timeline) => {
+          const liveBoundary = findBoundary(timeline, boundary.boundary_id);
+          if (liveBoundary) liveBoundary.mode = nextValue;
+        }, "boundary change");
+      },
+    });
   }
 
   renderShotInspector(timeline, shot, options = {}) {
@@ -2239,7 +2308,7 @@ export class TimelineRenderer {
   }
 
   focusTimelineItem(itemId, fallbackTarget = null) {
-    const target = fallbackTarget ?? Array.from(this.container.querySelectorAll?.(".htd-item, .htd-shot-band") ?? [])
+    const target = fallbackTarget ?? Array.from(this.container.querySelectorAll?.(".htd-item, .htd-shot-band, .htd-boundary-control") ?? [])
       .find((item) => item.dataset?.itemId === itemId);
     target?.focus?.({ preventScroll: true });
   }
@@ -2912,6 +2981,7 @@ function findAudioClip(timeline, itemId) {
 }
 
 function resolveLiveTimelineItem(timeline, item) {
+  if (item?.boundary_id) return findBoundary(timeline, item.boundary_id) ?? item;
   const itemId = item?.item_id;
   if (!itemId) return item;
   return findSection(timeline, itemId) ?? findAudioClip(timeline, itemId) ?? item;
@@ -2934,7 +3004,8 @@ function getInspectorHeight(timeline) {
   const selected = timeline?.director_track?.sections?.find((section) => section.item_id === timeline?.ui_state?.selected_item_id);
   const selectedAudio = findAudioClip(timeline, timeline?.ui_state?.selected_item_id);
   const selectedShot = findShot(timeline, timeline?.ui_state?.selected_item_id);
-  return selected || selectedAudio || selectedShot ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
+  const selectedBoundary = findBoundary(timeline, timeline?.ui_state?.selected_item_id);
+  return selected || selectedAudio || selectedShot || selectedBoundary ? INSPECTOR_EDITOR_HEIGHT : INSPECTOR_HEIGHT;
 }
 
 function getRenderedInspectorHeight(timeline, widgetHeight) {
@@ -3599,6 +3670,7 @@ function installStyles(documentRef) {
     .htd-inspector-panel.is-section-inspector { display: flex; flex-direction: column; gap: 7px; align-content: start; }
     .htd-inspector-panel.is-audio-inspector { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)); grid-auto-rows: min-content; gap: 7px 10px; align-content: start; }
     .htd-inspector-panel.is-shot-inspector { display: flex; flex-direction: column; gap: 7px; align-content: start; }
+    .htd-inspector-panel.is-boundary-inspector { display: flex; flex-direction: column; gap: 7px; align-content: start; }
     .htd-inspector-title { grid-column: 1 / -1; color: var(--htd-text); font-weight: 700; font-size: 12px; letter-spacing: 0.02em; line-height: 16px; }
     .htd-section-inspector-header { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 7px; border-bottom: 1px solid var(--htd-border); }
     .htd-section-header-actions { min-width: 0; display: flex; align-items: center; gap: 6px; }
@@ -3612,6 +3684,8 @@ function installStyles(documentRef) {
     .htd-inspector-control-row { min-height: 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
     .htd-inspector-compact-field { min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--htd-text-dim); }
     .htd-inspector-compact-field.is-strength { flex: 1 1 320px; }
+    .htd-inspector-compact-field.is-boundary-mode { flex: 0 0 auto; }
+    .htd-inspector-compact-field.is-boundary-toggle { min-height: 26px; }
     .htd-inspector-compact-label { flex: 0 0 auto; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-text-faint); }
     .htd-inspector-compact-field .htd-menu { flex: 0 0 auto; }
     .htd-prompt-wrap { position: relative; width: 100%; min-width: 0; flex: 1 1 auto; display: flex; align-items: stretch; }
@@ -3626,6 +3700,10 @@ function installStyles(documentRef) {
     .htd-reference-completion-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-accent-strong); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
     .htd-reference-completion-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-text-dim); font-size: 10px; }
     .htd-field { min-width: 0; width: 100%; height: 26px; box-sizing: border-box; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: var(--htd-text); padding: 0 8px; transition: border-color .12s ease, box-shadow .12s ease; }
+    .htd-boundary-inspector { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+    .htd-boundary-prompt { min-height: 58px; height: 58px; padding: 6px 8px; line-height: 1.35; resize: vertical; }
+    .htd-inspector-row.is-transition-prompt { align-items: flex-start; }
+    .htd-inspector-row.is-transition-prompt .htd-inspector-label { padding-top: 6px; }
     .htd-number { width: 64px; height: 26px; box-sizing: border-box; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: var(--htd-text); padding: 0 6px; transition: border-color .12s ease, box-shadow .12s ease; }
     .htd-strength-control { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 6px; }
     .htd-strength-slider { min-width: 70px; flex: 1 1 auto; accent-color: var(--htd-accent); }

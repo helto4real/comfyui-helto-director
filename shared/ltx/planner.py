@@ -13,6 +13,10 @@ from ..contracts.validation import (
     flatten_validation_result,
 )
 from ..contracts.video_timeline import (
+    BOUNDARY_MODE_BLEND_SEAM,
+    BOUNDARY_MODE_CONTINUOUS_SHOT,
+    BOUNDARY_MODE_TRANSITION,
+    CROP_MODE_CROP,
     MODEL_LORA_MODEL_LTX_2_3,
     MODEL_LORA_TARGET_MAIN,
     QUALITY_PRESET_DRAFT,
@@ -23,6 +27,8 @@ from ..contracts.video_timeline import (
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
+    VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+    VIDEO_TIMING_USE_SOURCE_TIMING,
 )
 from ..timeline import (
     GENERATION_MODE_MISSING_ONLY,
@@ -54,6 +60,7 @@ from .references import build_ltx_character_reference_plan
 
 LTX_PLAN_SCHEMA_VERSION = "1.0"
 LTX_PLAN_TYPE = "LTX_TIMELINE_PLAN"
+DEFAULT_BOUNDARY_TAIL_FRAMES = 5
 
 QUALITY_SHORT_EDGE = {
     QUALITY_PRESET_QUICK_DRAFT: 384,
@@ -111,6 +118,13 @@ def build_ltx_timeline_plan(
         else _empty_segmented_generation("ltx")
     )
     character_references, character_validation_entries = build_ltx_character_reference_plan(timeline, config, section_entries)
+    boundary_conditioning = _build_ltx_boundary_conditioning(
+        source_timeline,
+        shot_context,
+        config,
+        enabled=should_plan_generation,
+    )
+    continuity_context = _model_continuity_context(shot_context, boundary_conditioning)
     ltx_validation = _validate_ltx_inputs(
         timeline,
         config,
@@ -121,12 +135,15 @@ def build_ltx_timeline_plan(
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
         *generation_policy_validation_entries(generation_policy, "LTX Planner"),
-        *_shot_continuity_validation_entries(shot_context, "LTX Planner"),
+        *_shot_continuity_validation_entries(shot_context, "LTX Planner", boundary_conditioning),
         *flatten_validation_result(ltx_validation),
     ])
 
     prompt_entries = _build_prompt_plan(timeline, section_entries, character_references) if should_plan_generation else []
     media_entries = _build_media_plan(timeline, section_entries, config) if should_plan_generation else []
+    if should_plan_generation:
+        prompt_entries = _apply_ltx_transition_prompt(prompt_entries, boundary_conditioning)
+        media_entries = _append_ltx_boundary_media(media_entries, boundary_conditioning)
     audio_entries = _build_audio_plan(timeline, frame_rate) if should_plan_generation else []
 
     plan = {
@@ -158,6 +175,7 @@ def build_ltx_timeline_plan(
                 "timeline_structure": sequence_metadata,
                 "lora_resolution": lora_resolution,
                 "generation_policy": deepcopy(generation_policy),
+                "boundary_conditioning": boundary_conditioning,
                 "rules": deepcopy(config["rules"]),
             },
         },
@@ -165,7 +183,7 @@ def build_ltx_timeline_plan(
     }
     if shot_context is not None:
         plan["model_specific"]["ltx"]["shot_context"] = deepcopy(shot_context)
-        plan["model_specific"]["ltx"]["continuity_context"] = _model_continuity_context(shot_context)
+        plan["model_specific"]["ltx"]["continuity_context"] = continuity_context
     debug = _build_debug(
         timeline,
         config,
@@ -422,11 +440,13 @@ def _shot_selection_validation_entries(
 def _shot_continuity_validation_entries(
     shot_context: dict[str, Any] | None,
     source: str,
+    boundary_conditioning: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     continuity = _incoming_continuity(shot_context)
     if not continuity or continuity.get("policy") == "none":
         return []
-    if continuity.get("status") == "unavailable":
+    conditioning = boundary_conditioning if isinstance(boundary_conditioning, dict) else {}
+    if conditioning.get("model_status") == "unavailable" or continuity.get("status") == "unavailable":
         return [
             create_validation_entry(
                 "LTX_SHOT_CONTINUITY_SOURCE_MISSING",
@@ -436,20 +456,10 @@ def _shot_continuity_validation_entries(
                 continuity.get("boundary_id"),
                 "Selected shot requests continuity, but the previous clip reference is unavailable.",
                 "Accept a take or assign an imported clip on the previous shot, or change the boundary to Hard Cut.",
-                _continuity_warning_details(continuity),
-            )
-        ]
-    if continuity.get("status") == "available":
-        return [
-            create_validation_entry(
-                "LTX_SHOT_CONTINUITY_UNSUPPORTED",
-                SEVERITY_WARNING,
-                source,
-                "Boundary",
-                continuity.get("boundary_id"),
-                "Selected shot has previous-tail continuity context, but LTX shot-level continuity consumption is not implemented yet.",
-                "Generate this shot normally; sequence assembly will still apply the boundary fallback or blend behavior.",
-                _continuity_warning_details(continuity),
+                {
+                    **_continuity_warning_details(continuity),
+                    "boundary_conditioning": _conditioning_warning_details(conditioning),
+                },
             )
         ]
     return []
@@ -465,6 +475,8 @@ def _build_debug(
     generation_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ltx = plan["model_specific"]["ltx"]
+    continuity_context = ltx.get("continuity_context") if isinstance(ltx.get("continuity_context"), dict) else _model_continuity_context(shot_context, ltx.get("boundary_conditioning"))
+    boundary_conditioning = ltx.get("boundary_conditioning") if isinstance(ltx.get("boundary_conditioning"), dict) else {}
     timeline_structure = ltx.get("timeline_structure", {})
     lora_resolution = ltx.get("lora_resolution", {})
     summary = {
@@ -480,7 +492,11 @@ def _build_debug(
         "info_count": len(validation["info"]),
     }
     summary.update(generation_policy_debug_summary(generation_policy))
-    _add_shot_debug_summary(summary, shot_context, generation_policy)
+    _add_shot_debug_summary(summary, shot_context, generation_policy, continuity_context=continuity_context)
+    if boundary_conditioning:
+        summary["boundary_conditioning_status"] = boundary_conditioning.get("model_status")
+        summary["boundary_conditioning_mode"] = boundary_conditioning.get("mode")
+        summary["boundary_conditioning_effective_tail_frames"] = boundary_conditioning.get("effective_tail_frames")
     debug = {
         "type": "DEBUG_INFO",
         "source": "LTX Planner",
@@ -490,7 +506,8 @@ def _build_debug(
     if bool(config.get("debug_mode")) and shot_context is not None:
         debug["details"] = {
             "shot_context": deepcopy(shot_context),
-            "continuity_context": _model_continuity_context(shot_context),
+            "continuity_context": deepcopy(continuity_context),
+            "boundary_conditioning": deepcopy(boundary_conditioning),
             "generation_policy": deepcopy(generation_policy),
         }
     return debug
@@ -500,13 +517,15 @@ def _add_shot_debug_summary(
     summary: dict[str, Any],
     shot_context: dict[str, Any] | None,
     generation_policy: dict[str, Any] | None,
+    *,
+    continuity_context: dict[str, Any] | None = None,
 ) -> None:
     if shot_context is not None:
         summary["selected_shot_id"] = shot_context.get("shot_id")
         summary["shot_original_start_time"] = shot_context.get("original_start_time")
         summary["shot_original_end_time"] = shot_context.get("original_end_time")
         summary["shot_duration_seconds"] = shot_context.get("duration_seconds")
-        continuity = _model_continuity_context(shot_context)
+        continuity = continuity_context if isinstance(continuity_context, dict) else _model_continuity_context(shot_context)
         summary["shot_continuity_policy"] = continuity.get("policy")
         summary["shot_continuity_status"] = continuity.get("model_status")
         summary["shot_continuity_tail_frames"] = continuity.get("tail_frames")
@@ -591,14 +610,28 @@ def _incoming_continuity(shot_context: dict[str, Any] | None) -> dict[str, Any] 
     return continuity if isinstance(continuity, dict) else None
 
 
-def _model_continuity_context(shot_context: dict[str, Any] | None) -> dict[str, Any]:
+def _incoming_boundary(shot_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(shot_context, dict):
+        return {}
+    boundary_context = shot_context.get("boundary_context")
+    if not isinstance(boundary_context, dict):
+        return {}
+    boundary = boundary_context.get("incoming_boundary")
+    return boundary if isinstance(boundary, dict) else {}
+
+
+def _model_continuity_context(
+    shot_context: dict[str, Any] | None,
+    boundary_conditioning: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     continuity = _incoming_continuity(shot_context) or {}
     policy = continuity.get("policy") or "none"
     status = continuity.get("status") or "not_requested"
+    conditioning = boundary_conditioning if isinstance(boundary_conditioning, dict) else {}
     if policy == "none":
         model_status = "not_requested"
-    elif status == "available":
-        model_status = "unsupported"
+    elif conditioning.get("model_status"):
+        model_status = str(conditioning.get("model_status"))
     else:
         model_status = status
     return {
@@ -609,13 +642,16 @@ def _model_continuity_context(shot_context: dict[str, Any] | None) -> dict[str, 
         "source_shot_id": continuity.get("source_shot_id"),
         "target_shot_id": continuity.get("target_shot_id"),
         "tail_frames": int(continuity.get("tail_frames") or 0),
+        "effective_tail_frames": int(conditioning.get("effective_tail_frames") or continuity.get("tail_frames") or 0),
         "blend_frames": int(continuity.get("blend_frames") or 0),
         "clip_reference": deepcopy(continuity.get("clip_reference")),
+        "asset_id": conditioning.get("asset_id"),
+        "media_item_id": conditioning.get("media_item_id"),
+        "transition_prompt_applied": bool(conditioning.get("transition_prompt_applied")),
         "warning_code": continuity.get("warning_code"),
         "message": (
-            "LTX shot-level continuity consumption is not implemented."
-            if model_status == "unsupported"
-            else continuity.get("message")
+            conditioning.get("message")
+            or continuity.get("message")
         ),
     }
 
@@ -632,6 +668,222 @@ def _continuity_warning_details(continuity: dict[str, Any]) -> dict[str, Any]:
         "clip_reference": deepcopy(continuity.get("clip_reference")),
         "warning_code": continuity.get("warning_code"),
     }
+
+
+def _conditioning_warning_details(conditioning: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(conditioning, dict):
+        return {}
+    return {
+        "model_status": conditioning.get("model_status"),
+        "asset_id": conditioning.get("asset_id"),
+        "source_shot_id": conditioning.get("source_shot_id"),
+        "target_shot_id": conditioning.get("target_shot_id"),
+        "requested_tail_frames": conditioning.get("requested_tail_frames"),
+        "effective_tail_frames": conditioning.get("effective_tail_frames"),
+        "fallback_reason": conditioning.get("fallback_reason"),
+    }
+
+
+def _build_ltx_boundary_conditioning(
+    source_timeline: dict[str, Any],
+    shot_context: dict[str, Any] | None,
+    config: dict[str, Any],
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    continuity = _incoming_continuity(shot_context) or {}
+    boundary = _incoming_boundary(shot_context)
+    policy = str(continuity.get("policy") or "none")
+    mode = str(boundary.get("mode") or "")
+    if not mode:
+        mode = {
+            "continuous": BOUNDARY_MODE_CONTINUOUS_SHOT,
+            "blend": BOUNDARY_MODE_BLEND_SEAM,
+            "transition": BOUNDARY_MODE_TRANSITION,
+        }.get(policy, "Hard Cut")
+    base = {
+        "type": "ltx_previous_tail",
+        "mode": mode,
+        "policy": policy,
+        "model_status": "not_requested",
+        "status": "not_requested",
+        "source_status": str(continuity.get("status") or "not_requested"),
+        "boundary_id": continuity.get("boundary_id"),
+        "source_shot_id": continuity.get("source_shot_id"),
+        "target_shot_id": continuity.get("target_shot_id"),
+        "requested_tail_frames": int(continuity.get("tail_frames") or 0),
+        "effective_tail_frames": 0,
+        "blend_frames": int(continuity.get("blend_frames") or 0),
+        "transition_prompt": str(boundary.get("transition_prompt") or ""),
+        "transition_prompt_applied": False,
+        "reuse_character_refs": boundary.get("reuse_character_refs"),
+        "reuse_style": boundary.get("reuse_style"),
+        "clip_reference": deepcopy(continuity.get("clip_reference")),
+        "diagnostics": [],
+        "message": "Boundary does not request LTX continuity conditioning.",
+    }
+    if policy == "none":
+        return base
+    if not enabled:
+        base["message"] = "Generation was skipped by Director policy; no LTX boundary conditioning was applied."
+        return base
+
+    clip_reference = continuity.get("clip_reference") if isinstance(continuity.get("clip_reference"), dict) else None
+    if continuity.get("status") != "available" or not clip_reference:
+        base.update(
+            {
+                "model_status": "unavailable",
+                "status": "unavailable",
+                "fallback_reason": continuity.get("warning_code") or "continuity_source_unavailable",
+                "message": continuity.get("message") or "Previous clip reference is unavailable.",
+            }
+        )
+        return base
+
+    assets_by_id = {
+        str(asset.get("asset_id")): asset
+        for asset in source_timeline.get("assets", [])
+        if isinstance(asset, dict) and asset.get("asset_id") is not None
+    }
+    asset_id = str(clip_reference.get("asset_id") or "")
+    asset = assets_by_id.get(asset_id)
+    path = asset.get("path") or asset.get("file_path") if isinstance(asset, dict) else None
+    if not isinstance(asset, dict) or asset.get("type") != SECTION_TYPE_VIDEO or not path:
+        fallback = "continuity_asset_missing"
+        if isinstance(asset, dict) and asset.get("type") != SECTION_TYPE_VIDEO:
+            fallback = "continuity_asset_not_video"
+        elif isinstance(asset, dict):
+            fallback = "continuity_asset_path_missing"
+        base.update(
+            {
+                "model_status": "unavailable",
+                "status": "unavailable",
+                "asset_id": asset_id or None,
+                "fallback_reason": fallback,
+                "message": "Previous clip asset is unavailable for LTX boundary conditioning.",
+            }
+        )
+        return base
+
+    requested_tail = _requested_boundary_tail_frames(continuity.get("tail_frames"))
+    effective_tail = _ltx_guide_frame_count_from_requested(requested_tail)
+    media_item_id = f"boundary_tail_{str(base.get('boundary_id') or asset_id or 'incoming')}"
+    source_in = clip_reference.get("source_in")
+    source_out = clip_reference.get("source_out")
+    base.update(
+        {
+            "model_status": "applied",
+            "status": "applied",
+            "asset_id": asset_id,
+            "asset_type": asset.get("type"),
+            "source_kind": clip_reference.get("source_kind"),
+            "take_id": clip_reference.get("take_id"),
+            "path": path,
+            "source_in": source_in,
+            "source_out": source_out,
+            "requested_tail_frames": requested_tail,
+            "effective_tail_frames": effective_tail,
+            "media_item_id": media_item_id,
+            "guide_strength": float(config.get("video_guide_strength") if config.get("video_guide_strength") is not None else 1.0),
+            "transition_prompt_applied": policy == "transition" and bool(str(boundary.get("transition_prompt") or "").strip()),
+            "message": "LTX will use the previous clip tail as transient start guidance.",
+        }
+    )
+    if base["transition_prompt_applied"]:
+        base["message"] = "LTX will use previous-tail guidance and merge the transition prompt into the first prompt region."
+    return base
+
+
+def _ltx_guide_frame_count_from_requested(value: Any) -> int:
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = DEFAULT_BOUNDARY_TAIL_FRAMES
+    requested = max(1, requested)
+    if requested <= 1:
+        return 1
+    return ((requested - 1 + 7) // 8) * 8 + 1
+
+
+def _requested_boundary_tail_frames(value: Any) -> int:
+    if value is None or value == "":
+        return DEFAULT_BOUNDARY_TAIL_FRAMES
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return DEFAULT_BOUNDARY_TAIL_FRAMES
+
+
+def _append_ltx_boundary_media(
+    media_entries: list[dict[str, Any]],
+    boundary_conditioning: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if boundary_conditioning.get("model_status") != "applied":
+        return media_entries
+    path = boundary_conditioning.get("path")
+    if not path:
+        return media_entries
+    media = [*media_entries]
+    media.append(
+        {
+            "item_id": boundary_conditioning.get("media_item_id"),
+            "shot_id": boundary_conditioning.get("target_shot_id"),
+            "section_type": SECTION_TYPE_VIDEO,
+            "asset_id": boundary_conditioning.get("asset_id"),
+            "asset_type": boundary_conditioning.get("asset_type"),
+            "source_kind": boundary_conditioning.get("source_kind"),
+            "take_id": boundary_conditioning.get("take_id"),
+            "path": path,
+            "ltx_role": "Source Video Guides",
+            "guide_strength": boundary_conditioning.get("guide_strength", 1.0),
+            "crop_mode": CROP_MODE_CROP,
+            "source_in": boundary_conditioning.get("source_in"),
+            "source_out": boundary_conditioning.get("source_out"),
+            "timing_mode": VIDEO_TIMING_USE_SOURCE_TIMING,
+            "video_guidance_range": VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+            "video_guidance_frame_count": boundary_conditioning.get("effective_tail_frames"),
+            "insert_frame": 0,
+            "transient": True,
+            "boundary_id": boundary_conditioning.get("boundary_id"),
+            "boundary_mode": boundary_conditioning.get("mode"),
+            "boundary_policy": boundary_conditioning.get("policy"),
+            "requested_tail_frames": boundary_conditioning.get("requested_tail_frames"),
+            "effective_tail_frames": boundary_conditioning.get("effective_tail_frames"),
+            "source_shot_id": boundary_conditioning.get("source_shot_id"),
+            "target_shot_id": boundary_conditioning.get("target_shot_id"),
+        }
+    )
+    return media
+
+
+def _apply_ltx_transition_prompt(
+    prompt_entries: list[dict[str, Any]],
+    boundary_conditioning: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if boundary_conditioning.get("model_status") != "applied":
+        return prompt_entries
+    if boundary_conditioning.get("policy") != "transition":
+        return prompt_entries
+    transition_prompt = str(boundary_conditioning.get("transition_prompt") or "").strip()
+    if not transition_prompt or not prompt_entries:
+        return prompt_entries
+    prompts = [deepcopy(entry) for entry in prompt_entries]
+    first = prompts[0]
+    for key in ("raw_prompt", "runtime_prompt", "effective_prompt"):
+        first[key] = _merge_transition_prompt(transition_prompt, first.get(key))
+    first["boundary_transition_prompt"] = transition_prompt
+    first["boundary_transition_prompt_applied"] = True
+    first["boundary_id"] = boundary_conditioning.get("boundary_id")
+    return prompts
+
+
+def _merge_transition_prompt(transition_prompt: str, prompt: Any) -> str:
+    text = str(prompt or "").strip()
+    if not text:
+        return transition_prompt
+    if text.startswith(transition_prompt):
+        return text
+    return f"{transition_prompt}. {text}"
 
 
 def _resolve_asset(reference: Any, assets_by_id: dict[str, dict[str, Any]]) -> dict[str, Any] | None:

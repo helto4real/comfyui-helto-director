@@ -179,6 +179,7 @@ def _decode_sequence_clips(
             "asset_id": asset_id,
             "take_id": source.get("take_id"),
             "source_kind": source["source_kind"],
+            "boundary_conditioning": _take_boundary_conditioning_from_take(source.get("take")),
             "frames": fitted,
             "source_fps": float(source_fps),
             "decoded_frame_count": int(decoded_count),
@@ -230,6 +231,7 @@ def _resolve_shot_source(
         return {
             "source_kind": "accepted_take",
             "take_id": accepted_take.get("take_id"),
+            "take": accepted_take,
             "asset": asset,
             "clip_instance": (
                 clip_instance
@@ -370,6 +372,11 @@ def _append_with_boundary(
         debug["boundaries"].append(boundary_debug)
         return torch.cat((current, next_frames), dim=0)
     if mode == BOUNDARY_MODE_TRANSITION:
+        if _has_generated_transition_boundary(previous_entry, next_entry, boundary):
+            boundary_debug["status"] = "transition_generated_bridge_concatenate"
+            boundary_debug["boundary_conditioning"] = deepcopy(next_entry.get("boundary_conditioning") or {})
+            debug["boundaries"].append(boundary_debug)
+            return torch.cat((current, next_frames), dim=0)
         boundary_debug["status"] = "transition_fallback_concatenate"
         boundary_debug["warnings"].append("Transition assembly is deferred; used concatenation.")
         _add_warning(
@@ -542,6 +549,51 @@ def _boundaries_by_pair(timeline: dict[str, Any]) -> dict[tuple[str, str], dict[
             continue
         output[(str(left), str(right))] = boundary
     return output
+
+
+def _take_boundary_conditioning_from_take(take: Any) -> dict[str, Any]:
+    if not isinstance(take, dict):
+        return {}
+    metadata = take.get("metadata") if isinstance(take.get("metadata"), dict) else {}
+    candidates = []
+    model_specific = metadata.get("model_specific") if isinstance(metadata, dict) else None
+    if isinstance(model_specific, dict):
+        candidates.append(model_specific.get("ltx"))
+    direct_model_specific = take.get("model_specific") if isinstance(take.get("model_specific"), dict) else None
+    if isinstance(direct_model_specific, dict):
+        candidates.append(direct_model_specific.get("ltx"))
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        boundary = candidate.get("boundary_conditioning")
+        if isinstance(boundary, dict):
+            return deepcopy(boundary)
+    return {}
+
+
+def _has_generated_transition_boundary(
+    previous_entry: dict[str, Any],
+    next_entry: dict[str, Any],
+    boundary: dict[str, Any] | None,
+) -> bool:
+    conditioning = next_entry.get("boundary_conditioning")
+    if not isinstance(conditioning, dict):
+        return False
+    if conditioning.get("model_status") != "applied" and conditioning.get("status") != "applied":
+        return False
+    if conditioning.get("policy") != "transition" and conditioning.get("mode") != BOUNDARY_MODE_TRANSITION:
+        return False
+    if isinstance(boundary, dict):
+        boundary_id = boundary.get("boundary_id")
+        if conditioning.get("boundary_id") and boundary_id and conditioning.get("boundary_id") != boundary_id:
+            return False
+    source_shot_id = conditioning.get("source_shot_id")
+    target_shot_id = conditioning.get("target_shot_id")
+    if source_shot_id and str(source_shot_id) != str(previous_entry.get("shot_id")):
+        return False
+    if target_shot_id and str(target_shot_id) != str(next_entry.get("shot_id")):
+        return False
+    return True
 
 
 def _can_blend(current: torch.Tensor, next_frames: torch.Tensor, blend_frames: int) -> bool:

@@ -441,6 +441,9 @@ def _runtime_debug(
     conditioning_frame_rate_applied: bool = False,
 ):
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
+    boundary_conditioning = plan.get("model_specific", {}).get("ltx", {}).get("boundary_conditioning", {})
+    if not isinstance(boundary_conditioning, dict):
+        boundary_conditioning = {}
     continuity = _runtime_continuity_debug(plan)
     lora_targets = (lora_report or {}).get("targets", {})
     main_loras = lora_targets.get(MODEL_LORA_TARGET_MAIN, {})
@@ -454,6 +457,7 @@ def _runtime_debug(
         model_specific={
             "runtime": "single",
             "lora_source_scope": (lora_report or {}).get("source_scope"),
+            "boundary_conditioning": _take_boundary_conditioning(boundary_conditioning),
         },
     )
     debug = {
@@ -471,15 +475,20 @@ def _runtime_debug(
             "lora_target_count": len(lora_targets),
             "shot_continuity_policy": continuity.get("policy"),
             "shot_continuity_status": continuity.get("model_status"),
+            "boundary_conditioning_status": boundary_conditioning.get("model_status"),
+            "boundary_conditioning_mode": boundary_conditioning.get("mode"),
+            "boundary_conditioning_effective_tail_frames": boundary_conditioning.get("effective_tail_frames"),
             "conditioning_frame_rate": conditioning_frame_rate,
             "conditioning_frame_rate_applied": bool(conditioning_frame_rate_applied),
         },
         "loras": deepcopy(lora_report or {}),
         "continuity": continuity,
+        "boundary_conditioning": deepcopy(boundary_conditioning),
         "prompt_relay": prompt_debug,
         "guide_data": {
             "insert_frames": list(guide_data.get("insert_frames", [])),
             "strengths": list(guide_data.get("strengths", [])),
+            "references": _guide_reference_debug(guide_data),
             "clean_pixel_frames": guide_data.get("clean_pixel_frames"),
             "clean_latent_frames": guide_data.get("clean_latent_frames"),
             "hidden_reference_count": guide_data.get("hidden_reference_count"),
@@ -505,11 +514,61 @@ def _runtime_debug(
     return debug
 
 
+def _guide_reference_debug(guide_data: dict[str, Any]) -> list[dict[str, Any]]:
+    references = []
+    for entry in guide_data.get("reference_images", []):
+        if not isinstance(entry, dict):
+            continue
+        references.append(
+            {
+                key: deepcopy(entry.get(key))
+                for key in (
+                    "id",
+                    "kind",
+                    "section_type",
+                    "insert_frame",
+                    "strength",
+                    "transient",
+                    "boundary_id",
+                    "boundary_mode",
+                    "boundary_policy",
+                    "source_shot_id",
+                    "target_shot_id",
+                    "requested_tail_frames",
+                    "effective_tail_frames",
+                    "selected_frame_count",
+                    "requested_frame_count",
+                    "guidance_range",
+                )
+                if key in entry
+            }
+        )
+    return references
+
+
 def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
     ltx = plan.get("model_specific", {}).get("ltx", {})
     continuity = ltx.get("continuity_context")
     if isinstance(continuity, dict):
         return deepcopy(continuity)
+    boundary_conditioning = ltx.get("boundary_conditioning")
+    if isinstance(boundary_conditioning, dict) and boundary_conditioning.get("policy"):
+        return {
+            "policy": boundary_conditioning.get("policy") or "none",
+            "source_status": boundary_conditioning.get("source_status") or "not_requested",
+            "model_status": boundary_conditioning.get("model_status") or "not_requested",
+            "boundary_id": boundary_conditioning.get("boundary_id"),
+            "source_shot_id": boundary_conditioning.get("source_shot_id"),
+            "target_shot_id": boundary_conditioning.get("target_shot_id"),
+            "tail_frames": int(boundary_conditioning.get("requested_tail_frames") or 0),
+            "effective_tail_frames": int(boundary_conditioning.get("effective_tail_frames") or 0),
+            "blend_frames": int(boundary_conditioning.get("blend_frames") or 0),
+            "clip_reference": deepcopy(boundary_conditioning.get("clip_reference")),
+            "asset_id": boundary_conditioning.get("asset_id"),
+            "media_item_id": boundary_conditioning.get("media_item_id"),
+            "transition_prompt_applied": bool(boundary_conditioning.get("transition_prompt_applied")),
+            "message": boundary_conditioning.get("message"),
+        }
     shot_context = ltx.get("shot_context")
     if not isinstance(shot_context, dict):
         return {
@@ -559,3 +618,37 @@ def _advanced_input_diagnostics(identity_anchor, sigmas) -> list[str]:
     if sigmas is not None and identity_anchor is None:
         diagnostics.append("sigmas input is connected but is only consumed when identity_anchor is connected.")
     return diagnostics
+
+
+def _take_boundary_conditioning(boundary_conditioning: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(boundary_conditioning, dict):
+        return {}
+    keys = (
+        "type",
+        "mode",
+        "policy",
+        "status",
+        "model_status",
+        "source_status",
+        "boundary_id",
+        "source_shot_id",
+        "target_shot_id",
+        "asset_id",
+        "asset_type",
+        "source_kind",
+        "take_id",
+        "media_item_id",
+        "requested_tail_frames",
+        "effective_tail_frames",
+        "blend_frames",
+        "transition_prompt_applied",
+        "reuse_character_refs",
+        "reuse_style",
+        "message",
+        "fallback_reason",
+    )
+    return {
+        key: deepcopy(boundary_conditioning.get(key))
+        for key in keys
+        if key in boundary_conditioning
+    }

@@ -84,6 +84,7 @@ def build_take_capture_metadata(
         **_runtime_output_settings(plan),
         **_strip_embedded_media(settings or {}),
     }
+    safe_model_specific = _strip_embedded_media(model_specific or {})
     take_metadata = {
         "source": str(source or ""),
         "expected_asset_type": str(expected_asset_type or ASSET_TYPE_VIDEO),
@@ -100,6 +101,10 @@ def build_take_capture_metadata(
     }
     if shot_ids:
         take_metadata["shot_ids"] = shot_ids
+    if safe_model_specific:
+        take_metadata["model_specific"] = {
+            model_key: deepcopy(safe_model_specific),
+        }
 
     envelope = {
         "schema_version": TAKE_CAPTURE_SCHEMA_VERSION,
@@ -139,7 +144,7 @@ def build_take_capture_metadata(
                 "source": str(source or ""),
                 "expected_asset_type": str(expected_asset_type or ASSET_TYPE_VIDEO),
                 "resolved_output": _resolved_output_summary(plan),
-                **_strip_embedded_media(model_specific or {}),
+                **deepcopy(safe_model_specific),
             }
         },
         "privacy": take_metadata["privacy"],

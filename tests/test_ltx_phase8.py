@@ -3,13 +3,17 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
     ASSET_SOURCE_GENERATED,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_BLEND_SEAM,
     BOUNDARY_MODE_CONTINUOUS_SHOT,
     BOUNDARY_MODE_HARD_CUT,
+    BOUNDARY_MODE_TRANSITION,
     LORA_MERGE_MODE_ADD_TO_GLOBAL,
     LORA_MERGE_MODE_DISABLE_LORAS,
     LORA_MERGE_MODE_REPLACE_GLOBAL,
@@ -129,7 +133,13 @@ def _two_shot_text_timeline() -> dict:
     return timeline
 
 
-def _two_shot_text_timeline_with_continuity() -> dict:
+def _two_shot_text_timeline_with_continuity(
+    *,
+    mode: str = BOUNDARY_MODE_CONTINUOUS_SHOT,
+    tail_frames: int = 6,
+    blend_frames: int = 3,
+    transition_prompt: str = "",
+) -> dict:
     timeline = _two_shot_text_timeline()
     timeline["assets"].append(
         {
@@ -167,8 +177,10 @@ def _two_shot_text_timeline_with_continuity() -> dict:
             "boundary_id": "boundary_continuous",
             "left_shot_id": "shot_section_001",
             "right_shot_id": "shot_section_002",
-            "mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
-            "tail_frames": 6,
+            "mode": mode,
+            "tail_frames": tail_frames,
+            "blend_frames": blend_frames,
+            "transition_prompt": transition_prompt,
         }
     ]
     return timeline
@@ -542,8 +554,19 @@ def test_ltx_planner_plans_selected_shot_timeline():
     assert debug["details"]["shot_context"] == shot_context
 
 
-def test_ltx_planner_reports_available_continuity_as_unsupported():
-    timeline = _two_shot_text_timeline_with_continuity()
+@pytest.mark.parametrize(
+    ("mode", "policy"),
+    [
+        (BOUNDARY_MODE_CONTINUOUS_SHOT, "continuous"),
+        (BOUNDARY_MODE_BLEND_SEAM, "blend"),
+        (BOUNDARY_MODE_TRANSITION, "transition"),
+    ],
+)
+def test_ltx_planner_marks_available_boundary_conditioning_as_applied(mode, policy):
+    timeline = _two_shot_text_timeline_with_continuity(
+        mode=mode,
+        transition_prompt="bridge through smoke" if mode == BOUNDARY_MODE_TRANSITION else "",
+    )
     timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_ltx_timeline_plan(
@@ -553,18 +576,79 @@ def test_ltx_planner_reports_available_continuity_as_unsupported():
     )
     ltx = plan["model_specific"]["ltx"]
     continuity = ltx["continuity_context"]
+    conditioning = ltx["boundary_conditioning"]
 
     assert validation["is_valid"] is True
-    assert [entry["code"] for entry in validation["warnings"]] == [
-        "LTX_SHOT_CONTINUITY_UNSUPPORTED"
-    ]
-    assert continuity["policy"] == "continuous"
+    assert validation["warnings"] == []
+    assert continuity["policy"] == policy
     assert continuity["source_status"] == "available"
-    assert continuity["model_status"] == "unsupported"
+    assert continuity["model_status"] == "applied"
     assert continuity["clip_reference"]["asset_id"] == "asset_previous_take"
-    assert debug["summary"]["shot_continuity_policy"] == "continuous"
-    assert debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert conditioning["policy"] == policy
+    assert conditioning["model_status"] == "applied"
+    assert conditioning["asset_id"] == "asset_previous_take"
+    assert conditioning["requested_tail_frames"] == 6
+    assert conditioning["effective_tail_frames"] == 9
+    assert conditioning["media_item_id"] == "boundary_tail_boundary_continuous"
+    media = next(entry for entry in plan["media_plan"] if entry["item_id"] == conditioning["media_item_id"])
+    assert media["transient"] is True
+    assert media["insert_frame"] == 0
+    assert media["video_guidance_frame_count"] == 9
+    assert debug["summary"]["shot_continuity_policy"] == policy
+    assert debug["summary"]["shot_continuity_status"] == "applied"
     assert debug["details"]["continuity_context"] == continuity
+    assert debug["details"]["boundary_conditioning"] == conditioning
+
+
+def test_ltx_planner_merges_transition_prompt_into_first_prompt_region_only():
+    timeline = _two_shot_text_timeline_with_continuity(
+        mode=BOUNDARY_MODE_TRANSITION,
+        transition_prompt="a glowing match cut",
+    )
+    timeline["director_track"]["sections"][1]["end_time"] = 2.0
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_003",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 2.0,
+            "end_time": 3.0,
+            "prompt": "second region",
+        }
+    )
+    timeline["sequence"]["shots"][1]["section_ids"] = ["section_002", "section_003"]
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, _debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(debug_mode=True),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    prompts = plan["prompt_plan"]
+    assert prompts[0]["item_id"] == "section_002"
+    assert prompts[0]["runtime_prompt"] == "a glowing match cut. second shot"
+    assert prompts[0]["boundary_transition_prompt_applied"] is True
+    assert prompts[1]["item_id"] == "section_003"
+    assert prompts[1]["runtime_prompt"] == "second region"
+
+
+def test_ltx_planner_resolves_zero_boundary_tail_to_one_guide_frame():
+    timeline = _two_shot_text_timeline_with_continuity(tail_frames=0)
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, _debug = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(debug_mode=True),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    conditioning = plan["model_specific"]["ltx"]["boundary_conditioning"]
+    media = next(entry for entry in plan["media_plan"] if entry["item_id"] == conditioning["media_item_id"])
+    assert validation["is_valid"] is True
+    assert conditioning["requested_tail_frames"] == 0
+    assert conditioning["effective_tail_frames"] == 1
+    assert media["video_guidance_frame_count"] == 1
 
 
 def test_ltx_planner_warns_when_continuity_source_is_missing():
@@ -579,6 +663,7 @@ def test_ltx_planner_warns_when_continuity_source_is_missing():
         generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     continuity = plan["model_specific"]["ltx"]["continuity_context"]
+    conditioning = plan["model_specific"]["ltx"]["boundary_conditioning"]
 
     assert validation["is_valid"] is True
     assert [entry["code"] for entry in validation["warnings"]] == [
@@ -588,6 +673,8 @@ def test_ltx_planner_warns_when_continuity_source_is_missing():
     assert continuity["source_status"] == "unavailable"
     assert continuity["model_status"] == "unavailable"
     assert continuity["clip_reference"] is None
+    assert conditioning["model_status"] == "unavailable"
+    assert conditioning["fallback_reason"] == "SHOT_CONTINUITY_PREVIOUS_CLIP_MISSING"
     assert debug["summary"]["shot_continuity_status"] == "unavailable"
 
 

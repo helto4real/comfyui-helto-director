@@ -417,6 +417,13 @@ def _safe_non_negative_int(value: Any) -> int:
         return 0
 
 
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _copy_segment_frames(output: torch.Tensor, tensor: torch.Tensor, cursor: int) -> int:
     if tensor.shape[0] <= 0 or cursor >= output.shape[0]:
         return cursor
@@ -468,11 +475,13 @@ def build_segment_plan(
     )
     section_ids = {entry.get("item_id") for entry in segment_plan["section_plan"]}
     segment_plan["prompt_plan"] = _slice_prompts(plan.get("prompt_plan", []), section_ids, bool(segment.get("continuity", {}).get("prompt_hint")))
-    segment_plan["media_plan"] = [
-        deepcopy(entry)
-        for entry in plan.get("media_plan", [])
-        if entry.get("item_id") in section_ids
-    ]
+    segment_plan["media_plan"] = _slice_media_plan(
+        plan.get("media_plan", []),
+        section_ids,
+        segment_start,
+        segment_end,
+        trim_leading,
+    )
     segment_plan["audio_plan"] = _slice_audio_plan(plan.get("audio_plan", []), segment_start, segment_end, frame_rate, trim_leading)
     model_specific = segment_plan.setdefault("model_specific", {}).setdefault(model_key, {})
     model_specific["active_generation_segment"] = deepcopy(segment)
@@ -524,6 +533,29 @@ def _slice_prompts(prompts: list[dict[str, Any]], section_ids: set[Any], continu
             base = str(item.get("runtime_prompt") or item.get("raw_prompt") or item.get("effective_prompt") or "").strip()
             if base and not base.startswith(prefix):
                 item["runtime_prompt"] = prefix + base
+        output.append(item)
+    return output
+
+
+def _slice_media_plan(
+    media_plan: list[dict[str, Any]],
+    section_ids: set[Any],
+    start: int,
+    end: int,
+    trim_leading: int,
+) -> list[dict[str, Any]]:
+    output = []
+    for entry in media_plan:
+        if entry.get("item_id") in section_ids:
+            output.append(deepcopy(entry))
+            continue
+        if not entry.get("transient"):
+            continue
+        insert_frame = _optional_int(entry.get("insert_frame"))
+        if insert_frame is None or insert_frame < start or insert_frame >= end:
+            continue
+        item = deepcopy(entry)
+        item["insert_frame"] = insert_frame - start + trim_leading
         output.append(item)
     return output
 

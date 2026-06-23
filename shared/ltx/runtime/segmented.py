@@ -30,7 +30,7 @@ from .audio import (
     mix_timeline_audio,
     stitch_native_generated_audio,
 )
-from .runtime import build_ltx_runtime_outputs
+from .runtime import _take_boundary_conditioning, build_ltx_runtime_outputs
 
 
 def build_ltx_segmented_executor_outputs(
@@ -252,10 +252,7 @@ def build_ltx_segmented_executor_outputs(
                     "seed_mode": str(seed_mode),
                 },
                 segment=segment,
-                model_specific={
-                    "runtime": "segmented",
-                    "segment_index": index,
-                },
+                model_specific=_segment_take_model_specific(segment_plan, index),
             )
             segment_debug.append({
                 "id": segment.get("id"),
@@ -402,6 +399,16 @@ def _latent_frame_count(latent: dict[str, Any]) -> int | None:
         return int(shape[2])
     except Exception:
         return None
+
+
+def _segment_take_model_specific(segment_plan: dict[str, Any], segment_index: int) -> dict[str, Any]:
+    ltx = segment_plan.get("model_specific", {}).get("ltx", {})
+    boundary_conditioning = ltx.get("boundary_conditioning") if isinstance(ltx, dict) else {}
+    return {
+        "runtime": "segmented",
+        "segment_index": int(segment_index),
+        "boundary_conditioning": _take_boundary_conditioning(boundary_conditioning),
+    }
 
 
 def _filter_segment_character_reference_guides(

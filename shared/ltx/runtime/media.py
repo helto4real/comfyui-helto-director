@@ -118,6 +118,7 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
         else:
             continue
 
+        insert_frame = int(media.get("insert_frame") if media.get("insert_frame") is not None else section.get("start_frame") or 0)
         tensor = resize_image_frames(
             tensor,
             target_width,
@@ -126,19 +127,33 @@ def build_guide_data(plan: dict[str, Any], target_width: int, target_height: int
             int(plan["resolved_output"].get("divisible_by") or 32),
         )
         guide_data["images"].append(tensor)
-        guide_data["insert_frames"].append(int(section.get("start_frame") or 0))
+        guide_data["insert_frames"].append(insert_frame)
         guide_data["strengths"].append(float(media.get("guide_strength") if media.get("guide_strength") is not None else 1.0))
         guide_data["reference_images"].append({
             "id": media.get("item_id"),
             "label": media.get("asset_id"),
-            "kind": "timeline_media",
+            "kind": "boundary_conditioning" if media.get("transient") else "timeline_media",
             "section_type": section_type,
             "image": tensor,
-            "insert_frame": int(section.get("start_frame") or 0),
+            "insert_frame": insert_frame,
             "strength": float(media.get("guide_strength") if media.get("guide_strength") is not None else 1.0),
             "hidden_tail": False,
+            "transient": bool(media.get("transient")),
+            "boundary_id": media.get("boundary_id"),
+            "boundary_mode": media.get("boundary_mode"),
+            "boundary_policy": media.get("boundary_policy"),
+            "source_shot_id": media.get("source_shot_id"),
+            "target_shot_id": media.get("target_shot_id"),
+            "requested_tail_frames": media.get("requested_tail_frames"),
+            "effective_tail_frames": media.get("effective_tail_frames"),
             **reference_metadata,
         })
+        if media.get("transient") and reference_metadata.get("selected_frame_count") != media.get("effective_tail_frames"):
+            diagnostics.append(
+                "Boundary conditioning guide used "
+                f"{reference_metadata.get('selected_frame_count')} frame(s) from the previous clip tail; "
+                f"requested {media.get('requested_tail_frames')} and planned {media.get('effective_tail_frames')}."
+            )
 
     _append_character_reference_guides(plan, guide_data, target_width, target_height)
     _append_segment_continuity_guides(plan, guide_data, target_width, target_height)
@@ -239,7 +254,11 @@ def _append_character_reference_guides(plan: dict[str, Any], guide_data: dict[st
 
 def source_video_outputs(plan: dict[str, Any], target_width: int, target_height: int):
     video_media = next(
-        (media for media in plan.get("media_plan", []) if media.get("section_type") == SECTION_TYPE_VIDEO and media.get("path")),
+        (
+            media
+            for media in plan.get("media_plan", [])
+            if media.get("section_type") == SECTION_TYPE_VIDEO and media.get("path") and not media.get("transient")
+        ),
         None,
     )
     frame_rate = float(plan["resolved_output"].get("frame_rate") or 24.0)

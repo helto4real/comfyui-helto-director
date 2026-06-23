@@ -167,6 +167,33 @@ function testInspectorControlsUpdateLiveSectionAfterStateReplacement() {
   assert.equal(staleSectionReference.crop_mode, "Project Default");
 }
 
+function testBoundarySelectionUsesInspectorHeightAndLiveFieldUpdates() {
+  const timeline = createDefaultVideoTimeline();
+  const liveBoundary = {
+    boundary_id: "boundary_001",
+    left_shot_id: "shot_left",
+    right_shot_id: "shot_right",
+    mode: "Continuous Shot",
+    tail_frames: 5,
+    blend_frames: 3,
+    transition_prompt: "",
+    reuse_character_refs: true,
+    reuse_style: true,
+    metadata: {},
+  };
+  timeline.sequence.boundaries.push(liveBoundary);
+  timeline.ui_state.selected_item_id = "boundary_001";
+
+  assert.equal(getTimelineWidgetHeight(timeline), 534);
+
+  const staleBoundaryReference = { ...liveBoundary };
+  const updated = setLiveItemField(timeline, staleBoundaryReference, "transition_prompt", "match cut through smoke");
+
+  assert.equal(updated, liveBoundary);
+  assert.equal(timeline.sequence.boundaries[0].transition_prompt, "match cut through smoke");
+  assert.equal(staleBoundaryReference.transition_prompt, "");
+}
+
 function testSectionPreviewUsesContainedRepeatedFrames() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
@@ -177,6 +204,14 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("iconMenuControl"), true);
   assert.equal(rendererSource.includes("aria-label"), true);
   assert.equal(rendererSource.includes("renderShotBoundaryContext(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("renderBoundaryInspector(timeline, selectedBoundary)"), true);
+  assert.equal(rendererSource.includes("renderBoundaryModeField(boundary)"), true);
+  assert.equal(rendererSource.includes('this.renderNumberField(boundary, "tail_frames"'), true);
+  assert.equal(rendererSource.includes('this.renderNumberField(boundary, "blend_frames"'), true);
+  assert.equal(rendererSource.includes('this.renderTextField(boundary, "transition_prompt"'), true);
+  assert.equal(rendererSource.includes('this.renderCheckboxField(boundary, "reuse_character_refs"'), true);
+  assert.equal(rendererSource.includes('this.renderCheckboxField(boundary, "reuse_style"'), true);
+  assert.equal(rendererSource.includes(".htd-boundary-prompt"), true);
   assert.equal(rendererSource.includes("renderAssemblyReadinessPill(timeline, shot)"), true);
   assert.equal(rendererSource.includes("renderLatestCapture(timeline, shot)"), true);
   assert.equal(rendererSource.includes("renderCaptureManagementModal(timeline, modalShot)"), true);
@@ -695,6 +730,7 @@ testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();
+testBoundarySelectionUsesInspectorHeightAndLiveFieldUpdates();
 testSectionPreviewUsesContainedRepeatedFrames();
 testSharedMediaPreviewSupportsVideoControls();
 testDeleteContextMenuIsAvailableOnTimelineItems();

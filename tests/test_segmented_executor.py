@@ -9,6 +9,7 @@ from shared.privacy import BYTE_CHUNKED_ENVELOPE_SCHEMA, CRYPTO_AVAILABLE
 from shared.segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
+    build_segment_plan,
     external_sigmas_step_count,
     post_decode_memory_cleanup,
     sample_latent,
@@ -260,6 +261,61 @@ def test_generation_segments_support_configurable_short_tail():
 
     assert segmented["segments"][1]["continuity"]["continuity_frame_count"] == 1
     assert segmented["segments"][1]["trim_leading_frames"] == 1
+
+
+def test_segment_plan_preserves_transient_boundary_media_in_active_segment():
+    plan = _two_segment_executor_plan("ltx")
+    plan["media_plan"] = [
+        {
+            "item_id": "section_001",
+            "section_type": "Image",
+            "path": "/tmp/section.png",
+        },
+        {
+            "item_id": "boundary_tail_boundary_001",
+            "section_type": "Video",
+            "path": "/tmp/previous.mp4",
+            "transient": True,
+            "insert_frame": 0,
+            "boundary_id": "boundary_001",
+        },
+    ]
+    first_segment = plan["model_specific"]["ltx"]["segmented_generation"]["segments"][0]
+
+    segment_plan = build_segment_plan(plan, first_segment, model_key="ltx")
+
+    assert [entry["item_id"] for entry in segment_plan["media_plan"]] == [
+        "section_001",
+        "boundary_tail_boundary_001",
+    ]
+    boundary = segment_plan["media_plan"][1]
+    assert boundary["transient"] is True
+    assert boundary["insert_frame"] == 0
+    assert boundary["boundary_id"] == "boundary_001"
+
+
+def test_segment_plan_omits_transient_boundary_media_outside_segment():
+    plan = _two_segment_executor_plan("ltx")
+    plan["media_plan"] = [
+        {
+            "item_id": "boundary_tail_boundary_001",
+            "section_type": "Video",
+            "path": "/tmp/previous.mp4",
+            "transient": True,
+            "insert_frame": 0,
+            "boundary_id": "boundary_001",
+        },
+        {
+            "item_id": "section_002",
+            "section_type": "Image",
+            "path": "/tmp/section.png",
+        },
+    ]
+    second_segment = plan["model_specific"]["ltx"]["segmented_generation"]["segments"][1]
+
+    segment_plan = build_segment_plan(plan, second_segment, model_key="ltx")
+
+    assert [entry["item_id"] for entry in segment_plan["media_plan"]] == ["section_002"]
 
 
 def test_generation_segments_clamp_tail_to_previous_visible_segment():

@@ -240,7 +240,15 @@ function testMigrationNormalizesPartialSequenceStructures() {
         takes: [{ take_id: "take_custom", status: "Nope" }],
         clip_instance: { asset_id: 42, speed: "bad" },
       }],
-      boundaries: [{ boundary_id: "boundary_custom", mode: "Nope" }],
+      boundaries: [{
+        boundary_id: "boundary_custom",
+        mode: "Nope",
+        tail_frames: "9",
+        blend_frames: "4",
+        transition_prompt: 123,
+        reuse_character_refs: false,
+        reuse_style: false,
+      }],
     },
   });
   const shot = normalized.sequence.shots[0];
@@ -257,6 +265,11 @@ function testMigrationNormalizesPartialSequenceStructures() {
   assert.equal(shot.clip_instance.asset_id, "42");
   assert.equal(shot.clip_instance.speed, 1);
   assert.equal(normalized.sequence.boundaries[0].mode, "Hard Cut");
+  assert.equal(normalized.sequence.boundaries[0].tail_frames, 9);
+  assert.equal(normalized.sequence.boundaries[0].blend_frames, 4);
+  assert.equal(normalized.sequence.boundaries[0].transition_prompt, "123");
+  assert.equal(normalized.sequence.boundaries[0].reuse_character_refs, false);
+  assert.equal(normalized.sequence.boundaries[0].reuse_style, false);
 }
 
 function testMigrationDerivesShotsFromFlatSections() {
@@ -362,6 +375,18 @@ function testShotOperationsCreateAssignBoundaryAndDelete() {
   assert.equal(boundary.mode, "Continuous Shot");
   assert.equal(changeBoundaryMode(timeline, boundary.boundary_id, "Transition"), true);
   assert.equal(findBoundaryBetweenShots(timeline, firstShot.shot_id, manual.shot_id).mode, "Transition");
+  createOrUpdateBoundaryBetweenShots(timeline, firstShot.shot_id, manual.shot_id, {
+    tail_frames: 13,
+    blend_frames: 4,
+    transition_prompt: "generated bridge",
+    reuse_character_refs: false,
+    reuse_style: false,
+  });
+  assert.equal(boundary.tail_frames, 13);
+  assert.equal(boundary.blend_frames, 4);
+  assert.equal(boundary.transition_prompt, "generated bridge");
+  assert.equal(boundary.reuse_character_refs, false);
+  assert.equal(boundary.reuse_style, false);
 
   selectItem(timeline, manual.shot_id);
   assert.equal(deleteSelectedItem(timeline), true);
