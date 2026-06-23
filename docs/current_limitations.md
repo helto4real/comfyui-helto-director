@@ -2,6 +2,9 @@
 
 This nodepack is usable for LTX Timeline workflows and the supported WAN 2.2 ComfyUI Core runtime path, but it is still intentionally scoped.
 
+For installation and first-run workflow setup, see [Getting Started](getting_started.md).
+For the current node list, see [Node Reference](node_reference.md).
+
 ## Timeline Contract Terms
 
 - Project: the root timeline settings, assets, privacy state, global prompt, audio defaults, metadata, and model LoRA defaults.

@@ -1,5 +1,9 @@
 # WAN 2.2 Timeline Support
 
+For first-run installation and node discovery, start with
+[Getting Started](getting_started.md). For a grouped list of WAN and non-WAN
+nodes, see [Node Reference](node_reference.md).
+
 WAN 2.2 support uses this node path:
 
 `Video Timeline Director -> WAN 2.2 Timeline Config -> WAN 2.2 Timeline Planner -> WAN 2.2 Timeline Runtime`

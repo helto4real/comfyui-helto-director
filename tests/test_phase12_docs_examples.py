@@ -10,6 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / "docs" / "workflows"
 DOC_PATHS = [
     REPO_ROOT / "README.md",
+    REPO_ROOT / "docs" / "getting_started.md",
+    REPO_ROOT / "docs" / "node_reference.md",
     REPO_ROOT / "docs" / "examples" / "ltx_timeline_workflow_guide.md",
     REPO_ROOT / "docs" / "workflows" / "README.md",
     REPO_ROOT / "docs" / "picker_setup.md",

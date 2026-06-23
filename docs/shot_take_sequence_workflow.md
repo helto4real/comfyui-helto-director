@@ -5,6 +5,8 @@ shot, keeping takes, and assembling an accepted sequence. The Director timeline
 stays generic; LTX and WAN model behavior remains in their planner/runtime
 nodes.
 
+For the full node list, see [Node Reference](node_reference.md).
+
 ## Shot-Based Generation
 
 The timeline has one active `sequence` named `main`. A sequence contains shots,

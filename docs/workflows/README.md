@@ -2,6 +2,9 @@
 
 These files are UI-importable ComfyUI workflow examples. They are starting points, not bundled runnable assets.
 
+If this is your first run, read [Getting Started](../getting_started.md) before
+importing an example workflow.
+
 Before queueing:
 
 1. Replace placeholder checkpoint, VAE, text encoder, or media filenames with files installed in your ComfyUI setup.

@@ -4,6 +4,9 @@ This guide covers the current practical LTX Timeline path: generic timeline auth
 `Video Timeline Director`, model-specific planning in the LTX nodes, runtime guide/audio
 materialization, prompt optimization, privacy mode, and the identity/reference helpers.
 
+If you are new to the node pack, start with [Getting Started](../getting_started.md)
+and [Node Reference](../node_reference.md) before wiring the full LTX path.
+
 ![LTX Timeline workflow overview](../assets/ltx-timeline-workflow-overview.png)
 
 ## Minimal Graph
