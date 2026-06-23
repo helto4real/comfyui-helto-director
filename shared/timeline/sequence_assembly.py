@@ -21,6 +21,14 @@ class SequenceAssemblyError(ValueError):
     """Raised when the sequence cannot be assembled into media outputs."""
 
 
+def _assets_by_id(timeline: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(asset.get("asset_id")): asset
+        for asset in timeline.get("assets", [])
+        if asset.get("asset_id") is not None
+    }
+
+
 def assemble_timeline_sequence(
     video_timeline: Any,
     *,
@@ -31,11 +39,7 @@ def assemble_timeline_sequence(
     timeline = normalize_video_timeline(video_timeline)
     frame_rate = _safe_float(timeline.get("project", {}).get("frame_rate"), 24.0)
     frame_rate = frame_rate if frame_rate > 0 else 24.0
-    assets_by_id = {
-        str(asset.get("asset_id")): asset
-        for asset in timeline.get("assets", [])
-        if asset.get("asset_id") is not None
-    }
+    assets_by_id = _assets_by_id(timeline)
     debug: dict[str, Any] = {
         "type": "DEBUG_INFO",
         "source": "Sequence Assembly",
@@ -427,11 +431,7 @@ def _assemble_audio(
 
 
 def _build_audio_plan(timeline: dict[str, Any], frame_rate: float) -> list[dict[str, Any]]:
-    assets_by_id = {
-        str(asset.get("asset_id")): asset
-        for asset in timeline.get("assets", [])
-        if asset.get("asset_id") is not None
-    }
+    assets_by_id = _assets_by_id(timeline)
     audio_entries = []
     for track in timeline.get("audio_tracks", []):
         for clip in track.get("clips", []):
