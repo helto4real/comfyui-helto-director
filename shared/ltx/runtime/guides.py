@@ -234,10 +234,14 @@ def _reference_downscale_factor(iclora_parameters):
         return 1
 
 
-def _conditioning_set_values(conditioning, values):
+def set_conditioning_values(conditioning, values):
     try:
         import node_helpers
 
         return node_helpers.conditioning_set_values(conditioning, values)
     except Exception:
         return [[item[0], {**item[1], **values}] for item in conditioning]
+
+
+def _conditioning_set_values(conditioning, values):
+    return set_conditioning_values(conditioning, values)

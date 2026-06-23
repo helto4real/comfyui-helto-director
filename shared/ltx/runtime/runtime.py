@@ -14,7 +14,7 @@ from ..identity import apply_identity_anchor
 from ..planner import LTX_PLAN_TYPE
 from ..references import planned_hidden_reference_count, planned_hidden_reference_guard_latent_frames
 from .audio import build_audio_latent, build_native_audio_latent, empty_audio, mix_timeline_audio
-from .guides import apply_guide_data
+from .guides import apply_guide_data, set_conditioning_values
 from .media import build_guide_data, source_video_outputs
 from .prompt_relay import encode_prompt_relay
 from .patches import supports_ltx_native_audio
@@ -119,6 +119,7 @@ def build_ltx_runtime_outputs(
         guide_data,
         iclora_parameters=iclora_parameters,
     )
+    positive, negative = _apply_ltx_frame_rate_conditioning(positive, negative, frame_rate)
     status_reporter.report("timeline.audio", "LTX Runtime: mixing audio")
     combined_audio, audio_diagnostics = mix_timeline_audio(plan)
     use_native_audio = bool(plan.get("project", {}).get("audio", {}).get("use_native_audio"))
@@ -145,6 +146,8 @@ def build_ltx_runtime_outputs(
         combined_audio,
         lora_report,
         status_reporter.snapshot(),
+        conditioning_frame_rate=frame_rate,
+        conditioning_frame_rate_applied=True,
     )
     if complete_status:
         status_reporter.done("LTX Runtime: ready")
@@ -201,6 +204,8 @@ def _build_skipped_ltx_runtime_outputs(
             "take_registration_shot_ids": [],
             "video_latent_shape": tuple(video_latent["samples"].shape),
             "combined_audio_shape": tuple(combined_audio["waveform"].shape),
+            "conditioning_frame_rate": frame_rate,
+            "conditioning_frame_rate_applied": False,
         },
         "generation_policy": deepcopy(generation_policy),
         "diagnostics": ["Generation skipped; no LTX model, clip, VAE, guide, prompt, or LoRA work was performed."],
@@ -375,6 +380,14 @@ def _resolve_negative_conditioning(negative, positive):
     return negative if negative is not None else zero_out_conditioning(positive)
 
 
+def _apply_ltx_frame_rate_conditioning(positive, negative, frame_rate: float):
+    values = {"frame_rate": float(frame_rate)}
+    return (
+        set_conditioning_values(positive, values),
+        set_conditioning_values(negative, values),
+    )
+
+
 def _resolve_ltx_loras(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     lora_resolution = plan.get("model_specific", {}).get("ltx", {}).get("lora_resolution")
     resolved = resolve_runtime_lora_targets(
@@ -413,7 +426,20 @@ def _build_ltx_lora_report(runtime_loras: dict[str, Any], applied_loras: list[di
     }
 
 
-def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostics, video_latent, combined_audio, lora_report=None, status_events=None):
+def _runtime_debug(
+    plan,
+    prompt_debug,
+    guide_data,
+    guide_apply_debug,
+    diagnostics,
+    video_latent,
+    combined_audio,
+    lora_report=None,
+    status_events=None,
+    *,
+    conditioning_frame_rate: float | None = None,
+    conditioning_frame_rate_applied: bool = False,
+):
     character_references = plan.get("model_specific", {}).get("ltx", {}).get("character_references", {})
     continuity = _runtime_continuity_debug(plan)
     lora_targets = (lora_report or {}).get("targets", {})
@@ -445,6 +471,8 @@ def _runtime_debug(plan, prompt_debug, guide_data, guide_apply_debug, diagnostic
             "lora_target_count": len(lora_targets),
             "shot_continuity_policy": continuity.get("policy"),
             "shot_continuity_status": continuity.get("model_status"),
+            "conditioning_frame_rate": conditioning_frame_rate,
+            "conditioning_frame_rate_applied": bool(conditioning_frame_rate_applied),
         },
         "loras": deepcopy(lora_report or {}),
         "continuity": continuity,

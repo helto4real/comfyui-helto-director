@@ -268,7 +268,38 @@ def test_ltx_runtime_skipped_plan_returns_no_take_registration_without_model_inp
     assert runtime_debug["summary"]["generation_required"] is False
     assert runtime_debug["summary"]["generation_status"] == "skipped"
     assert runtime_debug["summary"]["take_registration_ready"] is False
+    assert runtime_debug["summary"]["conditioning_frame_rate"] == 24.0
+    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is False
     assert "take_registration" not in runtime_debug
+
+
+def test_ltx_runtime_applies_frame_rate_conditioning_to_prompt_relay():
+    plan = _text_plan(duration=1.0, prompt="wide shot")
+
+    _, positive, negative, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert positive[0][1]["frame_rate"] == 24.0
+    assert negative[0][1]["frame_rate"] == 24.0
+    assert runtime_debug["summary"]["conditioning_frame_rate"] == 24.0
+    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is True
+
+
+def test_ltx_runtime_applies_frame_rate_conditioning_to_plain_prompt():
+    timeline = _timeline_for_section("section_001", duration=1.0, prompt="plain prompt")
+    plan, validation, _ = build_ltx_timeline_plan(
+        timeline,
+        create_ltx_timeline_config(reference_mode="Guide Data"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
+    assert validation["is_valid"] is True
+
+    _, positive, negative, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+
+    assert positive[0][1]["text"] == "plain prompt"
+    assert positive[0][1]["frame_rate"] == 24.0
+    assert negative[0][1]["frame_rate"] == 24.0
+    assert runtime_debug["summary"]["conditioning_frame_rate"] == 24.0
+    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is True
 
 
 def _timeline_for_section(item_id: str, *, duration=1.0, prompt="wide shot"):
@@ -1192,8 +1223,11 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     assert guide_data["hidden_reference_guard_latent_frames"] == 0
     assert video_latent["samples"].shape[2] > guide_data["clean_latent_frames"]
     assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.5
+    assert positive[0][1]["frame_rate"] == 24.0
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.5
+    assert negative[0][1]["frame_rate"] == 24.0
     assert runtime_debug["summary"]["applied_guides"] == 1
+    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is True
 
 
 def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(tmp_path):
@@ -1224,7 +1258,9 @@ def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(t
     assert guide_data["reference_images"][0]["image"].shape == guide_data["images"][0].shape
     assert video_latent["samples"].shape[2] >= guide_data["reserved_latent_frames"]
     assert positive[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert positive[0][1]["frame_rate"] == 24.0
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
+    assert negative[0][1]["frame_rate"] == 24.0
     assert runtime_debug["character_references"]["guide_count"] == 1
     assert runtime_debug["character_references"]["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 
