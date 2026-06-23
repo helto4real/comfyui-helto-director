@@ -179,7 +179,10 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("renderShotBoundaryContext(timeline, shot)"), true);
   assert.equal(rendererSource.includes("renderAssemblyReadiness(timeline, shot)"), true);
   assert.equal(rendererSource.includes("renderAvailableCaptures(timeline, shot)"), true);
-  assert.equal(rendererSource.includes("Copy Shot ID For Planner Input"), true);
+  assert.equal(rendererSource.includes("Copy Shot ID For Planner Input"), false);
+  assert.equal(rendererSource.includes("shotDisplayLabel(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("return `Shot ${index >= 0 ? index + 1 : 1}`;"), true);
+  assert.equal(rendererSource.includes("shot.name || shot.shot_id"), false);
   assert.equal(rendererSource.includes("renderAdvancedTakeAttachment(timeline, shot)"), true);
   assert.equal(rendererSource.includes("Manual Take"), true);
   assert.equal(rendererSource.includes("Choose generated asset"), true);
@@ -236,8 +239,10 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('"preview-video": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes(".htd-capture-row { grid-template-columns:"), true);
   assert.equal(rendererSource.includes("assemblyReadinessStatus(timeline, shot)"), true);
-  assert.equal(rendererSource.includes("shotIdInput.readOnly = true"), true);
-  assert.equal(rendererSource.includes("shotIdInput.setAttribute(\"aria-label\", \"Shot ID\")"), true);
+  assert.equal(rendererSource.includes("shotIdInput"), false);
+  assert.equal(rendererSource.includes("htd-shot-id"), false);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("ID:"'), false);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Name:", nameInput, "is-shot-name")'), true);
   assert.equal(rendererSource.includes("htd-project-end"), true);
   assert.equal(rendererSource.includes("TIMELINE_RIGHT_PADDING"), true);
   assert.equal(rendererSource.includes("renderRangeControl"), true);

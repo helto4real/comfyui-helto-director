@@ -528,8 +528,9 @@ export class TimelineRenderer {
     item.dataset.itemId = shot.shot_id;
     item.style.left = `${secondsToPixels(shot.start_time, timeline, this.viewportWidth)}px`;
     item.style.width = `${Math.max(18, durationToPixels(shot.end_time - shot.start_time, timeline, this.viewportWidth))}px`;
-    item.textContent = shot.name || shot.shot_id;
-    item.title = `${shot.name || shot.shot_id} (${shot.type})`;
+    const label = shotDisplayLabel(timeline, shot);
+    item.textContent = label;
+    item.title = `${label} (${shot.type})`;
     item.setAttribute("aria-label", item.title);
     item.classList.toggle("is-selected", isItemSelected(timeline, shot.shot_id));
     item.classList.toggle("is-primary-selected", timeline.ui_state.selected_item_id === shot.shot_id);
@@ -565,7 +566,7 @@ export class TimelineRenderer {
     });
     wrapper.classList.add("htd-boundary-control");
     wrapper.style.left = `${secondsToPixels(rightShot.start_time, timeline, this.viewportWidth)}px`;
-    wrapper.title = `${leftShot.shot_id} to ${rightShot.shot_id}`;
+    wrapper.title = `${shotDisplayLabel(timeline, leftShot)} to ${shotDisplayLabel(timeline, rightShot)}`;
     return wrapper;
   }
 
@@ -727,18 +728,11 @@ export class TimelineRenderer {
   renderShotInspector(timeline, shot, options = {}) {
     this.requestAvailableCaptures(timeline, shot);
     const wrapper = el("div", `htd-shot-inspector${options.standalone ? " is-standalone" : ""}`);
-    const title = inspectorTitle(options.standalone ? "Shot" : "Shot Details");
-    const shotIdInput = el("input", "htd-field htd-shot-id");
-    shotIdInput.value = shot.shot_id ?? "";
-    shotIdInput.readOnly = true;
-    shotIdInput.title = "Shot ID";
-    shotIdInput.setAttribute("aria-label", "Shot ID");
-    const copyShotIdButton = button("Copy", "Copy Shot ID For Planner Input", () => {
-      copyTextToClipboard(this.container.ownerDocument, shot.shot_id ?? "");
-    });
+    const shotLabel = shotDisplayLabel(timeline, shot);
+    const title = inspectorTitle(options.standalone ? shotLabel : `${shotLabel} Details`);
     const nameInput = el("input", "htd-field htd-shot-name");
     nameInput.value = shot.name ?? "";
-    nameInput.placeholder = shot.shot_id;
+    nameInput.placeholder = shotLabel;
     nameInput.title = "Shot Name";
     nameInput.addEventListener("change", () => {
       this.commitMutation((currentTimeline) => renameShot(currentTimeline, shot.shot_id, nameInput.value), "shot change");
@@ -746,8 +740,6 @@ export class TimelineRenderer {
     wrapper.append(
       title,
       this.renderInspectorControlRow(
-        this.renderInspectorCompactField("ID:", shotIdInput, "is-shot-id"),
-        copyShotIdButton,
         this.renderInspectorCompactField("Name:", nameInput, "is-shot-name"),
       ),
       this.renderInspectorControlRow(
@@ -2580,6 +2572,15 @@ function shotBoundaryContext(timeline, shot) {
   };
 }
 
+function shotDisplayLabel(timeline, shot) {
+  const name = String(shot?.name ?? "").trim();
+  if (name) return name;
+  const shots = [...(timeline?.sequence?.shots ?? [])]
+    .sort((a, b) => Number(a.start_time) - Number(b.start_time) || Number(a.end_time) - Number(b.end_time) || String(a.shot_id).localeCompare(String(b.shot_id)));
+  const index = shots.findIndex((candidate) => candidate.shot_id === shot?.shot_id);
+  return `Shot ${index >= 0 ? index + 1 : 1}`;
+}
+
 function boundaryWarningForShot(timeline, context) {
   const ids = new Set([
     context.incoming?.boundary_id,
@@ -2663,25 +2664,6 @@ function resolvedLoraCount(resolvedLoras) {
     ? resolvedLoras.targets
     : {};
   return Object.values(targets).reduce((count, stack) => count + (Array.isArray(stack) ? stack.length : 0), 0);
-}
-
-function copyTextToClipboard(documentRef, text) {
-  const value = String(text ?? "");
-  const clipboard = documentRef?.defaultView?.navigator?.clipboard ?? globalThis.navigator?.clipboard;
-  if (clipboard?.writeText) {
-    clipboard.writeText(value).catch(() => {});
-    return;
-  }
-  const textarea = documentRef?.createElement?.("textarea");
-  if (!textarea) return;
-  textarea.value = value;
-  textarea.setAttribute("readonly", "readonly");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  documentRef.body?.append(textarea);
-  textarea.select();
-  documentRef.execCommand?.("copy");
-  textarea.remove();
 }
 
 function assetForId(timeline, assetId) {
@@ -3414,7 +3396,6 @@ function installStyles(documentRef) {
     .htd-media-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-shot-inspector { min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; border-top: 1px solid #30394c; }
     .htd-shot-inspector.is-standalone { padding-top: 0; border-top: 0; }
-    .htd-shot-id { max-width: 170px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
     .htd-shot-name { max-width: 170px; }
     .htd-shot-status { min-width: 0; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef2f7; }
     .htd-shot-boundary-context { min-width: 0; min-height: 22px; display: flex; align-items: center; gap: 6px; }
