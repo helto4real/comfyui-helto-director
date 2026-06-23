@@ -223,7 +223,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("privacyRevealed ? take.take_id : takeStatusLabel(take)"), true);
   assert.equal(rendererSource.includes("privacyRevealed ? `seed ${take.seed}` : \"Seeded\""), true);
   assert.equal(rendererSource.includes("deleteProjectTakeCapture,"), true);
-  assert.equal(rendererSource.includes("deleteTake,"), true);
+  assert.equal(rendererSource.includes("deleteTake,"), false);
+  assert.equal(rendererSource.includes("deleteTakesByAssetPath,"), true);
   assert.equal(rendererSource.includes("captureOrderLabel(index, total)"), true);
   assert.equal(rendererSource.includes("return `Capture ${String(number).padStart(3, \"0\")}`;"), true);
   assert.equal(rendererSource.includes("return `Take ${String(number).padStart(3, \"0\")}`;"), true);
@@ -241,10 +242,16 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("if (previewData) actions.append(iconButton(\"preview-video\", \"Preview Take Video\""), true);
   assert.equal(rendererSource.includes("deleteProjectTakeCaptureFromItem(shot, item"), true);
   assert.equal(rendererSource.includes("deleteProjectTakeFromTimelineTake(shot, take, asset"), true);
+  assert.equal(rendererSource.includes("const capturePath = captureMediaPath(item)"), true);
+  assert.equal(rendererSource.includes("const existing = findAttachedTakeForCapture(timeline, shot, item)"), true);
+  assert.equal(rendererSource.includes("const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item)"), true);
   assert.equal(rendererSource.includes("async deleteProjectTakePath(shotId, path, options = {})"), true);
   assert.equal(rendererSource.includes("confirmFn?.(`Delete ${label} from the timeline and permanently remove its project take files?`)"), true);
   assert.equal(rendererSource.includes("await deleteProjectTakeCapture(timeline, shotId, path"), true);
-  assert.equal(rendererSource.includes("deleteTake(currentTimeline, shotId, options.takeId)"), true);
+  assert.equal(rendererSource.includes("deleteTakesByAssetPath(currentTimeline, shotId, path, options.takeId)"), true);
+  assert.equal(rendererSource.includes("function findAttachedTakeForCapture(timeline, shot, item)"), true);
+  assert.equal(rendererSource.includes("function captureMediaPath(item)"), true);
+  assert.equal(rendererSource.includes("const existing = takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) : null"), false);
   assert.equal(rendererSource.includes("alertFn?.(error?.message || \"Could not delete project take files.\")"), true);
   assert.equal(rendererSource.includes("takeVideoPreviewData(timeline, take, asset = null"), true);
   assert.equal(rendererSource.includes("captureVideoPreviewData(timeline, item"), true);

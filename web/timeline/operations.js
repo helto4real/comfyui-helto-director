@@ -473,6 +473,25 @@ export function deleteTake(timeline, shotId, takeId) {
   return true;
 }
 
+export function deleteTakesByAssetPath(timeline, shotId, path, fallbackTakeId = "") {
+  const shot = findShot(timeline, shotId);
+  if (!shot) return false;
+  const targetPath = String(path ?? "").trim();
+  let changed = false;
+  if (targetPath) {
+    const matchingTakeIds = (shot.takes ?? [])
+      .filter((take) => assetPathMatches(videoAssetForId(timeline, take.asset_id), targetPath))
+      .map((take) => take.take_id);
+    for (const takeId of matchingTakeIds) {
+      changed = deleteTake(timeline, shotId, takeId) || changed;
+    }
+  }
+  if (!changed && fallbackTakeId) {
+    changed = deleteTake(timeline, shotId, fallbackTakeId);
+  }
+  return changed;
+}
+
 export function setClipInstanceFromAsset(timeline, shotId, assetId, patch = {}) {
   const shot = findShot(timeline, shotId);
   const asset = timeline.assets?.find((candidate) => candidate.asset_id === assetId && candidate.type === ASSET_TYPE_VIDEO);
@@ -993,6 +1012,13 @@ function assetExists(timeline, assetId) {
 function videoAssetForId(timeline, assetId) {
   if (assetId == null) return null;
   return timeline.assets?.find((asset) => asset.asset_id === assetId && asset.type === ASSET_TYPE_VIDEO) ?? null;
+}
+
+function assetPathMatches(asset, path) {
+  const targetPath = String(path ?? "").trim();
+  if (!asset || !targetPath) return false;
+  return [asset.path, asset.file_path]
+    .some((candidate) => String(candidate ?? "").trim() === targetPath);
 }
 
 function clearClipInstanceForTake(shot, take) {

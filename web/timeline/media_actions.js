@@ -65,8 +65,10 @@ export function attachPickedGeneratedVideoAsTake(timeline, shotId, item, takeDat
   const registrationAsset = registration?.asset && typeof registration.asset === "object"
     ? registration.asset
     : null;
+  const captureTake = takeDataFromRegistration(registration?.take);
   asset.source_kind = ASSET_SOURCE_GENERATED;
-  if (registrationAsset?.asset_id) asset.asset_id = String(registrationAsset.asset_id);
+  const preferredAssetId = registrationAsset?.asset_id ? String(registrationAsset.asset_id) : asset.asset_id;
+  asset.asset_id = uniqueAssetId(timeline, preferredAssetId, asset.path ?? asset.file_path ?? item?.path);
   if (registrationAsset?.name) asset.name = String(registrationAsset.name);
   if (registrationAsset?.mime_type) asset.mime_type = String(registrationAsset.mime_type);
   if (Number.isFinite(registrationAsset?.size_bytes)) asset.size_bytes = Number(registrationAsset.size_bytes);
@@ -75,10 +77,10 @@ export function attachPickedGeneratedVideoAsTake(timeline, shotId, item, takeDat
     ...safeObject(registrationAsset?.metadata),
     ...mediaMetadataFromCapture(capture?.media),
     shot_id: shotId,
+    take_id: captureTake.take_id ?? null,
     source_kind: ASSET_SOURCE_GENERATED,
   };
   const savedAsset = upsertTimelineAsset(timeline, asset);
-  const captureTake = takeDataFromRegistration(registration?.take);
   const take = attachVideoAssetAsTake(timeline, shotId, savedAsset.asset_id, {
     ...captureTake,
     ...deepClone(takeData),

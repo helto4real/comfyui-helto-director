@@ -27,6 +27,7 @@ import {
   createOrUpdateBoundaryBetweenShots,
   createShot,
   deleteTake,
+  deleteTakesByAssetPath,
   deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
@@ -481,6 +482,43 @@ function testDeleteTakeClearsAcceptedClipAndPrunesOnlyUnreferencedGeneratedAsset
   assert.equal(timeline.assets.some((asset) => asset.asset_id === shared.asset_id), true);
 }
 
+function testDeleteTakesByAssetPathPrefersPathBeforeFallbackTakeId() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Text", 0);
+  const shot = timeline.sequence.shots.find((candidate) => candidate.section_ids.includes(section.item_id));
+  timeline.assets.push({
+    asset_id: "asset_capture_001",
+    type: ASSET_TYPE_VIDEO,
+    source_kind: ASSET_SOURCE_GENERATED,
+    path: "/tmp/capture_001.mp4",
+    name: "capture_001.mp4",
+  }, {
+    asset_id: "asset_capture_002",
+    type: ASSET_TYPE_VIDEO,
+    source_kind: ASSET_SOURCE_GENERATED,
+    path: "/tmp/capture_002.mp4",
+    name: "capture_002.mp4",
+  });
+  const first = addTakeMetadata(timeline, shot.shot_id, {
+    take_id: "take_capture_001",
+    asset_id: "asset_capture_001",
+    status: "Accepted",
+  });
+  const second = addTakeMetadata(timeline, shot.shot_id, {
+    take_id: "take_capture_002",
+    asset_id: "asset_capture_002",
+  });
+  acceptTake(timeline, shot.shot_id, first.take_id);
+
+  assert.equal(deleteTakesByAssetPath(timeline, shot.shot_id, "/tmp/capture_001.mp4", second.take_id), true);
+  assert.equal(shot.takes.some((take) => take.take_id === first.take_id), false);
+  assert.equal(shot.takes.some((take) => take.take_id === second.take_id), true);
+  assert.equal(shot.accepted_take_id, null);
+  assert.equal(shot.clip_instance, null);
+  assert.equal(timeline.assets.some((asset) => asset.asset_id === "asset_capture_001"), false);
+  assert.equal(timeline.assets.some((asset) => asset.asset_id === "asset_capture_002"), true);
+}
+
 function testAttachGeneratedAssetAsTakePreservesGeneratedShotType() {
   const timeline = createDefaultVideoTimeline();
   const section = addValidTextSection(timeline, 0);
@@ -908,6 +946,7 @@ testAddSectionTargetsSelectedCompatibleShot();
 testStandaloneSectionCreationStillCreatesWrapperShot();
 testTakeAndClipInstanceOperations();
 testDeleteTakeClearsAcceptedClipAndPrunesOnlyUnreferencedGeneratedAsset();
+testDeleteTakesByAssetPathPrefersPathBeforeFallbackTakeId();
 testAttachGeneratedAssetAsTakePreservesGeneratedShotType();
 testProjectAndShotLoraOperations();
 testValidationReportsGenericShotStructureIssues();

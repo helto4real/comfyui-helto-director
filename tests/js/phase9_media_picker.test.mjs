@@ -166,6 +166,64 @@ function testGeneratedVideoPickerSidecarCreatesMetadataRichTake() {
   assert.equal("shot_id" in result.take, false);
 }
 
+function projectCaptureItem(path, takeId, assetId = "asset_reused_sidecar") {
+  const name = path.split("/").pop();
+  return pickedItem(path, name, {
+    duration_seconds: 2,
+    take_capture: {
+      schema_version: 1,
+      type: "HELTO_GENERATED_TAKE_CAPTURE",
+      media: {
+        type: ASSET_TYPE_VIDEO,
+        filename: name,
+        frame_rate: 24,
+        frame_count: 49,
+      },
+      registration: {
+        schema_version: 1,
+        type: "TAKE_REGISTRATION_ENVELOPE",
+        shot_id: "shot_001",
+        asset: {
+          asset_id: assetId,
+          type: ASSET_TYPE_VIDEO,
+          name,
+        },
+        take: {
+          take_id: takeId,
+          model_family: "LTX",
+          model_version: "2.3",
+        },
+      },
+      privacy: { privacy_mode: false, redacted_fields: [] },
+    },
+  });
+}
+
+function testGeneratedVideoPickerKeepsRepeatedCaptureAssetIdsPathUnique() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Text", 0);
+  const shot = timeline.sequence.shots.find((candidate) => candidate.section_ids.includes(section.item_id));
+  const first = attachPickedGeneratedVideoAsTake(
+    timeline,
+    shot.shot_id,
+    projectCaptureItem("/outputs/capture_001.mp4", "take_reused_capture"),
+  );
+  const second = attachPickedGeneratedVideoAsTake(
+    timeline,
+    shot.shot_id,
+    projectCaptureItem("/outputs/capture_002.mp4", "take_reused_capture"),
+  );
+
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(first.asset.asset_id, "asset_reused_sidecar");
+  assert.equal(second.asset.asset_id, "asset_reused_sidecar_2");
+  assert.equal(timeline.assets.length, 2);
+  assert.equal(timeline.assets.find((asset) => asset.asset_id === first.take.asset_id).path, "/outputs/capture_001.mp4");
+  assert.equal(timeline.assets.find((asset) => asset.asset_id === second.take.asset_id).path, "/outputs/capture_002.mp4");
+  assert.notEqual(first.take.take_id, second.take.take_id);
+}
+
 function testGeneratedVideoPickerFallbackStillCreatesCandidateTake() {
   const timeline = createDefaultVideoTimeline();
   const section = addSection(timeline, "Text", 0);
@@ -260,6 +318,7 @@ testAudioPickerSelectionCreatesClipAndAsset();
 testCancelOrEmptySelectionDoesNotCreateBlankSection();
 testReplaceModePreservesTiming();
 testGeneratedVideoPickerSidecarCreatesMetadataRichTake();
+testGeneratedVideoPickerKeepsRepeatedCaptureAssetIdsPathUnique();
 testGeneratedVideoPickerFallbackStillCreatesCandidateTake();
 testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake();
 testInspectorNoLongerRendersPathEntryClearControls();

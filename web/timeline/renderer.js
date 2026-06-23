@@ -83,7 +83,7 @@ import {
   clearShotLoraTargetStack,
   createOrUpdateBoundaryBetweenShots,
   createShot,
-  deleteTake,
+  deleteTakesByAssetPath,
   deleteSelectedItem,
   duplicateSelectedSection,
   fitDirectorSectionsEvenlyToDuration,
@@ -1087,11 +1087,12 @@ export class TimelineRenderer {
     summary.title = privacyRevealed ? (item.path || item.filename || summary.textContent) : summary.textContent;
     const actions = el("span", "htd-take-actions");
     const takeId = captureTakeId(item);
-    const existing = takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) : null;
+    const capturePath = captureMediaPath(item);
+    const existing = findAttachedTakeForCapture(timeline, shot, item);
     const previewData = this.captureVideoPreviewData(timeline, item, privacyRevealed);
     if (previewData) actions.append(iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData)));
     const remove = iconButton("delete", "Delete Take Files", () => {
-      this.deleteProjectTakeCaptureFromItem(shot, item, { takeId, label: label.textContent });
+      this.deleteProjectTakeCaptureFromItem(shot, item, { takeId, path: capturePath, label: label.textContent });
     });
     remove.classList.add("is-danger");
     const attach = iconButton("insert", existing ? "Capture Already Attached" : "Attach Project Capture As Take", () => {
@@ -1102,7 +1103,7 @@ export class TimelineRenderer {
     const accept = iconButton("accept", existing?.status === "Accepted" ? "Capture Already Accepted" : "Attach And Accept Project Capture", () => {
       this.commitMutation((currentTimeline) => {
         const liveShot = findShot(currentTimeline, shot.shot_id);
-        const liveExisting = takeId ? liveShot?.takes?.find((take) => take.take_id === takeId) : null;
+        const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item);
         const result = liveExisting ? { take: liveExisting } : attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
         if (result?.take) acceptTake(currentTimeline, shot.shot_id, result.take.take_id);
       }, "accept project capture");
@@ -2384,7 +2385,7 @@ export class TimelineRenderer {
   }
 
   async deleteProjectTakeCaptureFromItem(shot, item, options = {}) {
-    const path = String(item?.path ?? item?.file_path ?? item?.take_capture?.registration?.asset?.path ?? item?.take_capture?.registration?.asset?.file_path ?? "").trim();
+    const path = String(options.path ?? captureMediaPath(item)).trim();
     await this.deleteProjectTakePath(shot?.shot_id, path, {
       takeId: options.takeId || captureTakeId(item),
       label: options.label || captureSummaryLabel(item, this.isPrivacyRevealed(this.controller.timeline)),
@@ -2410,9 +2411,9 @@ export class TimelineRenderer {
         takeId: options.takeId,
         privacyMode: Boolean(timeline?.project?.privacy?.mode && !privacyRevealed),
       });
-      if (options.takeId) {
+      if (path || options.takeId) {
         this.commitMutation((currentTimeline) => {
-          deleteTake(currentTimeline, shotId, options.takeId);
+          deleteTakesByAssetPath(currentTimeline, shotId, path, options.takeId);
         }, "delete take");
       }
       const liveShot = findShot(this.controller.timeline, shotId) ?? { shot_id: shotId };
@@ -2803,6 +2804,31 @@ function captureShortSummaryLabel(item, privacyRevealed) {
   if (model) parts.push(privacyRevealed ? model : "Model");
   if (take.seed != null) parts.push(privacyRevealed ? `seed ${take.seed}` : "Seeded");
   return parts.join(" · ") || (privacyRevealed ? (item?.filename || item?.name || "Captured video") : "Captured video");
+}
+
+function captureMediaPath(item) {
+  return String(
+    item?.path
+    ?? item?.file_path
+    ?? item?.take_capture?.registration?.asset?.path
+    ?? item?.take_capture?.registration?.asset?.file_path
+    ?? "",
+  ).trim();
+}
+
+function assetMediaPath(asset) {
+  return String(asset?.path ?? asset?.file_path ?? "").trim();
+}
+
+function findAttachedTakeForCapture(timeline, shot, item) {
+  if (!shot) return null;
+  const capturePath = captureMediaPath(item);
+  if (capturePath) {
+    const byPath = (shot.takes ?? []).find((take) => assetMediaPath(assetForId(timeline, take.asset_id)) === capturePath);
+    if (byPath) return byPath;
+  }
+  const takeId = captureTakeId(item);
+  return takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) ?? null : null;
 }
 
 function captureOrderLabel(index, total) {
