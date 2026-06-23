@@ -29,7 +29,7 @@ function testTimelineHeightIsTripled() {
     getTimelineViewportHeight(timeline),
     RULER_HEIGHT + DIRECTOR_TRACK_HEIGHT + AUDIO_LANE_HEIGHT + TIMELINE_VIEWPORT_BORDER_HEIGHT,
   );
-  assert.equal(getTimelineWidgetHeight(timeline), 302);
+  assert.equal(getTimelineWidgetHeight(timeline), 308);
 }
 
 function testClearTimelineButtonEnablementHelper() {
@@ -76,7 +76,7 @@ function testSelectedPromptUsesShotAwareInspectorHeight() {
   });
   timeline.ui_state.selected_item_id = "section_001";
 
-  assert.equal(getTimelineWidgetHeight(timeline), 528);
+  assert.equal(getTimelineWidgetHeight(timeline), 534);
 }
 
 function testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall() {
@@ -92,9 +92,9 @@ function testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall() {
 
   const widget = { y: 180 };
   const contentHeight = getTimelineWidgetHeight(timeline);
-  assert.equal(contentHeight, 528);
+  assert.equal(contentHeight, 534);
   assert.equal(getTimelineWidgetRenderedHeight({ size: [820, 900] }, widget, timeline), 700);
-  assert.equal(getTimelineNodeMinimumHeight({ size: [820, 600] }, widget, timeline), 728);
+  assert.equal(getTimelineNodeMinimumHeight({ size: [820, 600] }, widget, timeline), 734);
 
   const setSizes = [];
   const node = {
@@ -105,7 +105,7 @@ function testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall() {
     },
   };
   assert.equal(ensureTimelineNodeFitsContent(node, widget, timeline), true);
-  assert.deepEqual(setSizes, [[820, 728]]);
+  assert.deepEqual(setSizes, [[820, 734]]);
   assert.equal(getTimelineWidgetRenderedHeight(node, widget, timeline), contentHeight);
 
   const tallNode = { size: [820, 900] };
