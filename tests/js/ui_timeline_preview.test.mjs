@@ -319,7 +319,14 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("item.tabIndex = -1"), true);
   assert.equal(rendererSource.includes("item.dataset.itemId = section.item_id"), true);
   assert.equal(rendererSource.includes("item.dataset.itemId = clip.item_id"), true);
+  assert.equal(rendererSource.includes("item.dataset.itemId = shot.shot_id"), true);
+  assert.equal(rendererSource.includes("const movableShot = canMoveBareShot(timeline, shot.shot_id)"), true);
+  assert.equal(rendererSource.includes("item.classList.toggle(\"is-bare-shot\", movableShot)"), true);
+  assert.equal(rendererSource.includes("this.startShotDrag(event, shot)"), true);
+  assert.equal(rendererSource.includes("startShotDrag(event, shot)"), true);
+  assert.equal(rendererSource.includes('mode: "shot-move"'), true);
   assert.equal(rendererSource.includes("startItemDrag(event"), true);
+  assert.equal(rendererSource.includes('dragState.mode === "move" || dragState.mode === "audio-move" || dragState.mode === "shot-move"'), true);
   assert.equal(rendererSource.includes("handlePointerSelection(event, dragState.itemId, target)"), true);
   assert.equal(rendererSource.includes("selectItem(timeline, dragState.itemId)"), true);
   assert.equal(rendererSource.includes("toggleSelectItem(timeline, itemId)"), true);
@@ -333,6 +340,7 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("pointerEdgeTimeOffset: pointerTime - pointerEdgeTime"), true);
   assert.equal(rendererSource.includes("const pointerTime = this.dragTimeFromClientX(event.clientX)"), true);
   assert.equal(rendererSource.includes("moveSelectedItems(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset)"), true);
+  assert.equal(rendererSource.includes('this.drag.mode === "shot-move"'), true);
   assert.equal(rendererSource.includes('resizeSection(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
   assert.equal(rendererSource.includes('resizeSection(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
   assert.equal(rendererSource.includes('resizeAudioClip(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
@@ -496,6 +504,8 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes('const deleteButton = iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete"))'), true);
   assert.equal(rendererSource.includes('deleteButton.classList.toggle("is-danger", Boolean(selectedSection))'), true);
   assert.equal(rendererSource.includes("const repairButtons = hasOverflow"), true);
+  assert.equal(rendererSource.includes('iconButton("shot", "Add Shot", () => this.commitMutation((timeline) => insertShotAfterCurrent(timeline), "add shot"))'), true);
+  assert.equal(rendererSource.includes("const start = Number(timeline.ui_state.playhead_time ?? 0)"), false);
   assert.equal(rendererSource.includes('"Fit Last Section"'), true);
   assert.equal(rendererSource.includes('"Fit All Sections Evenly"'), true);
   assert.equal(rendererSource.includes("fitLastDirectorSectionToDuration(timeline)"), true);

@@ -36,8 +36,11 @@ import {
   findShotForSection,
   getSelectedItemIds,
   hasDirectorSectionOverflow,
+  insertShotAfterCurrent,
+  canMoveBareShot,
   isItemSelected,
   moveAudioClip,
+  moveBareShot,
   moveSection,
   moveSelectedItems,
   renameShot,
@@ -383,6 +386,94 @@ function testAddSectionTargetsSelectedCompatibleShot() {
   assert.deepEqual(shot.section_ids, [first.item_id, second.item_id]);
   assert.deepEqual([second.start_time, second.end_time], [1, 2]);
   assert.deepEqual([shot.start_time, shot.end_time], [0, 2]);
+}
+
+function testInsertShotAfterCurrentSelection() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 6;
+  const first = addValidTextSection(timeline, 0);
+  const second = addValidTextSection(timeline, 1);
+  const firstShot = findShotForSection(timeline, first.item_id);
+  const secondShot = findShotForSection(timeline, second.item_id);
+
+  timeline.ui_state.playhead_time = 0;
+  selectItem(timeline, second.item_id);
+  const afterSection = insertShotAfterCurrent(timeline);
+
+  assert.ok(afterSection);
+  assert.equal(afterSection.start_time, 2);
+  assert.equal(afterSection.end_time, 3);
+  assert.equal(timeline.ui_state.selected_item_id, afterSection.shot_id);
+
+  selectItem(timeline, firstShot.shot_id);
+  const afterShot = insertShotAfterCurrent(timeline);
+
+  assert.ok(afterShot);
+  assert.equal(afterShot.start_time, 3);
+  assert.equal(afterShot.end_time, 4);
+  assert.equal(timeline.sequence.shots.some((shot) => shot.shot_id === secondShot.shot_id), true);
+}
+
+function testInsertShotDoesNotFallBackBeforeCurrentShot() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 3;
+  addValidTextSection(timeline, 0);
+  const current = addValidTextSection(timeline, 2);
+
+  timeline.ui_state.playhead_time = 0;
+  selectItem(timeline, current.item_id);
+
+  assert.equal(insertShotAfterCurrent(timeline), null);
+  assert.equal(timeline.sequence.shots.length, 2);
+}
+
+function testSelectedBareShotReceivesAddedSections() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 4;
+  const shot = createShot(timeline, { shot_id: "shot_empty", start_time: 0, end_time: 1 });
+
+  assert.equal(canMoveBareShot(timeline, shot.shot_id), true);
+
+  const text = addSection(timeline, "Text");
+  selectItem(timeline, shot.shot_id);
+  const image = addSection(timeline, "Image");
+  selectItem(timeline, shot.shot_id);
+  const video = addSection(timeline, "Video");
+
+  assert.deepEqual(shot.section_ids, [text.item_id, image.item_id, video.item_id]);
+  assert.equal(timeline.sequence.shots.length, 1);
+  assert.deepEqual([text.start_time, image.start_time, video.start_time], [0, 1, 2]);
+  assert.equal(canMoveBareShot(timeline, shot.shot_id), false);
+}
+
+function testSelectedShotSectionAddFailsWithoutEarlierFallback() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 3;
+  addValidTextSection(timeline, 0);
+  const currentSection = addValidTextSection(timeline, 2);
+  const current = findShotForSection(timeline, currentSection.item_id);
+  selectItem(timeline, current.shot_id);
+
+  assert.equal(addSection(timeline, "Text"), null);
+  assert.deepEqual(current.section_ids, [currentSection.item_id]);
+  assert.equal(timeline.director_track.sections.length, 2);
+}
+
+function testMoveBareShotRespectsShotBounds() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.duration_seconds = 5;
+  const shot = createShot(timeline, { shot_id: "shot_empty", start_time: 0, end_time: 1 });
+  createShot(timeline, { shot_id: "shot_later", start_time: 4, end_time: 5 });
+  selectItem(timeline, shot.shot_id);
+
+  assert.equal(moveSelectedItems(timeline, shot.shot_id, 2), true);
+  assert.deepEqual([shot.start_time, shot.end_time], [2, 3]);
+
+  assert.equal(moveBareShot(timeline, shot.shot_id, 3.75), true);
+  assert.deepEqual([shot.start_time, shot.end_time], [3, 4]);
+
+  const section = addSection(timeline, "Text", 0, { forceStandalone: true });
+  assert.equal(moveBareShot(timeline, findShotForSection(timeline, section.item_id).shot_id, 2), false);
 }
 
 function testStandaloneSectionCreationStillCreatesWrapperShot() {
@@ -943,6 +1034,11 @@ testMalformedOrMissingSequenceMigratesFromSections();
 testExistingSequenceShotsArePreserved();
 testShotOperationsCreateAssignBoundaryAndDelete();
 testAddSectionTargetsSelectedCompatibleShot();
+testInsertShotAfterCurrentSelection();
+testInsertShotDoesNotFallBackBeforeCurrentShot();
+testSelectedBareShotReceivesAddedSections();
+testSelectedShotSectionAddFailsWithoutEarlierFallback();
+testMoveBareShotRespectsShotBounds();
 testStandaloneSectionCreationStillCreatesWrapperShot();
 testTakeAndClipInstanceOperations();
 testDeleteTakeClearsAcceptedClipAndPrunesOnlyUnreferencedGeneratedAsset();

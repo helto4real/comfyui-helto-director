@@ -193,9 +193,9 @@ export function moveSelectedItems(timeline, itemId, startTime) {
   if (dragged.kind === "audio" && dragged.item.locked) return false;
   const selectedIds = new Set(getSelectedItemIds(timeline));
   if (!selectedIds.has(itemId) || selectedIds.size <= 1) {
-    return dragged.kind === "audio"
-      ? moveAudioClip(timeline, itemId, startTime)
-      : moveSection(timeline, itemId, startTime);
+    if (dragged.kind === "audio") return moveAudioClip(timeline, itemId, startTime);
+    if (dragged.kind === "shot") return moveBareShot(timeline, itemId, startTime);
+    return moveSection(timeline, itemId, startTime);
   }
 
   const snappedStart = snapTime(startTime, timeline);
@@ -214,6 +214,11 @@ export function moveSelectedItems(timeline, itemId, startTime) {
       clip.start_time = Number(clip.start_time) + delta;
       clip.end_time = Number(clip.end_time) + delta;
     }
+  }
+  for (const shot of ensureSequence(timeline).shots) {
+    if (!selectedIds.has(shot.shot_id) || !canMoveBareShot(timeline, shot.shot_id)) continue;
+    shot.start_time = Number(shot.start_time) + delta;
+    shot.end_time = Number(shot.end_time) + delta;
   }
   sortDirectorSections(timeline);
   syncShotTimingFromSections(timeline);
@@ -323,6 +328,46 @@ export function createShot(timeline, options = {}) {
   syncShotTimingFromSections(timeline);
   selectItem(timeline, shot.shot_id);
   return shot;
+}
+
+export function insertShotAfterCurrent(timeline, options = {}) {
+  const requestedDuration = Number(options.duration ?? DEFAULT_SECTION_DURATION);
+  const duration = Math.min(
+    Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : DEFAULT_SECTION_DURATION,
+    getDuration(timeline),
+  );
+  if (!(duration > 0)) return null;
+  const currentShot = resolveCurrentShot(timeline);
+  const preferredStart = currentShot
+    ? Number(currentShot.end_time ?? currentShot.start_time ?? 0)
+    : Number(timeline.ui_state?.playhead_time ?? 0);
+  const start = findShotGapForDuration(timeline, duration, snapTime(preferredStart, timeline), {
+    allowEarlierFallback: !currentShot,
+  });
+  if (start == null) return null;
+  return createShot(timeline, {
+    ...options,
+    start_time: start,
+    end_time: start + duration,
+  });
+}
+
+export function canMoveBareShot(timeline, shotId) {
+  const shot = findShot(timeline, shotId);
+  return Boolean(shot && sectionsForShot(timeline, shot).length === 0);
+}
+
+export function moveBareShot(timeline, shotId, startTime) {
+  const shot = findShot(timeline, shotId);
+  if (!shot || !canMoveBareShot(timeline, shot.shot_id)) return false;
+  const shotDuration = Number(shot.end_time) - Number(shot.start_time);
+  if (!(shotDuration > 0)) return false;
+  const bounds = shotMovementBounds(timeline, shot);
+  if (bounds.max - bounds.min < shotDuration) return false;
+  const start = clamp(snapTime(startTime, timeline), bounds.min, bounds.max - shotDuration);
+  shot.start_time = start;
+  shot.end_time = start + shotDuration;
+  return true;
 }
 
 export function deleteShot(timeline, shotId, options = {}) {
@@ -839,6 +884,20 @@ function selectedMoveDeltaBounds(timeline, selectedIds) {
       max = Math.min(max, duration - Number(clip.end_time));
     }
   }
+  const unselectedShots = orderedShots(timeline).filter((shot) => !selectedIds.has(shot.shot_id));
+  for (const shot of orderedShots(timeline)) {
+    if (!selectedIds.has(shot.shot_id) || !canMoveBareShot(timeline, shot.shot_id)) continue;
+    movable = true;
+    min = Math.max(min, -Number(shot.start_time));
+    max = Math.min(max, duration - Number(shot.end_time));
+    for (const other of unselectedShots) {
+      if (Number(other.end_time) <= Number(shot.start_time)) {
+        min = Math.max(min, Number(other.end_time) - Number(shot.start_time));
+      } else if (Number(other.start_time) >= Number(shot.end_time)) {
+        max = Math.min(max, Number(other.start_time) - Number(shot.end_time));
+      }
+    }
+  }
   return { min, max, movable };
 }
 
@@ -1095,7 +1154,7 @@ function normalizeTimelineLoraStack(stack) {
   };
 }
 
-function findGapForDuration(timeline, duration, preferredStart = 0) {
+function findGapForDuration(timeline, duration, preferredStart = 0, options = {}) {
   const projectDuration = getDuration(timeline);
   const sections = [...timeline.director_track.sections].sort((a, b) => a.start_time - b.start_time);
   const gaps = [];
@@ -1110,6 +1169,7 @@ function findGapForDuration(timeline, duration, preferredStart = 0) {
     const start = Math.max(gap.start, preferredStart);
     if (gap.end - start >= duration) return start;
   }
+  if (options.allowEarlierFallback === false) return null;
   const gap = gaps.find((candidate) => candidate.end - candidate.start >= duration);
   return gap ? gap.start : null;
 }
@@ -1119,7 +1179,30 @@ function findShotSectionInsertionStart(timeline, shot, duration) {
   const preferredStart = shotSections.length
     ? Math.max(...shotSections.map((section) => Number(section.end_time)))
     : Number(shot.start_time ?? 0);
-  return findGapForDuration(timeline, duration, clampStart(timeline, preferredStart, duration));
+  return findGapForDuration(timeline, duration, snapTime(preferredStart, timeline), { allowEarlierFallback: false });
+}
+
+function findShotGapForDuration(timeline, duration, preferredStart = 0, options = {}) {
+  const projectDuration = getDuration(timeline);
+  const shots = orderedShots(timeline);
+  const gaps = [];
+  let cursor = 0;
+  for (const shot of shots) {
+    const start = Number(shot.start_time ?? 0);
+    const end = Number(shot.end_time ?? start);
+    if (start > cursor) gaps.push({ start: cursor, end: start });
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < projectDuration) gaps.push({ start: cursor, end: projectDuration });
+
+  const earliestStart = Math.max(0, Number(preferredStart) || 0);
+  for (const gap of gaps) {
+    const start = Math.max(gap.start, earliestStart);
+    if (gap.end - start >= duration) return start;
+  }
+  if (options.allowEarlierFallback === false) return null;
+  const fallback = gaps.find((gap) => gap.end - gap.start >= duration);
+  return fallback ? fallback.start : null;
 }
 
 function clampStart(timeline, start, duration) {
@@ -1158,6 +1241,14 @@ function sectionsForShot(timeline, shot) {
   return directorSections(timeline).filter((section) => sectionIds.has(String(section.item_id)));
 }
 
+function resolveCurrentShot(timeline) {
+  const selectedId = timeline.ui_state?.selected_item_id;
+  const selectedShot = findShot(timeline, selectedId);
+  if (selectedShot) return selectedShot;
+  const selectedSection = findSection(timeline, selectedId);
+  return selectedSection ? findShotForSection(timeline, selectedSection.item_id) : null;
+}
+
 function resolveSectionTargetShot(timeline, options = {}) {
   if (options.forceStandalone) return null;
   if (options.shotId) return compatibleSectionTargetShot(timeline, findShot(timeline, options.shotId));
@@ -1173,6 +1264,15 @@ function compatibleSectionTargetShot(timeline, shot) {
   if (!shot || shot.type === "Imported") return null;
   if (!["Generated", "Extended", "Edited", "Placeholder"].includes(shot.type)) return null;
   return findShot(timeline, shot.shot_id) ?? null;
+}
+
+function shotMovementBounds(timeline, shot) {
+  const shots = orderedShots(timeline);
+  const index = shots.findIndex((candidate) => candidate.shot_id === shot.shot_id);
+  return {
+    min: index > 0 ? Number(shots[index - 1].end_time) : 0,
+    max: index >= 0 && index < shots.length - 1 ? Number(shots[index + 1].start_time) : getDuration(timeline),
+  };
 }
 
 function findAudioClipWithTrack(timeline, itemId) {

@@ -82,7 +82,6 @@ import {
   clearShotLoraOverride,
   clearShotLoraTargetStack,
   createOrUpdateBoundaryBetweenShots,
-  createShot,
   deleteTakesByAssetPath,
   deleteSelectedItem,
   duplicateSelectedSection,
@@ -94,7 +93,9 @@ import {
   findShotForSection,
   getSelectedItemIds,
   hasDirectorSectionOverflow,
+  insertShotAfterCurrent,
   isItemSelected,
+  canMoveBareShot,
   moveSelectedItems,
   renameShot,
   resizeAudioClip,
@@ -357,12 +358,7 @@ export class TimelineRenderer {
       iconButton("image", "Add Image Section", () => this.openMediaPicker(ASSET_TYPE_IMAGE)),
       iconButton("video", "Add Video Section", () => this.openMediaPicker(ASSET_TYPE_VIDEO)),
       iconButton("audio", "Add Audio Clip", () => this.openMediaPicker(ASSET_TYPE_AUDIO)),
-      iconButton("shot", "Add Shot", () => {
-        this.commitMutation((timeline) => {
-          const start = Number(timeline.ui_state.playhead_time ?? 0);
-          createShot(timeline, { start_time: start, end_time: Math.min(Number(timeline.project.duration_seconds ?? 5), start + 1) });
-        }, "add shot");
-      }),
+      iconButton("shot", "Add Shot", () => this.commitMutation((timeline) => insertShotAfterCurrent(timeline), "add shot")),
       toolbarSpacer(),
       this.renderToolbarMenu("display", "Display Mode", "layers", this.controller.timeline.ui_state.timeline_display_mode, TIMELINE_DISPLAY_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.timeline_display_mode = value; }, "settings change");
@@ -541,14 +537,20 @@ export class TimelineRenderer {
     item.textContent = label;
     item.title = `${label} (${shot.type})`;
     item.setAttribute("aria-label", item.title);
+    const movableShot = canMoveBareShot(timeline, shot.shot_id);
+    item.classList.toggle("is-bare-shot", movableShot);
     item.classList.toggle("is-selected", isItemSelected(timeline, shot.shot_id));
     item.classList.toggle("is-primary-selected", timeline.ui_state.selected_item_id === shot.shot_id);
-    item.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.commitMutation((currentTimeline) => selectItem(currentTimeline, shot.shot_id), "select", { pushUndo: false });
-      this.focusTimelineItem(shot.shot_id, item);
-    });
+    if (movableShot) {
+      item.addEventListener("pointerdown", (event) => this.startShotDrag(event, shot));
+    } else {
+      item.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.commitMutation((currentTimeline) => selectItem(currentTimeline, shot.shot_id), "select", { pushUndo: false });
+        this.focusTimelineItem(shot.shot_id, item);
+      });
+    }
     return item;
   }
 
@@ -2100,6 +2102,15 @@ export class TimelineRenderer {
     });
   }
 
+  startShotDrag(event, shot) {
+    this.startItemDrag(event, {
+      itemId: shot.shot_id,
+      mode: "shot-move",
+      startStart: shot.start_time,
+      startEnd: shot.end_time,
+    });
+  }
+
   startItemDrag(event, dragState) {
     if (event.button != null && event.button !== 0) {
       event.stopPropagation();
@@ -2108,7 +2119,7 @@ export class TimelineRenderer {
     event.preventDefault();
     event.stopPropagation();
     const target = event.currentTarget.closest(".htd-item");
-    if (dragState.mode === "move" || dragState.mode === "audio-move") {
+    if (dragState.mode === "move" || dragState.mode === "audio-move" || dragState.mode === "shot-move") {
       const handledSelectionOnly = this.handlePointerSelection(event, dragState.itemId, target);
       if (handledSelectionOnly) return;
     } else {
@@ -2165,6 +2176,9 @@ export class TimelineRenderer {
     const timeline = this.controller.timeline;
     const pointerTime = this.dragTimeFromClientX(event.clientX);
     if (this.drag.mode === "move") {
+      this.drag.hasMoved = true;
+      moveSelectedItems(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset);
+    } else if (this.drag.mode === "shot-move") {
       this.drag.hasMoved = true;
       moveSelectedItems(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset);
     } else if (this.drag.mode === "start") {
@@ -3553,6 +3567,7 @@ function installStyles(documentRef) {
     .htd-director-track .htd-section, .htd-director-track .htd-gap { top: 31px; height: calc(100% - 40px); }
     .htd-section-label { position: absolute; z-index: 3; top: 8px; left: 10px; right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.82); pointer-events: none; }
     .htd-shot-band { position: absolute; top: 5px; height: 20px; padding: 0 8px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: #dbe6f5; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; font: inherit; text-align: left; transition: border-color .12s ease, color .12s ease; }
+    .htd-shot-band.is-bare-shot { cursor: grab; }
     .htd-shot-band:hover { border-color: #5a6a82; }
     .htd-shot-band.is-selected { border-color: var(--htd-accent); color: var(--htd-accent-strong); }
     .htd-shot-band.is-primary-selected { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.72); }
