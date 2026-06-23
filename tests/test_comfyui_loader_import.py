@@ -435,8 +435,59 @@ def test_timeline_take_capture_node_saves_video_and_registers_sidecar(tmp_path, 
     assert saved_path.name.startswith("take_capture_video_")
     assert saved_path.with_suffix(".helto_take.json").is_file()
     assert output[4]["summary"]["sidecar_filename"] == saved_path.with_suffix(".helto_take.json").name
+    assert output[4]["ui"]["filename"] == output.ui["images"][0]["filename"]
+    assert output.ui["helto_take_capture_preview"] == [True]
+    assert output.ui["helto_privacy_mode"] == [False]
+    assert output.ui["animated"] == (True,)
     assert timeline["assets"][0]["metadata"]["frame_count"] == 12
     assert timeline["sequence"]["shots"][0]["takes"][0]["seed"] == 456
+    assert validate_video_timeline(timeline)["is_valid"] is True
+
+
+def test_timeline_take_capture_private_preview_is_tagged_and_debug_redacted(tmp_path, monkeypatch):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
+    node_module = sys.modules[node.__module__]
+    monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(tmp_path))
+    timeline_input = _timeline_with_shot()
+    timeline_input["project"]["privacy"]["mode"] = True
+    video = FakeVideo()
+
+    output = node.execute(
+        timeline_input,
+        take_registration_json=json.dumps(
+            {
+                "type": "TAKE_REGISTRATION_ENVELOPE",
+                "shot_id": "shot_001",
+                "asset": {
+                    "asset_id": "asset_private_video",
+                    "type": ASSET_TYPE_VIDEO,
+                    "name": "private_capture.mp4",
+                },
+                "take": {
+                    "take_id": "take_private_video",
+                    "seed": 789,
+                },
+            }
+        ),
+        video=video,
+        filename_prefix="private/%shot_id%/%take_id%",
+    )
+
+    timeline = output[0]
+    saved_path = Path(timeline["assets"][0]["path"])
+    assert output.ui["helto_take_capture_preview"] == [True]
+    assert output.ui["helto_privacy_mode"] == [True]
+    assert output.ui["images"][0]["filename"] == saved_path.name
+    assert output.ui["images"][0]["subfolder"]
+    assert output.ui["animated"] == (True,)
+    assert output[4]["summary"]["filename"] == "Generated video"
+    assert output[4]["summary"]["subfolder"] is None
+    assert output[4]["summary"]["path"] == "Private path"
+    assert output[4]["summary"]["sidecar_filename"] == "Private sidecar"
+    assert output[4]["summary"]["project_directory"] == "Private path"
+    assert output[4]["ui"] == {"private": True}
+    assert saved_path.name not in json.dumps(output[4])
     assert validate_video_timeline(timeline)["is_valid"] is True
 
 

@@ -20,6 +20,13 @@ import {
   waveformPeakRequestForClip,
   waveformPeaksForClip,
 } from "../../web/timeline/renderer.js";
+import {
+  clearNativeTakeCapturePreview,
+  setTakeCapturePreviewReveal,
+  syncTakeCapturePreview,
+  takeCapturePreviewFromOutput,
+  takeCapturePreviewUrl,
+} from "../../web/timeline/take_capture_preview.js";
 
 function testTimelineHeightIsTripled() {
   const timeline = createDefaultVideoTimeline();
@@ -481,6 +488,83 @@ function testSharedMediaPreviewSupportsVideoControls() {
   assert.equal(previewSource.includes(".pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover video"), true);
 }
 
+function testTakeCapturePreviewHelpersUsePrivateTaggedOutput() {
+  const source = { filename: "shot take 001.mp4", subfolder: "takes/shot_001", type: "output" };
+  const apiRef = { apiURL: (path) => `/api${path}` };
+  const output = {
+    images: [source],
+    animated: [true],
+    helto_take_capture_preview: [true],
+    helto_privacy_mode: [true],
+  };
+
+  assert.equal(
+    takeCapturePreviewUrl(source, apiRef),
+    "/api/view?filename=shot+take+001.mp4&type=output&subfolder=takes%2Fshot_001",
+  );
+  assert.deepEqual(takeCapturePreviewFromOutput(output, apiRef), {
+    source,
+    url: "/api/view?filename=shot+take+001.mp4&type=output&subfolder=takes%2Fshot_001",
+  });
+  assert.equal(takeCapturePreviewFromOutput({ ...output, helto_privacy_mode: [false] }, apiRef), null);
+  assert.equal(takeCapturePreviewFromOutput({ ...output, helto_take_capture_preview: [false] }, apiRef), null);
+  assert.equal(takeCapturePreviewFromOutput({ ...output, images: [] }, apiRef), null);
+}
+
+function testTakeCapturePrivatePreviewClearsNativeAndRevealsOnHover() {
+  const previousDocument = globalThis.document;
+  globalThis.document = createFakeDocument();
+  try {
+    const node = createFakeTakeCaptureNode();
+    const appRef = { canvas: { dirty: [], setDirty(...args) { this.dirty.push(args); } } };
+    const output = {
+      images: [{ filename: "private.mp4", subfolder: "takes", type: "output" }],
+      animated: [true],
+      helto_take_capture_preview: [true],
+      helto_privacy_mode: [true],
+    };
+
+    assert.equal(syncTakeCapturePreview(node, output, { apiRef: { apiURL: (path) => path }, appRef }), true);
+    assert.equal(node.imgs.length, 0);
+    assert.equal(node.widgets.some((widget) => widget.name === "$$canvas-image-preview"), false);
+    assert.equal(node._heltoTakeCapturePreview.url, "/view?filename=private.mp4&type=output&subfolder=takes");
+    assert.equal(node._heltoTakeCapturePreview.container.hidden, false);
+    assert.equal(node._heltoTakeCapturePreview.container.classList.contains("is-revealed"), false);
+    assert.deepEqual(node.graph.dirty, [[true, true]]);
+    assert.deepEqual(appRef.canvas.dirty, [[true, true]]);
+
+    assert.equal(setTakeCapturePreviewReveal(node, true), true);
+    assert.equal(node._heltoTakeCapturePreview.container.classList.contains("is-revealed"), true);
+    assert.equal(node._heltoTakeCapturePreview.video.playCount, 1);
+
+    assert.equal(setTakeCapturePreviewReveal(node, false), true);
+    assert.equal(node._heltoTakeCapturePreview.container.classList.contains("is-revealed"), false);
+    assert.equal(node._heltoTakeCapturePreview.video.pauseCount, 2);
+    assert.equal(node._heltoTakeCapturePreview.video.currentTime, 0);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+}
+
+function testTakeCapturePreviewExtensionIsInstalled() {
+  const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
+
+  assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), true);
+  assert.equal(extensionSource.includes('import { installTakeCapturePrivacyPreview } from "./timeline/take_capture_preview.js";'), true);
+  assert.equal(extensionSource.includes('nodeData?.name === "HeltoTimelineTakeCapture"'), true);
+  assert.equal(extensionSource.includes("installTakeCapturePrivacyPreview(nodeType, app, api)"), true);
+
+  const previewSource = readFileSync(new URL("../../web/timeline/take_capture_preview.js", import.meta.url), "utf8");
+  assert.equal(previewSource.includes("helto_take_capture_preview"), true);
+  assert.equal(previewSource.includes("helto_privacy_mode"), true);
+  assert.equal(previewSource.includes("NATIVE_PREVIEW_WIDGET_NAME = \"$$canvas-image-preview\""), true);
+  assert.equal(previewSource.includes("getMinHeight: widgetHeight"), true);
+  assert.equal(previewSource.includes("getMaxHeight: widgetHeight"), true);
+  assert.equal(previewSource.includes("getHeight: widgetHeight"), true);
+  assert.equal(previewSource.includes("onMouseEnter"), true);
+  assert.equal(previewSource.includes("onMouseLeave"), true);
+}
+
 function testDeleteContextMenuIsAvailableOnTimelineItems() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
   const contextMenuRegistrations = rendererSource.match(/addEventListener\("contextmenu"/g) ?? [];
@@ -614,7 +698,6 @@ function testWanSegmentedExecutorSplitStepWidgetSync() {
 function testTimelineStatusBarOverlayIsNotInstalled() {
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
 
-  assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), false);
   assert.equal(extensionSource.includes("installTimelineStatusBarBridge"), false);
   assert.equal(extensionSource.includes("helto-timeline-status-bar-bridge"), false);
   assert.equal(extensionSource.includes('apiRef.addEventListener?.("progress_state"'), false);
@@ -733,6 +816,9 @@ testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testBoundarySelectionUsesInspectorHeightAndLiveFieldUpdates();
 testSectionPreviewUsesContainedRepeatedFrames();
 testSharedMediaPreviewSupportsVideoControls();
+testTakeCapturePreviewHelpersUsePrivateTaggedOutput();
+testTakeCapturePrivatePreviewClearsNativeAndRevealsOnHover();
+testTakeCapturePreviewExtensionIsInstalled();
 testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
 testWanSegmentedExecutorSplitStepWidgetSync();
@@ -742,3 +828,97 @@ testWaveformHelpersAdaptAndTrimPeaks();
 testViewportMeasurementIgnoresCollapsedChildWidth();
 
 console.log("timeline preview UI tests passed");
+
+function createFakeTakeCaptureNode() {
+  return {
+    imgs: [{ src: "native" }],
+    widgets: [{ name: "$$canvas-image-preview" }, { name: "other" }],
+    graph: {
+      dirty: [],
+      setDirtyCanvas(...args) {
+        this.dirty.push(args);
+      },
+    },
+    addDOMWidget(name, label, element, options) {
+      const widget = { name, label, element, options };
+      this.widgets.push(widget);
+      return widget;
+    },
+  };
+}
+
+function createFakeDocument() {
+  const elementsById = new Map();
+  const head = createFakeElement("head");
+  return {
+    head,
+    createElement(tagName) {
+      const element = createFakeElement(tagName);
+      if (tagName === "style") {
+        Object.defineProperty(element, "id", {
+          get() {
+            return this._id ?? "";
+          },
+          set(value) {
+            this._id = value;
+            elementsById.set(value, this);
+          },
+        });
+      }
+      return element;
+    },
+    getElementById(id) {
+      return elementsById.get(id) ?? null;
+    },
+  };
+}
+
+function createFakeElement(tagName) {
+  const classes = new Set();
+  return {
+    tagName,
+    children: [],
+    hidden: false,
+    currentTime: 0,
+    pauseCount: 0,
+    playCount: 0,
+    className: "",
+    attributes: {},
+    listeners: {},
+    classList: {
+      toggle(name, force) {
+        if (force) classes.add(name);
+        else classes.delete(name);
+      },
+      remove(name) {
+        classes.delete(name);
+      },
+      contains(name) {
+        return classes.has(name);
+      },
+    },
+    append(child) {
+      this.children.push(child);
+    },
+    appendChild(child) {
+      this.children.push(child);
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+    removeAttribute(name) {
+      delete this.attributes[name];
+    },
+    addEventListener(name, callback) {
+      this.listeners[name] = callback;
+    },
+    play() {
+      this.playCount += 1;
+      return Promise.resolve();
+    },
+    pause() {
+      this.pauseCount += 1;
+    },
+    load() {},
+  };
+}

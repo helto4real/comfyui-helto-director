@@ -234,11 +234,7 @@ class TimelineTakeCapture(io.ComfyNode):
             sidecar_path=sidecar_path,
             saved_result=saved_result,
         )
-        preview = (
-            ui.PreviewVideo([saved_result])
-            if saved_result is not None
-            else None
-        )
+        preview = _take_capture_preview_ui(result["timeline"], saved_result)
         return io.NodeOutput(
             result["timeline"],
             video_output,
@@ -677,16 +673,37 @@ def _debug_info(
             "project_id": storage_summary.get("project_id"),
             "project_directory": "Private path" if privacy_mode else storage_summary.get("project_directory"),
         },
-        "ui": (
-            {
-                "filename": saved_result.filename,
-                "subfolder": saved_result.subfolder,
-                "type": saved_result.type.value,
-            }
-            if saved_result is not None
-            else None
-        ),
+        "ui": _debug_ui(saved_result, privacy_mode=privacy_mode),
     }
+
+
+def _take_capture_preview_ui(timeline: dict, saved_result: ui.SavedResult | None) -> dict[str, Any] | None:
+    if saved_result is None:
+        return None
+    privacy_mode = _timeline_privacy_mode(timeline)
+    preview = ui.PreviewVideo([saved_result]).as_dict()
+    return {
+        **preview,
+        "helto_take_capture_preview": [True],
+        "helto_privacy_mode": [privacy_mode],
+    }
+
+
+def _debug_ui(saved_result: ui.SavedResult | None, *, privacy_mode: bool) -> dict[str, Any] | None:
+    if saved_result is None:
+        return None
+    if privacy_mode:
+        return {"private": True}
+    return {
+        "filename": saved_result.filename,
+        "subfolder": saved_result.subfolder,
+        "type": saved_result.type.value,
+    }
+
+
+def _timeline_privacy_mode(timeline: dict) -> bool:
+    project = timeline.get("project") if isinstance(timeline, dict) else {}
+    return bool(_raw_dict(_raw_dict(project).get("privacy")).get("mode"))
 
 
 def _media_payload_for_video(
