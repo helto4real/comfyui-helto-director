@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
 import torch
 
 from shared.contracts.video_timeline import (
@@ -12,8 +13,10 @@ from shared.contracts.video_timeline import (
     ASSET_TYPE_AUDIO,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_BLEND_SEAM,
     BOUNDARY_MODE_CONTINUOUS_SHOT,
     BOUNDARY_MODE_HARD_CUT,
+    BOUNDARY_MODE_TRANSITION,
     LORA_MERGE_MODE_ADD_TO_GLOBAL,
     LORA_MERGE_MODE_DISABLE_LORAS,
     LORA_MERGE_MODE_REPLACE_GLOBAL,
@@ -140,7 +143,12 @@ def _two_shot_text_timeline() -> dict:
     return timeline
 
 
-def _two_shot_text_timeline_with_continuity() -> dict:
+def _two_shot_text_timeline_with_continuity(
+    *,
+    mode: str = BOUNDARY_MODE_CONTINUOUS_SHOT,
+    tail_frames: int = 6,
+    transition_prompt: str = "",
+) -> dict:
     timeline = _two_shot_text_timeline()
     timeline["assets"].append(
         {
@@ -178,8 +186,9 @@ def _two_shot_text_timeline_with_continuity() -> dict:
             "boundary_id": "boundary_continuous",
             "left_shot_id": "shot_section_001",
             "right_shot_id": "shot_section_002",
-            "mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
-            "tail_frames": 6,
+            "mode": mode,
+            "tail_frames": tail_frames,
+            "transition_prompt": transition_prompt,
         }
     ]
     return timeline
@@ -707,8 +716,19 @@ def test_wan_planner_plans_selected_shot_timeline_with_boundary_context():
     assert debug["details"]["shot_context"] == shot_context
 
 
-def test_wan_planner_reports_available_continuity_as_unsupported():
-    timeline = _two_shot_text_timeline_with_continuity()
+@pytest.mark.parametrize(
+    ("mode", "policy"),
+    [
+        (BOUNDARY_MODE_CONTINUOUS_SHOT, "continuous"),
+        (BOUNDARY_MODE_BLEND_SEAM, "blend"),
+        (BOUNDARY_MODE_TRANSITION, "transition"),
+    ],
+)
+def test_wan_planner_marks_available_boundary_conditioning_as_applied(mode, policy):
+    timeline = _two_shot_text_timeline_with_continuity(
+        mode=mode,
+        transition_prompt="a smoky match cut" if mode == BOUNDARY_MODE_TRANSITION else "",
+    )
     timeline["ui_state"]["selected_item_id"] = "shot_section_002"
 
     plan, validation, debug = build_wan_timeline_plan(
@@ -718,18 +738,73 @@ def test_wan_planner_reports_available_continuity_as_unsupported():
     )
     wan = plan["model_specific"]["wan"]
     continuity = wan["continuity_context"]
+    conditioning = wan["boundary_conditioning"]
 
     assert validation["is_valid"] is True
-    assert [entry["code"] for entry in validation["warnings"]] == [
-        "WAN_SHOT_CONTINUITY_UNSUPPORTED"
-    ]
-    assert continuity["policy"] == "continuous"
+    assert validation["warnings"] == []
+    assert continuity["policy"] == policy
     assert continuity["source_status"] == "available"
-    assert continuity["model_status"] == "unsupported"
+    assert continuity["model_status"] == "applied"
+    assert continuity["effective_tail_frames"] == 9
     assert continuity["clip_reference"]["asset_id"] == "asset_previous_take"
-    assert debug["summary"]["shot_continuity_policy"] == "continuous"
-    assert debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert conditioning["type"] == "wan_previous_tail"
+    assert conditioning["policy"] == policy
+    assert conditioning["mode"] == mode
+    assert conditioning["model_status"] == "applied"
+    assert conditioning["asset_id"] == "asset_previous_take"
+    assert conditioning["path"] == "/tmp/previous.mp4"
+    assert conditioning["requested_tail_frames"] == 6
+    assert conditioning["effective_tail_frames"] == 9
+    assert conditioning["transition_prompt_applied"] is (mode == BOUNDARY_MODE_TRANSITION)
+    assert debug["summary"]["shot_continuity_policy"] == policy
+    assert debug["summary"]["shot_continuity_status"] == "applied"
+    assert debug["summary"]["boundary_conditioning_status"] == "applied"
+    assert debug["summary"]["boundary_conditioning_effective_tail_frames"] == 9
     assert debug["details"]["continuity_context"] == continuity
+    assert debug["details"]["boundary_conditioning"] == conditioning
+
+
+def test_wan_planner_merges_transition_prompt_into_first_prompt_region_only():
+    timeline = _two_shot_text_timeline_with_continuity(
+        mode=BOUNDARY_MODE_TRANSITION,
+        tail_frames=1,
+        transition_prompt="a smoky match cut",
+    )
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    prompts = plan["prompt_plan"]
+    assert len(prompts) == 1
+    assert prompts[0]["raw_prompt"] == "a smoky match cut. second shot"
+    assert prompts[0]["effective_prompt"] == "a smoky match cut. second shot"
+    assert "runtime_prompt" not in prompts[0]
+    assert prompts[0]["boundary_transition_prompt"] == "a smoky match cut"
+    assert prompts[0]["boundary_transition_prompt_applied"] is True
+    conditioning = plan["model_specific"]["wan"]["boundary_conditioning"]
+    assert conditioning["requested_tail_frames"] == 1
+    assert conditioning["effective_tail_frames"] == 1
+
+
+def test_wan_planner_resolves_boundary_tail_frames_to_wan_compatible_count():
+    timeline = _two_shot_text_timeline_with_continuity(tail_frames=0)
+    timeline["ui_state"]["selected_item_id"] = "shot_section_002"
+
+    plan, validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    conditioning = plan["model_specific"]["wan"]["boundary_conditioning"]
+    assert conditioning["requested_tail_frames"] == 0
+    assert conditioning["effective_tail_frames"] == 1
 
 
 def test_wan_planner_warns_when_continuity_source_is_missing():
@@ -744,6 +819,7 @@ def test_wan_planner_warns_when_continuity_source_is_missing():
         generation_mode=GENERATION_MODE_FORCE_SELECTED,
     )
     continuity = plan["model_specific"]["wan"]["continuity_context"]
+    conditioning = plan["model_specific"]["wan"]["boundary_conditioning"]
 
     assert validation["is_valid"] is True
     assert [entry["code"] for entry in validation["warnings"]] == [
@@ -753,7 +829,10 @@ def test_wan_planner_warns_when_continuity_source_is_missing():
     assert continuity["source_status"] == "unavailable"
     assert continuity["model_status"] == "unavailable"
     assert continuity["clip_reference"] is None
+    assert conditioning["model_status"] == "unavailable"
+    assert conditioning["fallback_reason"] == "SHOT_CONTINUITY_PREVIOUS_CLIP_MISSING"
     assert debug["summary"]["shot_continuity_status"] == "unavailable"
+    assert debug["summary"]["boundary_conditioning_status"] == "unavailable"
 
 
 def test_wan_planner_force_selected_requires_selected_shot_without_crashing():

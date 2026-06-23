@@ -119,8 +119,10 @@ def _load_source_video_tensor(
     continuity = bernini.get("segment_continuity") or plan.get("model_specific", {}).get("wan", {}).get("segment_continuity", {})
     previous_tail = continuity.get("previous_tail_images") if isinstance(continuity, dict) else None
     if previous_tail is not None and hasattr(previous_tail, "shape") and int(previous_tail.shape[0]) > 0:
-        media_decisions.append({
-            "section_id": "segment_previous_tail",
+        transient_media_id = str(continuity.get("media_item_id") or "segment_previous_tail") if isinstance(continuity, dict) else "segment_previous_tail"
+        boundary_conditioning = continuity.get("boundary_conditioning") if isinstance(continuity, dict) else None
+        decision = {
+            "section_id": transient_media_id,
             "asset_id": None,
             "path": None,
             "loaded": True,
@@ -129,8 +131,17 @@ def _load_source_video_tensor(
             "tensor_shape": _tensor_shape(previous_tail),
             "tensor_stats": _tensor_stats(previous_tail),
             "transient": True,
-        })
-        diagnostics.append("Bernini continuation segment used the previous decoded tail as transient source_video.")
+        }
+        if isinstance(boundary_conditioning, dict) and boundary_conditioning:
+            decision["kind"] = "boundary_conditioning"
+            decision["boundary_id"] = boundary_conditioning.get("boundary_id")
+            decision["source_shot_id"] = boundary_conditioning.get("source_shot_id")
+            decision["target_shot_id"] = boundary_conditioning.get("target_shot_id")
+        media_decisions.append(decision)
+        if isinstance(boundary_conditioning, dict) and boundary_conditioning:
+            diagnostics.append("Bernini boundary conditioning used the previous accepted clip tail as transient source_video.")
+        else:
+            diagnostics.append("Bernini continuation segment used the previous decoded tail as transient source_video.")
         return previous_tail
     media = bernini.get("media_used") or {}
     if not media:

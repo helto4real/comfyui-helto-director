@@ -9,6 +9,7 @@ from ...contracts.video_timeline import (
     MODEL_LORA_MODEL_WAN_2_2,
     MODEL_LORA_TARGET_HIGH_NOISE,
     MODEL_LORA_TARGET_LOW_NOISE,
+    VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
 )
 from ..config import WAN_MODEL_FAMILY, WAN_MODEL_VERSION
 from ..planner import WAN_PLAN_TYPE
@@ -24,9 +25,10 @@ from .capabilities import (
     resolve_visual_conditioning,
 )
 from .debug import build_runtime_debug, error, info, warning
+from .continuity import apply_wan_previous_tail_continuity
 from .fmlf import build_fmlf_advanced_i2v_payload
 from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
-from .visual import apply_comfy_core_visual_keyframes
+from .visual import apply_comfy_core_visual_keyframes, resize_image_tensor
 from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_reporter
 from ...lora import apply_lora_config_model_only
 from ...timeline.planner_context import (
@@ -90,13 +92,20 @@ def build_wan_runtime_outputs(
             "supports_timed_keyframes": False,
             "max_visual_keyframes": 1,
         }
+    width = int(plan["resolved_output"].get("width") or 1280)
+    height = int(plan["resolved_output"].get("height") or 704)
+    frame_count = int(plan["resolved_output"].get("frame_count") or 1)
+    diagnostics: list[str] = []
+    validation_entries = [_runtime_entry(entry) for entry in backend_entries]
+    if resolved_backend != BACKEND_PLAN_ONLY:
+        _apply_wan_boundary_conditioning(plan, width, height, diagnostics, validation_entries)
+    else:
+        _mark_wan_boundary_plan_only(plan)
     visual = resolve_visual_conditioning(plan, capabilities, resolved_backend)
     if is_bernini:
         visual = bernini_visual_debug(plan, visual)
     prompt_relay = plan.get("model_specific", {}).get("wan", {}).get("prompt_relay", {})
-    validation_entries = [_runtime_entry(entry) for entry in backend_entries]
     validation_entries.extend(_visual_validation_entries(visual, resolved_backend))
-    diagnostics: list[str] = []
     runtime_loras, lora_diagnostics = _resolve_wan_loras(plan)
     diagnostics.extend(lora_diagnostics)
     lora_report = _build_wan_lora_report(
@@ -111,9 +120,6 @@ def build_wan_runtime_outputs(
         "high_noise_model": "not_connected" if high_noise_model is None else "unpatched",
         "low_noise_model": "not_connected" if low_noise_model is None else "unpatched",
     }
-    width = int(plan["resolved_output"].get("width") or 1280)
-    height = int(plan["resolved_output"].get("height") or 704)
-    frame_count = int(plan["resolved_output"].get("frame_count") or 1)
     latent_spec = resolve_wan_latent_spec(
         high_noise_model=high_noise_model,
         low_noise_model=low_noise_model,
@@ -265,6 +271,12 @@ def build_wan_runtime_outputs(
             str(config.get("model_mode") or "I2V-A14B"),
             config,
         )
+    if "applied_keyframes" in guide_debug or "unsupported_keyframes" in guide_debug:
+        visual = {
+            **visual,
+            "applied_keyframes": guide_debug.get("applied_keyframes", visual.get("applied_keyframes") or []),
+            "unsupported_keyframes": guide_debug.get("unsupported_keyframes", visual.get("unsupported_keyframes") or []),
+        }
     diagnostics.extend(guide_debug.get("diagnostics", []))
     media_decisions.extend(guide_debug.get("media_decisions", []))
     if guide_debug.get("painter_motion_boost") is not None:
@@ -417,6 +429,186 @@ def empty_wan22_video_latent(
         device=device,
     )
     return {"samples": latent}
+
+
+def _apply_wan_boundary_conditioning(
+    plan: dict[str, Any],
+    width: int,
+    height: int,
+    diagnostics: list[str],
+    validation_entries: list[dict[str, Any]],
+) -> None:
+    wan = plan.get("model_specific", {}).get("wan", {})
+    boundary = wan.get("boundary_conditioning")
+    if not isinstance(boundary, dict) or boundary.get("model_status") != "applied":
+        return
+    if not _active_segment_allows_boundary_conditioning(wan):
+        boundary["runtime_status"] = "skipped_segment"
+        wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+        return
+    try:
+        tail, metadata = _decode_wan_boundary_tail_frames(boundary, width, height)
+    except Exception as exc:
+        message = f"WAN boundary conditioning could not decode the previous clip tail: {exc}"
+        boundary.update(
+            {
+                "model_status": "unavailable",
+                "status": "unavailable",
+                "runtime_status": "unavailable",
+                "fallback_reason": "runtime_boundary_tail_decode_failed",
+                "message": message,
+            }
+        )
+        wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+        validation_entries.append(warning(
+            "WAN_BOUNDARY_CONDITIONING_UNAVAILABLE",
+            message,
+            "Generate normally, or verify the previous accepted/imported clip still exists and can be decoded.",
+            _safe_boundary_runtime_debug(boundary),
+        ))
+        diagnostics.append(message)
+        return
+
+    boundary.update(
+        {
+            **metadata,
+            "runtime_status": "applied",
+            "selected_frame_count": int(tail.shape[0]),
+            "message": "WAN runtime applied previous-tail boundary conditioning.",
+        }
+    )
+    media_item_id = _boundary_conditioning_media_item_id(boundary)
+    apply_wan_previous_tail_continuity(
+        plan,
+        tail,
+        media_item_id=media_item_id,
+        source="boundary",
+        boundary_conditioning=boundary,
+    )
+    wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+    diagnostics.append(
+        "WAN boundary conditioning used "
+        f"{int(tail.shape[0])} previous-tail frame(s) as transient start guidance."
+    )
+
+
+def _mark_wan_boundary_plan_only(plan: dict[str, Any]) -> None:
+    wan = plan.get("model_specific", {}).get("wan", {})
+    boundary = wan.get("boundary_conditioning")
+    if not isinstance(boundary, dict) or boundary.get("model_status") != "applied":
+        return
+    boundary["runtime_status"] = "not_executed"
+    wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+
+
+def _active_segment_allows_boundary_conditioning(wan: dict[str, Any]) -> bool:
+    segment = wan.get("active_generation_segment")
+    if not isinstance(segment, dict):
+        return True
+    try:
+        start_frame = int(segment.get("start_frame") or 0)
+    except (TypeError, ValueError):
+        start_frame = 0
+    return start_frame <= 0
+
+
+def _decode_wan_boundary_tail_frames(
+    boundary: dict[str, Any],
+    width: int,
+    height: int,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    try:
+        from ...ltx.runtime.media import decode_video_frames, select_video_guidance_range, trim_video_source_frames
+    except Exception as exc:
+        raise ValueError("PyAV video decoding support is required for WAN boundary conditioning.") from exc
+    media = {
+        "item_id": _boundary_conditioning_media_item_id(boundary),
+        "path": boundary.get("path"),
+        "source_in": boundary.get("source_in"),
+        "source_out": boundary.get("source_out"),
+        "video_guidance_frame_count": int(boundary.get("effective_tail_frames") or 1),
+        "video_guidance_range": VIDEO_GUIDANCE_RANGE_LAST_FRAMES,
+    }
+    decoded, source_fps, decoded_count = decode_video_frames(str(media.get("path") or ""))
+    trimmed, trim_metadata = trim_video_source_frames(decoded, source_fps, media)
+    guidance_frames, guidance_metadata = select_video_guidance_range(trimmed, media, trim_metadata)
+    selected = _wan_compatible_video_tail_frames(guidance_frames)
+    if int(selected.shape[1]) != height or int(selected.shape[2]) != width:
+        selected = resize_image_tensor(selected, width, height)
+    return selected, {
+        "source_fps": float(source_fps),
+        "decoded_frame_count": int(decoded_count),
+        "trimmed_frame_count": int(trim_metadata["trimmed_frame_count"]),
+        "selected_frame_count": int(selected.shape[0]),
+        "source_range": trim_metadata["source_range"],
+        **guidance_metadata,
+        "tensor_shape": _tensor_shape(selected),
+        "tensor_stats": _tensor_stats(selected),
+    }
+
+
+def _wan_compatible_video_tail_frames(frames: torch.Tensor) -> torch.Tensor:
+    keep = ((max(1, int(frames.shape[0])) - 1) // 4) * 4 + 1
+    return frames[-keep:]
+
+
+def _boundary_conditioning_media_item_id(boundary: dict[str, Any]) -> str:
+    return f"boundary_tail_{str(boundary.get('boundary_id') or boundary.get('asset_id') or 'incoming')}"
+
+
+def _safe_boundary_runtime_debug(boundary: dict[str, Any]) -> dict[str, Any]:
+    safe_keys = {
+        "type",
+        "mode",
+        "policy",
+        "model_status",
+        "runtime_status",
+        "status",
+        "source_status",
+        "boundary_id",
+        "source_shot_id",
+        "target_shot_id",
+        "asset_id",
+        "asset_type",
+        "source_kind",
+        "take_id",
+        "requested_tail_frames",
+        "effective_tail_frames",
+        "selected_frame_count",
+        "blend_frames",
+        "transition_prompt_applied",
+        "fallback_reason",
+        "source_fps",
+        "decoded_frame_count",
+        "trimmed_frame_count",
+        "source_range",
+        "guidance_range",
+        "guidance_frame_count",
+        "guidance_source_range",
+        "tensor_shape",
+        "tensor_stats",
+        "message",
+    }
+    return {
+        key: deepcopy(boundary.get(key))
+        for key in sorted(safe_keys)
+        if key in boundary
+    }
+
+
+def _tensor_shape(tensor) -> list[int]:
+    return [int(dim) for dim in tensor.shape] if hasattr(tensor, "shape") else []
+
+
+def _tensor_stats(tensor) -> dict[str, float]:
+    if not torch.is_tensor(tensor):
+        return {}
+    detached = tensor.detach().float()
+    return {
+        "min": float(detached.min().item()),
+        "max": float(detached.max().item()),
+        "mean": float(detached.mean().item()),
+    }
 
 
 def _model_latent_format(model):
@@ -854,6 +1046,9 @@ def _build_wan_take_registration(
     source: str,
     backend: str,
 ) -> dict[str, Any] | None:
+    boundary_conditioning = plan.get("model_specific", {}).get("wan", {}).get("boundary_conditioning", {})
+    if not isinstance(boundary_conditioning, dict):
+        boundary_conditioning = {}
     return build_take_capture_metadata(
         plan,
         model_key="wan",
@@ -865,8 +1060,15 @@ def _build_wan_take_registration(
             "runtime": "single",
             "backend": backend,
             "lora_source_scope": (lora_report or {}).get("source_scope"),
+            "boundary_conditioning": _take_boundary_conditioning(boundary_conditioning),
         },
     )
+
+
+def _take_boundary_conditioning(boundary_conditioning: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(boundary_conditioning, dict):
+        return {}
+    return _safe_boundary_runtime_debug(boundary_conditioning)
 
 
 def _call_or_value(obj, name: str, fallback):

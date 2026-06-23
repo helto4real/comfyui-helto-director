@@ -558,10 +558,10 @@ def _take_boundary_conditioning_from_take(take: Any) -> dict[str, Any]:
     candidates = []
     model_specific = metadata.get("model_specific") if isinstance(metadata, dict) else None
     if isinstance(model_specific, dict):
-        candidates.append(model_specific.get("ltx"))
+        candidates.extend(value for value in model_specific.values() if isinstance(value, dict))
     direct_model_specific = take.get("model_specific") if isinstance(take.get("model_specific"), dict) else None
     if isinstance(direct_model_specific, dict):
-        candidates.append(direct_model_specific.get("ltx"))
+        candidates.extend(value for value in direct_model_specific.values() if isinstance(value, dict))
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
@@ -580,6 +580,9 @@ def _has_generated_transition_boundary(
     if not isinstance(conditioning, dict):
         return False
     if conditioning.get("model_status") != "applied" and conditioning.get("status") != "applied":
+        return False
+    runtime_status = conditioning.get("runtime_status")
+    if runtime_status is not None and runtime_status != "applied":
         return False
     if conditioning.get("policy") != "transition" and conditioning.get("mode") != BOUNDARY_MODE_TRANSITION:
         return False

@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from ..bernini import BERNINI_MODEL_MODE, BERNINI_SYSTEM_PROMPTS
+from ..bernini import BERNINI_MODEL_MODE
 from ..planner import _build_prompt_relay, _latent_chunk_count
 from ...ltx.runtime.audio import mix_timeline_audio
 from ...segmented_executor import (
@@ -26,6 +26,7 @@ from ...timeline_status import TimelineStatusReporter, ensure_timeline_status_re
 from ...timeline.take_capture import build_take_capture_metadata
 from ..config import WAN_MODEL_FAMILY, WAN_MODEL_VERSION
 from .runtime import build_wan_runtime_outputs
+from .continuity import apply_wan_previous_tail_continuity
 
 
 WAN_SINGLE_PHASE_MODEL_MODES = {"TI2V-5B"}
@@ -245,6 +246,7 @@ def build_wan_segmented_executor_outputs(
                         .get("runtime_backend_profile")
                         or ""
                     ),
+                    "boundary_conditioning": _runtime_boundary_conditioning_from_debug(runtime_debug),
                 },
             )
             segment_debug.append({
@@ -769,33 +771,8 @@ def _build_segment_prompt_relay(
 
 
 def _apply_wan_segment_continuity(segment_plan: dict[str, Any], tail) -> None:
-    wan = segment_plan.get("model_specific", {}).get("wan", {})
     _reset_segment_visual_conditioning(segment_plan, has_continuity=tail is not None)
-    if tail is None:
-        return
-    wan["segment_continuity"] = {
-        "mode": "previous_tail",
-        "previous_tail_images": tail,
-        "frame_count": int(tail.shape[0]),
-    }
-    visual = wan.get("visual_conditioning")
-    if isinstance(visual, dict):
-        visual["transient_start_image"] = tail
-        visual["continuation_source"] = "previous_tail"
-        visual["requested_keyframes"] = []
-        visual["applied_keyframes"] = []
-        visual["unsupported_keyframes"] = []
-    bernini = wan.get("bernini")
-    if isinstance(bernini, dict) and bernini.get("enabled"):
-        bernini["segment_continuity"] = wan["segment_continuity"]
-        if bernini.get("task_type") == "r2v":
-            bernini["task_type"] = "rv2v"
-            bernini["system_prompt"] = BERNINI_SYSTEM_PROMPTS["rv2v"]
-            bernini["selection_reason"] = "Continuation segment uses the previous decoded tail as Bernini source_video with reference images."
-        elif bernini.get("task_type") == "t2v":
-            bernini["task_type"] = "v2v"
-            bernini["system_prompt"] = BERNINI_SYSTEM_PROMPTS["v2v"]
-            bernini["selection_reason"] = "Continuation segment uses the previous decoded tail as Bernini source_video."
+    apply_wan_previous_tail_continuity(segment_plan, tail)
 
 
 def _reset_segment_visual_conditioning(segment_plan: dict[str, Any], *, has_continuity: bool) -> None:
@@ -869,3 +846,19 @@ def _wan_plan_as_audio_mix_plan(plan: dict[str, Any]) -> dict[str, Any]:
     output = deepcopy(plan)
     output.setdefault("model_specific", {}).setdefault("ltx", {}).setdefault("config", {})["audio_mode"] = "Mix Timeline Audio"
     return output
+
+
+def _runtime_boundary_conditioning_from_debug(runtime_debug: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(runtime_debug, dict):
+        return {}
+    take_registration = runtime_debug.get("take_registration")
+    if isinstance(take_registration, dict):
+        take = take_registration.get("take") if isinstance(take_registration.get("take"), dict) else {}
+        metadata = take.get("metadata") if isinstance(take.get("metadata"), dict) else {}
+        model_specific = metadata.get("model_specific") if isinstance(metadata.get("model_specific"), dict) else {}
+        wan = model_specific.get("wan") if isinstance(model_specific.get("wan"), dict) else {}
+        boundary = wan.get("boundary_conditioning")
+        if isinstance(boundary, dict):
+            return deepcopy(boundary)
+    boundary = runtime_debug.get("boundary_conditioning")
+    return deepcopy(boundary) if isinstance(boundary, dict) else {}

@@ -13,6 +13,9 @@ from ..contracts.validation import (
     flatten_validation_result,
 )
 from ..contracts.video_timeline import (
+    BOUNDARY_MODE_BLEND_SEAM,
+    BOUNDARY_MODE_CONTINUOUS_SHOT,
+    BOUNDARY_MODE_TRANSITION,
     MODEL_LORA_MODEL_WAN_2_2,
     MODEL_LORA_TARGET_HIGH_NOISE,
     MODEL_LORA_TARGET_LOW_NOISE,
@@ -60,6 +63,7 @@ from .references import build_bernini_character_reference_plan
 WAN_PLAN_SCHEMA_VERSION = "1.0"
 WAN_PLAN_TYPE = "WAN_TIMELINE_PLAN"
 WAN_TEMPORAL_STRIDE = 4
+DEFAULT_BOUNDARY_TAIL_FRAMES = 5
 
 QUALITY_SHORT_EDGE = {
     QUALITY_PRESET_QUICK_DRAFT: 384,
@@ -122,7 +126,14 @@ def build_wan_timeline_plan(
         if should_plan_generation
         else _empty_segmented_generation("wan")
     )
+    boundary_conditioning = _build_wan_boundary_conditioning(
+        source_timeline,
+        shot_context,
+        enabled=should_plan_generation,
+    )
     prompt_entries = _build_prompt_plan(timeline, section_entries) if should_plan_generation else []
+    if should_plan_generation:
+        prompt_entries = _apply_wan_transition_prompt(prompt_entries, boundary_conditioning)
     media_entries = _build_media_plan(timeline, section_entries) if should_plan_generation else []
     audio_entries = _build_audio_plan(timeline, frame_rate) if should_plan_generation else []
     character_references, prompt_entries, reference_validation_entries = build_bernini_character_reference_plan(
@@ -170,7 +181,7 @@ def build_wan_timeline_plan(
     validation = create_validation_result([
         *flatten_validation_result(director_validation),
         *generation_policy_validation_entries(generation_policy, "WAN Planner"),
-        *_shot_continuity_validation_entries(shot_context, "WAN Planner"),
+        *_shot_continuity_validation_entries(shot_context, "WAN Planner", boundary_conditioning),
         *flatten_validation_result(wan_validation),
     ])
 
@@ -208,13 +219,14 @@ def build_wan_timeline_plan(
                 "timeline_structure": sequence_metadata,
                 "lora_resolution": lora_resolution,
                 "generation_policy": deepcopy(generation_policy),
+                "boundary_conditioning": boundary_conditioning,
             },
         },
         "validation": validation,
     }
     if shot_context is not None:
         plan["model_specific"]["wan"]["shot_context"] = deepcopy(shot_context)
-        plan["model_specific"]["wan"]["continuity_context"] = _model_continuity_context(shot_context)
+        plan["model_specific"]["wan"]["continuity_context"] = _model_continuity_context(shot_context, boundary_conditioning)
     debug = _build_debug(
         timeline,
         config,
@@ -768,11 +780,13 @@ def _shot_selection_validation_entries(
 def _shot_continuity_validation_entries(
     shot_context: dict[str, Any] | None,
     source: str,
+    boundary_conditioning: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     continuity = _incoming_continuity(shot_context)
     if not continuity or continuity.get("policy") == "none":
         return []
-    if continuity.get("status") == "unavailable":
+    conditioning = boundary_conditioning if isinstance(boundary_conditioning, dict) else {}
+    if conditioning.get("model_status") == "unavailable" or continuity.get("status") == "unavailable":
         return [
             create_validation_entry(
                 "WAN_SHOT_CONTINUITY_SOURCE_MISSING",
@@ -782,20 +796,10 @@ def _shot_continuity_validation_entries(
                 continuity.get("boundary_id"),
                 "Selected shot requests continuity, but the previous clip reference is unavailable.",
                 "Accept a take or assign an imported clip on the previous shot, or change the boundary to Hard Cut.",
-                _continuity_warning_details(continuity),
-            )
-        ]
-    if continuity.get("status") == "available":
-        return [
-            create_validation_entry(
-                "WAN_SHOT_CONTINUITY_UNSUPPORTED",
-                SEVERITY_WARNING,
-                source,
-                "Boundary",
-                continuity.get("boundary_id"),
-                "Selected shot has previous-tail continuity context, but WAN shot-level continuity consumption is not implemented yet.",
-                "Generate this shot normally; sequence assembly will still apply the boundary fallback or blend behavior.",
-                _continuity_warning_details(continuity),
+                {
+                    **_continuity_warning_details(continuity),
+                    "boundary_conditioning": _conditioning_warning_details(conditioning),
+                },
             )
         ]
     return []
@@ -814,6 +818,12 @@ def _build_debug(
     prompt_relay = wan["prompt_relay"]
     visual = wan["visual_conditioning"]
     bernini = wan.get("bernini") or {}
+    boundary_conditioning = wan.get("boundary_conditioning") if isinstance(wan.get("boundary_conditioning"), dict) else {}
+    continuity_context = (
+        wan.get("continuity_context")
+        if isinstance(wan.get("continuity_context"), dict)
+        else _model_continuity_context(shot_context, boundary_conditioning)
+    )
     timeline_structure = wan.get("timeline_structure", {})
     lora_resolution = wan.get("lora_resolution", {})
     enabled = config["debug_mode"] != "Off"
@@ -847,7 +857,11 @@ def _build_debug(
         "info_count": len(validation["info"]),
     }
     summary.update(generation_policy_debug_summary(generation_policy))
-    _add_shot_debug_summary(summary, shot_context, generation_policy)
+    _add_shot_debug_summary(summary, shot_context, generation_policy, continuity_context=continuity_context)
+    if boundary_conditioning:
+        summary["boundary_conditioning_status"] = boundary_conditioning.get("model_status")
+        summary["boundary_conditioning_mode"] = boundary_conditioning.get("mode")
+        summary["boundary_conditioning_effective_tail_frames"] = boundary_conditioning.get("effective_tail_frames")
     debug = {
         "type": "DEBUG_INFO",
         "source": "WAN Planner",
@@ -872,7 +886,8 @@ def _build_debug(
         }
         if shot_context is not None:
             debug["details"]["shot_context"] = deepcopy(shot_context)
-            debug["details"]["continuity_context"] = _model_continuity_context(shot_context)
+            debug["details"]["continuity_context"] = deepcopy(continuity_context)
+            debug["details"]["boundary_conditioning"] = deepcopy(boundary_conditioning)
     return debug
 
 
@@ -880,13 +895,15 @@ def _add_shot_debug_summary(
     summary: dict[str, Any],
     shot_context: dict[str, Any] | None,
     generation_policy: dict[str, Any] | None,
+    *,
+    continuity_context: dict[str, Any] | None = None,
 ) -> None:
     if shot_context is not None:
         summary["selected_shot_id"] = shot_context.get("shot_id")
         summary["shot_original_start_time"] = shot_context.get("original_start_time")
         summary["shot_original_end_time"] = shot_context.get("original_end_time")
         summary["shot_duration_seconds"] = shot_context.get("duration_seconds")
-        continuity = _model_continuity_context(shot_context)
+        continuity = continuity_context if isinstance(continuity_context, dict) else _model_continuity_context(shot_context)
         summary["shot_continuity_policy"] = continuity.get("policy")
         summary["shot_continuity_status"] = continuity.get("model_status")
         summary["shot_continuity_tail_frames"] = continuity.get("tail_frames")
@@ -905,14 +922,28 @@ def _incoming_continuity(shot_context: dict[str, Any] | None) -> dict[str, Any] 
     return continuity if isinstance(continuity, dict) else None
 
 
-def _model_continuity_context(shot_context: dict[str, Any] | None) -> dict[str, Any]:
+def _incoming_boundary(shot_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(shot_context, dict):
+        return {}
+    boundary_context = shot_context.get("boundary_context")
+    if not isinstance(boundary_context, dict):
+        return {}
+    boundary = boundary_context.get("incoming_boundary")
+    return boundary if isinstance(boundary, dict) else {}
+
+
+def _model_continuity_context(
+    shot_context: dict[str, Any] | None,
+    boundary_conditioning: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     continuity = _incoming_continuity(shot_context) or {}
     policy = continuity.get("policy") or "none"
     status = continuity.get("status") or "not_requested"
+    conditioning = boundary_conditioning if isinstance(boundary_conditioning, dict) else {}
     if policy == "none":
         model_status = "not_requested"
-    elif status == "available":
-        model_status = "unsupported"
+    elif conditioning.get("model_status"):
+        model_status = str(conditioning.get("model_status"))
     else:
         model_status = status
     return {
@@ -923,13 +954,15 @@ def _model_continuity_context(shot_context: dict[str, Any] | None) -> dict[str, 
         "source_shot_id": continuity.get("source_shot_id"),
         "target_shot_id": continuity.get("target_shot_id"),
         "tail_frames": int(continuity.get("tail_frames") or 0),
+        "effective_tail_frames": int(conditioning.get("effective_tail_frames") or continuity.get("tail_frames") or 0),
         "blend_frames": int(continuity.get("blend_frames") or 0),
         "clip_reference": deepcopy(continuity.get("clip_reference")),
+        "asset_id": conditioning.get("asset_id"),
+        "transition_prompt_applied": bool(conditioning.get("transition_prompt_applied")),
         "warning_code": continuity.get("warning_code"),
         "message": (
-            "WAN shot-level continuity consumption is not implemented."
-            if model_status == "unsupported"
-            else continuity.get("message")
+            conditioning.get("message")
+            or continuity.get("message")
         ),
     }
 
@@ -946,6 +979,173 @@ def _continuity_warning_details(continuity: dict[str, Any]) -> dict[str, Any]:
         "clip_reference": deepcopy(continuity.get("clip_reference")),
         "warning_code": continuity.get("warning_code"),
     }
+
+
+def _conditioning_warning_details(conditioning: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(conditioning, dict):
+        return {}
+    return {
+        "model_status": conditioning.get("model_status"),
+        "asset_id": conditioning.get("asset_id"),
+        "source_shot_id": conditioning.get("source_shot_id"),
+        "target_shot_id": conditioning.get("target_shot_id"),
+        "requested_tail_frames": conditioning.get("requested_tail_frames"),
+        "effective_tail_frames": conditioning.get("effective_tail_frames"),
+        "fallback_reason": conditioning.get("fallback_reason"),
+    }
+
+
+def _build_wan_boundary_conditioning(
+    source_timeline: dict[str, Any],
+    shot_context: dict[str, Any] | None,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    continuity = _incoming_continuity(shot_context) or {}
+    boundary = _incoming_boundary(shot_context)
+    policy = str(continuity.get("policy") or "none")
+    mode = str(boundary.get("mode") or "")
+    if not mode:
+        mode = {
+            "continuous": BOUNDARY_MODE_CONTINUOUS_SHOT,
+            "blend": BOUNDARY_MODE_BLEND_SEAM,
+            "transition": BOUNDARY_MODE_TRANSITION,
+        }.get(policy, "Hard Cut")
+    base = {
+        "type": "wan_previous_tail",
+        "mode": mode,
+        "policy": policy,
+        "model_status": "not_requested",
+        "status": "not_requested",
+        "source_status": str(continuity.get("status") or "not_requested"),
+        "boundary_id": continuity.get("boundary_id"),
+        "source_shot_id": continuity.get("source_shot_id"),
+        "target_shot_id": continuity.get("target_shot_id"),
+        "requested_tail_frames": int(continuity.get("tail_frames") or 0),
+        "effective_tail_frames": 0,
+        "blend_frames": int(continuity.get("blend_frames") or 0),
+        "transition_prompt": str(boundary.get("transition_prompt") or ""),
+        "transition_prompt_applied": False,
+        "reuse_character_refs": boundary.get("reuse_character_refs"),
+        "reuse_style": boundary.get("reuse_style"),
+        "clip_reference": deepcopy(continuity.get("clip_reference")),
+        "diagnostics": [],
+        "message": "Boundary does not request WAN continuity conditioning.",
+    }
+    if policy == "none":
+        return base
+    if not enabled:
+        base["message"] = "Generation was skipped by Director policy; no WAN boundary conditioning was applied."
+        return base
+
+    clip_reference = continuity.get("clip_reference") if isinstance(continuity.get("clip_reference"), dict) else None
+    if continuity.get("status") != "available" or not clip_reference:
+        base.update(
+            {
+                "model_status": "unavailable",
+                "status": "unavailable",
+                "fallback_reason": continuity.get("warning_code") or "continuity_source_unavailable",
+                "message": continuity.get("message") or "Previous clip reference is unavailable.",
+            }
+        )
+        return base
+
+    assets_by_id = {
+        str(asset.get("asset_id")): asset
+        for asset in source_timeline.get("assets", [])
+        if isinstance(asset, dict) and asset.get("asset_id") is not None
+    }
+    asset_id = str(clip_reference.get("asset_id") or "")
+    asset = assets_by_id.get(asset_id)
+    path = (asset.get("path") or asset.get("file_path")) if isinstance(asset, dict) else None
+    if not isinstance(asset, dict) or asset.get("type") != SECTION_TYPE_VIDEO or not path:
+        fallback = "continuity_asset_missing"
+        if isinstance(asset, dict) and asset.get("type") != SECTION_TYPE_VIDEO:
+            fallback = "continuity_asset_not_video"
+        elif isinstance(asset, dict):
+            fallback = "continuity_asset_path_missing"
+        base.update(
+            {
+                "model_status": "unavailable",
+                "status": "unavailable",
+                "asset_id": asset_id or None,
+                "fallback_reason": fallback,
+                "message": "Previous clip asset is unavailable for WAN boundary conditioning.",
+            }
+        )
+        return base
+
+    requested_tail = _requested_boundary_tail_frames(continuity.get("tail_frames"))
+    effective_tail = _wan_boundary_tail_frame_count_from_requested(requested_tail)
+    base.update(
+        {
+            "model_status": "applied",
+            "status": "applied",
+            "asset_id": asset_id,
+            "asset_type": asset.get("type"),
+            "source_kind": clip_reference.get("source_kind"),
+            "take_id": clip_reference.get("take_id"),
+            "path": path,
+            "source_in": clip_reference.get("source_in"),
+            "source_out": clip_reference.get("source_out"),
+            "requested_tail_frames": requested_tail,
+            "effective_tail_frames": effective_tail,
+            "transition_prompt_applied": policy == "transition" and bool(str(boundary.get("transition_prompt") or "").strip()),
+            "message": "WAN will use the previous clip tail as transient start guidance.",
+        }
+    )
+    if base["transition_prompt_applied"]:
+        base["message"] = "WAN will use previous-tail guidance and merge the transition prompt into the first prompt region."
+    return base
+
+
+def _wan_boundary_tail_frame_count_from_requested(value: Any) -> int:
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = DEFAULT_BOUNDARY_TAIL_FRAMES
+    return _wan_frame_count(max(1, requested))
+
+
+def _requested_boundary_tail_frames(value: Any) -> int:
+    if value is None or value == "":
+        return DEFAULT_BOUNDARY_TAIL_FRAMES
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return DEFAULT_BOUNDARY_TAIL_FRAMES
+
+
+def _apply_wan_transition_prompt(
+    prompt_entries: list[dict[str, Any]],
+    boundary_conditioning: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if boundary_conditioning.get("model_status") != "applied":
+        return prompt_entries
+    if boundary_conditioning.get("policy") != "transition":
+        return prompt_entries
+    transition_prompt = str(boundary_conditioning.get("transition_prompt") or "").strip()
+    if not transition_prompt or not prompt_entries:
+        return prompt_entries
+    prompts = [deepcopy(entry) for entry in prompt_entries]
+    first = prompts[0]
+    for key in ("raw_prompt", "effective_prompt"):
+        first[key] = _merge_transition_prompt(transition_prompt, first.get(key))
+    if "runtime_prompt" in first:
+        first["runtime_prompt"] = _merge_transition_prompt(transition_prompt, first.get("runtime_prompt"))
+    first["boundary_transition_prompt"] = transition_prompt
+    first["boundary_transition_prompt_applied"] = True
+    first["boundary_id"] = boundary_conditioning.get("boundary_id")
+    return prompts
+
+
+def _merge_transition_prompt(transition_prompt: str, prompt: Any) -> str:
+    text = str(prompt or "").strip()
+    if not text:
+        return transition_prompt
+    if text.startswith(transition_prompt):
+        return text
+    return f"{transition_prompt}. {text}"
 
 
 def _requested_frame_count(duration_seconds: float, frame_rate: float) -> int:

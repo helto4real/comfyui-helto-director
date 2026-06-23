@@ -55,6 +55,7 @@ def build_runtime_debug(
     config = wan.get("config", {})
     bernini = _bernini_runtime_debug(wan.get("bernini") or {}, media_decisions or [], diagnostics)
     continuity = _runtime_continuity_debug(plan)
+    boundary_conditioning = _runtime_boundary_conditioning_debug(plan)
     validation = build_runtime_validation(validation_entries)
     backend = build_backend_report(
         plan=plan,
@@ -91,6 +92,10 @@ def build_runtime_debug(
             "error_count": len(validation.get("errors", [])),
             "shot_continuity_policy": continuity.get("policy"),
             "shot_continuity_status": continuity.get("model_status"),
+            "boundary_conditioning_status": boundary_conditioning.get("model_status"),
+            "boundary_conditioning_runtime_status": boundary_conditioning.get("runtime_status"),
+            "boundary_conditioning_mode": boundary_conditioning.get("mode"),
+            "boundary_conditioning_effective_tail_frames": boundary_conditioning.get("effective_tail_frames"),
         },
         "backend": backend,
         "backend_capabilities": deepcopy(capabilities),
@@ -103,6 +108,7 @@ def build_runtime_debug(
         },
         "prompt_relay": deepcopy(prompt_debug),
         "continuity": continuity,
+        "boundary_conditioning": boundary_conditioning,
         "bernini": bernini,
         "fmlf_advanced_i2v": deepcopy(fmlf_debug or {}),
         "model_patch_status": deepcopy(model_patch_status or {}),
@@ -127,6 +133,24 @@ def build_runtime_debug(
 
 def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
     wan = plan.get("model_specific", {}).get("wan", {})
+    boundary = wan.get("boundary_conditioning")
+    if isinstance(boundary, dict) and boundary.get("policy"):
+        return {
+            "policy": boundary.get("policy") or "none",
+            "source_status": boundary.get("source_status") or "not_requested",
+            "model_status": boundary.get("model_status") or "not_requested",
+            "runtime_status": boundary.get("runtime_status"),
+            "boundary_id": boundary.get("boundary_id"),
+            "source_shot_id": boundary.get("source_shot_id"),
+            "target_shot_id": boundary.get("target_shot_id"),
+            "tail_frames": int(boundary.get("requested_tail_frames") or 0),
+            "effective_tail_frames": int(boundary.get("effective_tail_frames") or 0),
+            "blend_frames": int(boundary.get("blend_frames") or 0),
+            "clip_reference": deepcopy(boundary.get("clip_reference")),
+            "asset_id": boundary.get("asset_id"),
+            "transition_prompt_applied": bool(boundary.get("transition_prompt_applied")),
+            "message": boundary.get("message"),
+        }
     continuity = wan.get("continuity_context")
     if isinstance(continuity, dict):
         return deepcopy(continuity)
@@ -152,7 +176,7 @@ def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
     if policy == "none":
         model_status = "not_requested"
     elif source_status == "available":
-        model_status = "unsupported"
+        model_status = "unavailable"
     else:
         model_status = source_status
     return {
@@ -167,10 +191,55 @@ def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
         "clip_reference": deepcopy(incoming.get("clip_reference")),
         "warning_code": incoming.get("warning_code"),
         "message": (
-            "WAN shot-level continuity consumption is not implemented."
-            if model_status == "unsupported"
+            "WAN boundary conditioning metadata is missing; regenerate the WAN plan."
+            if model_status == "unavailable" and source_status == "available"
             else incoming.get("message")
         ),
+    }
+
+
+def _runtime_boundary_conditioning_debug(plan: dict[str, Any]) -> dict[str, Any]:
+    wan = plan.get("model_specific", {}).get("wan", {})
+    runtime = wan.get("boundary_conditioning_runtime")
+    boundary = runtime if isinstance(runtime, dict) else wan.get("boundary_conditioning")
+    if not isinstance(boundary, dict):
+        return {}
+    safe_keys = {
+        "type",
+        "mode",
+        "policy",
+        "model_status",
+        "runtime_status",
+        "status",
+        "source_status",
+        "boundary_id",
+        "source_shot_id",
+        "target_shot_id",
+        "asset_id",
+        "asset_type",
+        "source_kind",
+        "take_id",
+        "requested_tail_frames",
+        "effective_tail_frames",
+        "selected_frame_count",
+        "blend_frames",
+        "transition_prompt_applied",
+        "fallback_reason",
+        "source_fps",
+        "decoded_frame_count",
+        "trimmed_frame_count",
+        "source_range",
+        "guidance_range",
+        "guidance_frame_count",
+        "guidance_source_range",
+        "tensor_shape",
+        "tensor_stats",
+        "message",
+    }
+    return {
+        key: deepcopy(boundary.get(key))
+        for key in sorted(safe_keys)
+        if key in boundary
     }
 
 

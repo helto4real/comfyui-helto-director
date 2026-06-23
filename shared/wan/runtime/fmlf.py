@@ -270,16 +270,21 @@ def _resolve_fmlf_images(visual: dict[str, Any], width: int, height: int):
     transient_start = visual.get("transient_start_image")
     start_image = None
     if transient_start is not None and hasattr(transient_start, "shape") and int(transient_start.shape[0]) > 0:
+        transient_media_id = str(visual.get("continuation_media_id") or "segment_previous_tail")
+        transient_kind = str(visual.get("continuation_kind") or "segment_continuity")
         start_image = transient_start[-1:].detach().clone()
         if int(start_image.shape[1]) != height or int(start_image.shape[2]) != width:
             start_image = resize_image_tensor(start_image, width, height)
-        media_decisions.append({
-            "section_id": "segment_previous_tail",
+        decision = {
+            "section_id": transient_media_id,
             "loaded": True,
             "role": "Start",
             "transient": True,
             "tensor_shape": _tensor_shape(start_image),
-        })
+        }
+        if transient_kind != "segment_continuity":
+            decision["kind"] = transient_kind
+        media_decisions.append(decision)
     elif start_keyframe is not None:
         start_image = load_keyframe_image(start_keyframe, width, height, media_decisions, resize=True)
     end_image = load_keyframe_image(end_keyframe, width, height, media_decisions, resize=True) if end_keyframe else None

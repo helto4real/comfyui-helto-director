@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 
 from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_AUDIO, ASSET_TYPE_IMAGE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
-from shared.timeline import create_default_video_timeline
+from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE, create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 
 
@@ -104,6 +104,7 @@ def test_phase16_comfyui_core_applies_start_end_and_preserves_timed_unsupported(
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=4),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full", resolution_profile="Quick Draft"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     plan_before = copy.deepcopy(plan)
 
@@ -167,6 +168,7 @@ def test_phase16_painter_motion_boost_applies_first_last_variant(tmp_path):
             painter_motion_boost="Auto",
             painter_motion_amplitude=1.5,
         ),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     _high, _low, positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(

@@ -7,18 +7,24 @@ import math
 import sys
 from pathlib import Path
 
+import av
+import numpy as np
 import pytest
 import torch
 from PIL import Image
 
 from shared.contracts.video_timeline import (
     ASSET_SOURCE_FILE_PATH,
+    ASSET_SOURCE_GENERATED,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    BOUNDARY_MODE_CONTINUOUS_SHOT,
+    BOUNDARY_MODE_TRANSITION,
     MODEL_LORA_TARGET_HIGH_NOISE,
     MODEL_LORA_TARGET_LOW_NOISE,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
+    TAKE_STATUS_ACCEPTED,
 )
 from shared.timeline import (
     GENERATION_MODE_FORCE_FULL_TIMELINE,
@@ -156,12 +162,30 @@ def test_wan_runtime_reports_shot_continuity_debug():
     plan["model_specific"]["wan"]["continuity_context"] = {
         "policy": "continuous",
         "source_status": "available",
-        "model_status": "unsupported",
+        "model_status": "applied",
         "boundary_id": "boundary_continuous",
         "source_shot_id": "shot_previous",
         "target_shot_id": "shot_section_text",
         "tail_frames": 6,
+        "effective_tail_frames": 9,
         "blend_frames": 0,
+        "clip_reference": {
+            "source_kind": "accepted_take",
+            "shot_id": "shot_previous",
+            "take_id": "take_previous",
+            "asset_id": "asset_previous_take",
+        },
+    }
+    plan["model_specific"]["wan"]["boundary_conditioning"] = {
+        "policy": "continuous",
+        "mode": BOUNDARY_MODE_CONTINUOUS_SHOT,
+        "model_status": "applied",
+        "boundary_id": "boundary_continuous",
+        "source_shot_id": "shot_previous",
+        "target_shot_id": "shot_section_text",
+        "asset_id": "asset_previous_take",
+        "requested_tail_frames": 6,
+        "effective_tail_frames": 9,
         "clip_reference": {
             "source_kind": "accepted_take",
             "shot_id": "shot_previous",
@@ -173,8 +197,180 @@ def test_wan_runtime_reports_shot_continuity_debug():
     *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
     assert runtime_debug["summary"]["shot_continuity_policy"] == "continuous"
-    assert runtime_debug["summary"]["shot_continuity_status"] == "unsupported"
+    assert runtime_debug["summary"]["shot_continuity_status"] == "applied"
+    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "not_executed"
     assert runtime_debug["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
+    assert runtime_debug["boundary_conditioning"]["asset_id"] == "asset_previous_take"
+
+
+def test_wan_runtime_applies_boundary_tail_as_core_transient_start_and_take_metadata(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=8)
+    plan, validation, _debug = build_wan_timeline_plan(
+        _two_shot_boundary_timeline(video_path, tail_frames=6),
+        create_wan_timeline_config(
+            runtime_backend_profile="ComfyUI Core",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    *_outputs, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert runtime_debug["summary"]["shot_continuity_status"] == "applied"
+    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "applied"
+    boundary = runtime_debug["boundary_conditioning"]
+    assert boundary["boundary_id"] == "boundary_previous_next"
+    assert boundary["requested_tail_frames"] == 6
+    assert boundary["effective_tail_frames"] == 9
+    assert boundary["selected_frame_count"] == 9
+    assert boundary["tensor_shape"] == [
+        9,
+        plan["resolved_output"]["height"],
+        plan["resolved_output"]["width"],
+        3,
+    ]
+    assert "path" not in boundary
+
+    applied = runtime_debug["visual_conditioning"]["applied_keyframes"]
+    assert applied == [
+        {
+            "role": "Start",
+            "section_id": "boundary_tail_boundary_previous_next",
+            "transient": True,
+            "kind": "boundary_conditioning",
+        }
+    ]
+    decision = next(
+        item for item in runtime_debug["media_decisions"]
+        if item.get("section_id") == "boundary_tail_boundary_previous_next"
+    )
+    assert decision["kind"] == "boundary_conditioning"
+    assert decision["transient"] is True
+    assert decision["tensor_shape"] == boundary["tensor_shape"]
+
+    metadata = runtime_debug["take_registration"]
+    boundary_metadata = metadata["take"]["metadata"]["model_specific"]["wan"]["boundary_conditioning"]
+    assert boundary_metadata["model_status"] == "applied"
+    assert boundary_metadata["runtime_status"] == "applied"
+    assert boundary_metadata["boundary_id"] == "boundary_previous_next"
+    assert boundary_metadata["effective_tail_frames"] == 9
+    assert boundary_metadata["selected_frame_count"] == 9
+    assert "path" not in boundary_metadata
+
+
+def test_wan_runtime_applies_boundary_tail_as_bernini_source_video(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=8)
+    plan, validation, _debug = build_wan_timeline_plan(
+        _two_shot_boundary_timeline(video_path, tail_frames=6),
+        create_wan_timeline_config(
+            model_mode="Bernini-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    *_outputs, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "applied"
+    assert runtime_debug["bernini"]["task_type"] == "v2v"
+    decision = next(
+        item for item in runtime_debug["bernini"]["runtime_media_decisions"]
+        if item.get("section_id") == "boundary_tail_boundary_previous_next"
+    )
+    assert decision["kind"] == "boundary_conditioning"
+    assert decision["bernini_role"] == "source_video"
+    assert decision["source_video_frame_count"] == 9
+    assert decision["boundary_id"] == "boundary_previous_next"
+    assert any("boundary conditioning" in item.lower() for item in runtime_debug["bernini"]["runtime_diagnostics"])
+
+
+def test_wan_runtime_applies_boundary_tail_for_fmlf_without_prev_latent(tmp_path):
+    video_path = tmp_path / "previous.mp4"
+    _write_test_video(video_path, frame_count=12, fps=8)
+    plan, validation, _debug = build_wan_timeline_plan(
+        _two_shot_boundary_timeline(video_path, tail_frames=6),
+        create_wan_timeline_config(
+            runtime_backend_profile="FMLF Advanced I2V",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+
+    assert validation["is_valid"] is True
+    _high, _low, positive, _negative, _latent, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        low_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+        split_conditioning=True,
+    )
+
+    assert positive["_helto_wan_conditioning_split"] is True
+    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "applied"
+    fmlf = runtime_debug["fmlf_advanced_i2v"]
+    assert fmlf["used_prev_latent"] is False
+    assert fmlf["anchor_source"] == "boundary_tail_boundary_previous_next"
+    decision = next(
+        item for item in fmlf["media_decisions"]
+        if item.get("section_id") == "boundary_tail_boundary_previous_next"
+    )
+    assert decision["kind"] == "boundary_conditioning"
+    assert decision["transient"] is True
+    assert "path" not in decision
+
+
+def test_wan_runtime_does_not_copy_boundary_tail_into_later_segment(tmp_path):
+    missing_video_path = tmp_path / "missing_previous.mp4"
+    plan, validation, _debug = build_wan_timeline_plan(
+        _two_shot_boundary_timeline(missing_video_path, tail_frames=6),
+        create_wan_timeline_config(
+            model_mode="T2V-A14B",
+            runtime_backend_profile="ComfyUI Core",
+            debug_mode="Full",
+            resolution_profile="Quick Draft",
+        ),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+    )
+    plan["model_specific"]["wan"]["active_generation_segment"] = {
+        "id": "gen_002",
+        "start_frame": 9,
+        "end_frame_exclusive": 17,
+    }
+
+    assert validation["is_valid"] is True
+    *_outputs, runtime_debug = build_wan_runtime_outputs(
+        high_noise_model=FakeModel(),
+        clip=FakeClip(),
+        vae=FakeVAE(),
+        wan_timeline_plan=plan,
+    )
+
+    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "skipped_segment"
+    assert not any(
+        item.get("section_id") == "boundary_tail_boundary_previous_next"
+        for item in runtime_debug["media_decisions"]
+    )
 
 
 def test_auto_backend_resolves_to_plan_only_or_comfyui_core(tmp_path):
@@ -485,6 +681,77 @@ def _text_timeline():
     return timeline
 
 
+def _two_shot_boundary_timeline(
+    video_path: Path,
+    *,
+    mode: str = BOUNDARY_MODE_CONTINUOUS_SHOT,
+    tail_frames: int = 6,
+    transition_prompt: str = "",
+):
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 2.0
+    timeline["project"]["frame_rate"] = 8.0
+    timeline["ui_state"]["selected_item_id"] = "shot_next"
+    timeline["assets"].append({
+        "asset_id": "asset_previous_take",
+        "type": ASSET_TYPE_VIDEO,
+        "source_kind": ASSET_SOURCE_GENERATED,
+        "path": str(video_path),
+        "name": video_path.name,
+    })
+    timeline["director_track"]["sections"].extend(
+        [
+            {
+                "item_id": "section_previous",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "prompt": "previous shot",
+            },
+            {
+                "item_id": "section_next",
+                "type": SECTION_TYPE_TEXT,
+                "start_time": 1.0,
+                "end_time": 2.0,
+                "prompt": "next shot",
+            },
+        ]
+    )
+    timeline["sequence"]["shots"] = [
+        {
+            "shot_id": "shot_previous",
+            "start_time": 0.0,
+            "end_time": 1.0,
+            "section_ids": ["section_previous"],
+            "takes": [
+                {
+                    "take_id": "take_previous",
+                    "asset_id": "asset_previous_take",
+                    "status": TAKE_STATUS_ACCEPTED,
+                }
+            ],
+            "accepted_take_id": "take_previous",
+        },
+        {
+            "shot_id": "shot_next",
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "section_ids": ["section_next"],
+        },
+    ]
+    timeline["sequence"]["boundaries"] = [
+        {
+            "boundary_id": "boundary_previous_next",
+            "left_shot_id": "shot_previous",
+            "right_shot_id": "shot_next",
+            "mode": mode,
+            "tail_frames": tail_frames,
+            "transition_prompt": transition_prompt,
+        }
+    ]
+    return timeline
+
+
 def _image_timeline(tmp_path: Path, *, count: int, write_files: bool = True):
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = float(count)
@@ -510,6 +777,25 @@ def _image_timeline(tmp_path: Path, *, count: int, write_files: bool = True):
             "guide_strength": 1.0,
         })
     return timeline
+
+
+def _write_test_video(path: Path, frame_count=12, fps=8, width=24, height=16):
+    with av.open(str(path), "w") as container:
+        stream = container.add_stream("mpeg4", rate=fps)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        for index in range(frame_count):
+            value = int(round(index / max(1, frame_count - 1) * 255))
+            array = np.zeros((height, width, 3), dtype=np.uint8)
+            array[:, :, 0] = value
+            array[:, :, 1] = 64
+            array[:, :, 2] = 255 - value
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
 
 
 class FakeTokenizer:

@@ -15,7 +15,7 @@ from shared.contracts.video_timeline import (
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
 )
-from shared.timeline import create_default_video_timeline
+from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE, create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 from shared.wan.bernini import BERNINI_SYSTEM_PROMPTS
 
@@ -54,6 +54,7 @@ def test_bernini_planner_auto_selects_i2v_for_multiple_images(tmp_path):
     plan, validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=3),
         create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     bernini = plan["model_specific"]["wan"]["bernini"]
@@ -71,6 +72,7 @@ def test_bernini_planner_auto_selects_v2v_and_defers_images_with_video(tmp_path)
     plan, validation, _debug = build_wan_timeline_plan(
         _video_timeline(tmp_path, include_image=True),
         create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     bernini = plan["model_specific"]["wan"]["bernini"]
@@ -218,6 +220,7 @@ def test_bernini_plan_reports_empty_user_conditioning():
     plan, validation, debug = build_wan_timeline_plan(
         create_default_video_timeline(),
         create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     bernini = plan["model_specific"]["wan"]["bernini"]
@@ -243,6 +246,7 @@ def test_bernini_comfyui_core_rejects_empty_user_conditioning():
             resolution_profile="Quick Draft",
             debug_mode="Full",
         ),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
     with pytest.raises(ValueError, match="BERNINI_NO_USER_CONDITIONING"):

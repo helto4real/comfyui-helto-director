@@ -288,6 +288,49 @@ def test_transition_boundary_uses_generated_ltx_metadata_without_warning(tmp_pat
     assert debug["boundaries"][0]["boundary_conditioning"]["model_status"] == "applied"
     assert "SEQUENCE_ASSEMBLY_TRANSITION_FALLBACK" not in _warning_codes(debug)
 
+
+def test_transition_boundary_uses_generated_wan_metadata_without_warning(tmp_path):
+    first = _write_test_video(tmp_path / "first.mp4", color=(64, 64, 64))
+    second = _write_test_video(tmp_path / "second.mp4", color=(192, 192, 192))
+    timeline = _timeline_with_assets(
+        [
+            _video_asset("asset_first", first, ASSET_SOURCE_GENERATED),
+            _video_asset("asset_second", second, ASSET_SOURCE_GENERATED),
+        ],
+        [
+            _generated_shot("shot_first", "asset_first", 0.0, 1.0),
+            _generated_shot("shot_second", "asset_second", 1.0, 2.0),
+        ],
+        boundaries=[
+            _boundary("boundary_transition", "shot_first", "shot_second", BOUNDARY_MODE_TRANSITION)
+        ],
+    )
+    timeline["sequence"]["shots"][1]["takes"][0]["metadata"] = {
+        "model_specific": {
+            "wan": {
+                "boundary_conditioning": {
+                    "mode": BOUNDARY_MODE_TRANSITION,
+                    "policy": "transition",
+                    "model_status": "applied",
+                    "runtime_status": "applied",
+                    "boundary_id": "boundary_transition",
+                    "source_shot_id": "shot_first",
+                    "target_shot_id": "shot_second",
+                    "asset_id": "asset_first",
+                    "effective_tail_frames": 9,
+                }
+            }
+        }
+    }
+
+    frames, _audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert tuple(frames.shape) == (8, 16, 16, 3)
+    assert debug["boundaries"][0]["status"] == "transition_generated_bridge_concatenate"
+    assert debug["boundaries"][0]["boundary_conditioning"]["runtime_status"] == "applied"
+    assert "SEQUENCE_ASSEMBLY_TRANSITION_FALLBACK" not in _warning_codes(debug)
+
+
 def test_sequence_assembly_mixes_timeline_audio(tmp_path):
     video = _write_test_video(tmp_path / "video.mp4", color=(255, 128, 0))
     audio = _write_test_wav(tmp_path / "tone.wav")
