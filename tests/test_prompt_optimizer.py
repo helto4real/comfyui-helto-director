@@ -24,6 +24,60 @@ def test_resolve_model_known_alias_and_fallback_status():
     assert fallback["status"] == "ready"
 
 
+def test_snapshot_model_downloaded_requires_transformers_weights(monkeypatch, tmp_path):
+    spec = optimizer.OptimizerModelSpec("partial_qwen", "owner/Partial-Qwen", "qwen", "VLM")
+    monkeypatch.setattr(optimizer, "_models_dir", lambda: tmp_path)
+    path = optimizer.model_path_for(spec)
+    path.mkdir(parents=True)
+    (path / "README.md").write_text("partial download", encoding="utf-8")
+
+    assert optimizer.model_downloaded(spec) is False
+
+    (path / "config.json").write_text("{}", encoding="utf-8")
+    assert optimizer.model_downloaded(spec) is False
+
+    (path / "model.safetensors").write_bytes(b"weights")
+    assert optimizer.model_downloaded(spec) is True
+
+
+def test_snapshot_model_downloaded_requires_all_index_shards(monkeypatch, tmp_path):
+    spec = optimizer.OptimizerModelSpec("sharded_qwen", "owner/Sharded-Qwen", "qwen", "VLM")
+    monkeypatch.setattr(optimizer, "_models_dir", lambda: tmp_path)
+    path = optimizer.model_path_for(spec)
+    path.mkdir(parents=True)
+    (path / "config.json").write_text("{}", encoding="utf-8")
+    (path / "model.safetensors.index.json").write_text(
+        (
+            '{"weight_map": {'
+            '"layer_a": "model-00001-of-00002.safetensors", '
+            '"layer_b": "model-00002-of-00002.safetensors"'
+            "}}"
+        ),
+        encoding="utf-8",
+    )
+    (path / "model-00001-of-00002.safetensors").write_bytes(b"shard")
+
+    assert optimizer.model_downloaded(spec) is False
+
+    (path / "model-00002-of-00002.safetensors").write_bytes(b"shard")
+    assert optimizer.model_downloaded(spec) is True
+
+
+def test_ensure_model_downloaded_rejects_incomplete_snapshot(monkeypatch, tmp_path):
+    spec = optimizer.OptimizerModelSpec("partial_qwen", "owner/Partial-Qwen", "qwen", "VLM")
+    monkeypatch.setattr(optimizer, "_models_dir", lambda: tmp_path)
+
+    def fake_snapshot_download(**kwargs):
+        local_dir = Path(kwargs["local_dir"])
+        local_dir.mkdir(parents=True)
+        (local_dir / "README.md").write_text("partial download", encoding="utf-8")
+        return str(local_dir)
+
+    with mock.patch("huggingface_hub.snapshot_download", side_effect=fake_snapshot_download):
+        with pytest.raises(optimizer.PromptOptimizerError, match="missing config.json or model weight files"):
+            optimizer.ensure_model_downloaded(spec)
+
+
 def test_settings_save_clear_template_and_token(tmp_path):
     saved = optimizer.save_hf_token(" hf_test_token ", tmp_path)
     assert saved["tokenConfigured"] is True
@@ -54,6 +108,36 @@ def test_timing_profile_records_average(tmp_path):
     assert second["sample_count"] == 2
     assert stored["average_seconds"] == pytest.approx(15.0)
     assert stored["last_seconds"] == pytest.approx(20.0)
+
+
+def test_download_progress_bar_supports_thread_map():
+    from tqdm.contrib.concurrent import thread_map
+
+    events = []
+    reporter = optimizer.DownloadProgressReporter(lambda *args, **kwargs: events.append((args, kwargs)))
+    progress_class = reporter.tqdm_class("Qwen/Qwen3-VL-4B-Instruct")
+
+    result = thread_map(lambda value: value + 1, [1, 2], max_workers=1, tqdm_class=progress_class)
+
+    assert result == [2, 3]
+    assert progress_class.get_lock() is not None
+    assert events
+
+
+def test_download_progress_bar_preserves_zero_total_for_snapshot_aggregation():
+    events = []
+    reporter = optimizer.DownloadProgressReporter(lambda *args, **kwargs: events.append((args, kwargs)))
+    progress_class = reporter.tqdm_class("Qwen/Qwen3-VL-4B-Instruct")
+    progress = progress_class(total=0, desc="Downloading (incomplete total...)")
+
+    try:
+        progress.total += 256
+        progress.refresh()
+    finally:
+        progress.close()
+
+    assert progress.total == 256
+    assert events
 
 
 def test_decode_image_supports_data_url_and_direct_image_path(tmp_path):

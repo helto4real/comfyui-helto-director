@@ -482,6 +482,43 @@ def model_file_paths_for(spec: OptimizerModelSpec) -> list[Path]:
     return [model_file_path_for(spec, model_file) for model_file in model_files_for(spec)]
 
 
+def _nonempty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _transformers_snapshot_downloaded(path: Path) -> bool:
+    if not path.is_dir() or not _nonempty_file(path / "config.json"):
+        return False
+
+    single_weight_files = (
+        "model.safetensors",
+        "pytorch_model.bin",
+        "tf_model.h5",
+        "flax_model.msgpack",
+    )
+    if any(_nonempty_file(path / filename) for filename in single_weight_files):
+        return True
+
+    for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        index_path = path / index_name
+        if not _nonempty_file(index_path):
+            continue
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        weight_map = payload.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            continue
+        shard_files = {filename for filename in weight_map.values() if isinstance(filename, str)}
+        if shard_files and all(_nonempty_file(path / filename) for filename in shard_files):
+            return True
+    return False
+
+
 def model_path_for(spec: OptimizerModelSpec) -> Path | None:
     if spec.backend == "fallback":
         return None
@@ -498,9 +535,9 @@ def model_downloaded(spec: OptimizerModelSpec) -> bool:
         return True
     if spec.file_urls:
         paths = model_file_paths_for(spec)
-        return bool(paths) and all(path.exists() for path in paths)
+        return bool(paths) and all(_nonempty_file(path) for path in paths)
     path = model_path_for(spec)
-    return bool(path and path.exists())
+    return bool(path and _transformers_snapshot_downloaded(path))
 
 
 def missing_dependencies(spec: OptimizerModelSpec) -> list[str]:
@@ -721,9 +758,21 @@ class DownloadProgressReporter:
         reporter = self
 
         class DownloadProgressBar:
+            _lock = threading.RLock()
+
+            @classmethod
+            def set_lock(cls, lock):
+                cls._lock = lock
+
+            @classmethod
+            def get_lock(cls):
+                if not hasattr(cls, "_lock"):
+                    cls._lock = threading.RLock()
+                return cls._lock
+
             def __init__(self, iterable=None, total=None, desc=None, **_kwargs):
                 self.iterable = iterable
-                self.total = int(total) if total and total > 0 else file_total_bytes
+                self.total = int(total) if total is not None else file_total_bytes
                 self.n = 0
                 self.closed = False
                 reporter.begin_file(str(desc or file_name), file_index, file_total, self.total)
@@ -891,6 +940,12 @@ def ensure_model_downloaded(
         )
     except Exception as exc:  # noqa: BLE001 - Hugging Face raises several HTTP wrapper types.
         raise _download_error(spec, exc) from exc
+    if not model_downloaded(spec):
+        raise PromptOptimizerError(
+            f"Downloaded '{spec.repo_id}' into {path}, but the local snapshot is missing config.json or model "
+            "weight files. The download may be incomplete, or the repository may not contain a complete "
+            "Transformers checkpoint."
+        )
     status(f"Downloaded model into {path}")
     return path
 
