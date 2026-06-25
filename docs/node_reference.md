@@ -215,7 +215,9 @@ Category: `timeline/tools`
 Assembles accepted generated takes and imported clip instances into final video
 components. It reads `VIDEO_TIMELINE`, applies a missing-take policy, and
 returns video, image frames, audio, frame rate, debug info, and whether a video
-was assembled.
+was assembled. If no accepted or imported clip is ready, the media outputs block
+downstream execution silently so connected save/preview nodes can stay wired
+without producing a black placeholder.
 
 For the full workflow, read
 [Shot, Take, And Sequence Workflow](shot_take_sequence_workflow.md).

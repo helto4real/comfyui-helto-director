@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from comfy_execution.graph_utils import ExecutionBlocker
 
 from shared.contracts.video_timeline import ASSET_TYPE_VIDEO, SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline, validate_video_timeline
@@ -318,7 +319,7 @@ def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
     assert output[5] is True
 
 
-def test_timeline_sequence_assembler_node_marks_placeholder_as_not_assembled(monkeypatch):
+def test_timeline_sequence_assembler_node_blocks_media_when_not_assembled(monkeypatch):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineSequenceAssembler"]
     node_module = sys.modules[node.__module__]
@@ -338,11 +339,31 @@ def test_timeline_sequence_assembler_node_marks_placeholder_as_not_assembled(mon
 
     output = node.execute({"type": "VIDEO_TIMELINE"})
 
-    assert output[1] is frames
-    assert output[2] is audio
+    assert isinstance(output[0], ExecutionBlocker)
+    assert output[0].message is None
+    assert isinstance(output[1], ExecutionBlocker)
+    assert output[1].message is None
+    assert isinstance(output[2], ExecutionBlocker)
+    assert output[2].message is None
     assert output[3] == 24.0
     assert output[4] is debug
     assert output[5] is False
+
+
+def test_timeline_sequence_assembler_node_preserves_error_policy(monkeypatch):
+    module = load_nodepack_like_comfyui()
+    node = module.NODE_CLASS_MAPPINGS["HeltoTimelineSequenceAssembler"]
+    node_module = sys.modules[node.__module__]
+
+    def fake_assemble(video_timeline, *, missing_take_policy):
+        assert video_timeline == {"type": "VIDEO_TIMELINE"}
+        assert missing_take_policy == "error"
+        raise ValueError("SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING")
+
+    monkeypatch.setattr(node_module, "assemble_timeline_sequence", fake_assemble)
+
+    with pytest.raises(ValueError, match="SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING"):
+        node.execute({"type": "VIDEO_TIMELINE"}, missing_take_policy="error")
 
 
 def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_writes_sidecar(tmp_path):
@@ -575,6 +596,7 @@ class FakeVideo:
 def _timeline_with_shot() -> dict:
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 2.0
+    timeline["project"]["privacy"]["mode"] = False
     timeline["director_track"]["sections"] = [
         {
             "item_id": "section_001",

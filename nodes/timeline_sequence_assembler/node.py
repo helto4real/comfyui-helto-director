@@ -3,6 +3,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 from comfy_api.latest import InputImpl, Types, io
+from comfy_execution.graph_utils import ExecutionBlocker
 
 from ...shared.contracts.socket_types import DEBUG_INFO, VIDEO_TIMELINE
 from ...shared.timeline.sequence_assembly import assemble_timeline_sequence
@@ -60,6 +61,10 @@ class TimelineSequenceAssembler(io.ComfyNode):
             video_timeline,
             missing_take_policy=policy,
         )
+        has_assembled_video = _has_assembled_video(debug_info)
+        if not has_assembled_video:
+            blocker = ExecutionBlocker(None)
+            return io.NodeOutput(blocker, blocker, blocker, float(frame_rate), debug_info, False)
         video = InputImpl.VideoFromComponents(
             Types.VideoComponents(
                 images=frames,
@@ -68,7 +73,6 @@ class TimelineSequenceAssembler(io.ComfyNode):
             ),
             bit_depth=_safe_bit_depth(bit_depth),
         )
-        has_assembled_video = _has_assembled_video(debug_info)
         return io.NodeOutput(video, frames, audio, float(frame_rate), debug_info, has_assembled_video)
 
 

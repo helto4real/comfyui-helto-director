@@ -135,6 +135,11 @@ accepted generated video takes. It records debug summaries for included clips,
 missing accepted takes, missing assets, resolution policy, boundary behavior,
 and audio mixing.
 
+When no accepted generated take or imported clip is ready, the Timeline Sequence
+Assembler blocks its media outputs silently instead of producing a black
+placeholder. This lets the graph stay fully connected while you render or review
+one not-yet-accepted shot.
+
 Blend seams can blend frames when clip shapes are compatible. Unsupported or
 advanced transition behavior falls back to hard-cut style assembly with warnings
 or preserved metadata rather than claiming model-specific transition support.
