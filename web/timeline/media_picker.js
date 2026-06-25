@@ -804,6 +804,11 @@ function installMediaPickerStyles(documentRef) {
     .pr-image-tile.selected { border-color: var(--htd-accent); box-shadow: var(--htd-shadow-glow); }
     .pr-image-tile img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #0a0e16; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); transition: opacity .12s ease; box-sizing: border-box; }
     .pr-audio-browser-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--htd-border); border-radius: var(--htd-radius); padding: 6px; background: var(--htd-bg); }
+    .pr-image-browser-grid, .pr-audio-browser-list { scrollbar-width: thin; scrollbar-color: rgba(94,155,255,0.45) transparent; }
+    .pr-image-browser-grid::-webkit-scrollbar, .pr-audio-browser-list::-webkit-scrollbar { width: 8px; height: 8px; }
+    .pr-image-browser-grid::-webkit-scrollbar-track, .pr-audio-browser-list::-webkit-scrollbar-track { background: transparent; }
+    .pr-image-browser-grid::-webkit-scrollbar-thumb, .pr-audio-browser-list::-webkit-scrollbar-thumb { background: rgba(94,155,255,0.45); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+    .pr-image-browser-grid::-webkit-scrollbar-thumb:hover, .pr-audio-browser-list::-webkit-scrollbar-thumb:hover { background: rgba(94,155,255,0.7); background-clip: padding-box; }
     .pr-audio-row { display: grid; grid-template-columns: 34px 1fr; gap: 8px; align-items: center; background: var(--htd-surface-2); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius); padding: 7px; cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease; }
     .pr-audio-row:hover { border-color: var(--htd-border-hover); }
     .pr-audio-row.selected { border-color: var(--htd-accent); background: var(--htd-accent-bg); box-shadow: var(--htd-shadow-glow); }
