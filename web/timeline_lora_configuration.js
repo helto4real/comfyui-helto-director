@@ -446,25 +446,35 @@ function ensureDialogStyles() {
   const style = document.createElement("style");
   style.id = "helto-lora-info-styles";
   style.textContent = `
+    /* Helto design tokens (keep in sync with helto-designsystem/reference/tokens.css). Scoped to the LoRA info overlay appended to <body>. */
+    .helto-lora-info-overlay {
+      --htd-bg:#0d1320; --htd-surface:#151c2a; --htd-surface-2:#1b2333; --htd-surface-3:#232d3f; --htd-surface-hover:#2c3850;
+      --htd-border:#2a3346; --htd-border-strong:#3a465c; --htd-border-hover:#4c5970; --htd-text:#e7ebf3; --htd-text-dim:#9aa6bd; --htd-text-faint:#6f7c95;
+      --htd-accent:#f1c75c; --htd-accent-strong:#ffd873; --htd-accent-bg:rgba(241,199,92,0.16); --htd-accent-border:rgba(241,199,92,0.55);
+      --htd-focus:#5e9bff; --htd-ring:0 0 0 2px rgba(94,155,255,0.5);
+      --htd-radius:6px; --htd-radius-sm:5px; --htd-radius-lg:10px; --htd-shadow-pop:0 14px 36px rgba(0,0,0,0.55);
+    }
     .helto-lora-info-overlay {
       position: fixed;
       inset: 0;
       z-index: 10000;
       display: grid;
       place-items: center;
-      background: rgba(0, 0, 0, 0.62);
+      background: rgba(6, 9, 15, 0.72);
+      backdrop-filter: blur(4px);
     }
     .rgthree-info-dialog {
       width: 90vw;
       max-width: 960px;
       max-height: calc(100vh - 48px);
       overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 6px;
-      background: #202020;
-      color: #eee;
-      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
-      font: 13px/1.4 sans-serif;
+      border: 1px solid var(--htd-border-strong);
+      border-radius: var(--htd-radius-lg);
+      background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96));
+      color: var(--htd-text);
+      box-shadow: var(--htd-shadow-pop);
+      font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
     .aio-rgthree-dialog-title {
       display: flex;
@@ -472,16 +482,16 @@ function ensureDialogStyles() {
       justify-content: space-between;
       min-height: 46px;
       padding: 0 14px 0 18px;
-      background: #1f2937;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-      color: #fff;
+      background: var(--htd-surface-2);
+      border-bottom: 1px solid var(--htd-border);
+      color: var(--htd-text);
       font-weight: 700;
     }
     .aio-rgthree-dialog-title h2 {
       margin: 0;
       font-size: 18px;
       line-height: 1.2;
-      color: #fff;
+      color: var(--htd-text);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -489,10 +499,14 @@ function ensureDialogStyles() {
     .helto-lora-close {
       border: 0;
       background: transparent;
-      color: #4b8dff;
+      color: var(--htd-text-dim);
       font-size: 30px;
       line-height: 1;
       cursor: pointer;
+      transition: color .12s ease;
+    }
+    .helto-lora-close:hover {
+      color: #fff;
     }
     .aio-rgthree-dialog-content {
       padding: 12px 16px 16px;
@@ -502,9 +516,9 @@ function ensureDialogStyles() {
     .helto-lora-loading {
       padding: 8px 10px;
       margin-bottom: 10px;
-      color: #ddd;
-      background: rgba(255, 255, 255, 0.075);
-      border-radius: 4px;
+      color: var(--htd-text-dim);
+      background: var(--htd-surface-2);
+      border-radius: var(--htd-radius-sm);
     }
     .rgthree-button,
     .rgthree-button-reset {
@@ -512,15 +526,23 @@ function ensureDialogStyles() {
       color: inherit;
     }
     .rgthree-button {
-      border: 1px solid rgba(255, 255, 255, 0.24);
-      border-radius: 4px;
-      background: #2b3648;
-      color: #eee;
+      border: 1px solid var(--htd-border-strong);
+      border-radius: var(--htd-radius-sm);
+      background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2));
+      color: var(--htd-text);
       padding: 6px 16px;
       cursor: pointer;
+      transition: background .12s ease, border-color .12s ease, color .12s ease;
     }
     .rgthree-button:hover {
-      background: #34445e;
+      background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3));
+      border-color: var(--htd-border-hover);
+      color: #fff;
+    }
+    .rgthree-button:focus-visible {
+      outline: none;
+      border-color: var(--htd-focus);
+      box-shadow: var(--htd-ring);
     }
     .rgthree-button-reset {
       border: 0;
@@ -545,27 +567,28 @@ function ensureDialogStyles() {
     }
     .rgthree-info-dialog .rgthree-info-area > li.rgthree-info-tag > * {
       min-height: 24px;
-      border-radius: 4px;
+      border-radius: 999px;
       line-height: 1;
-      color: rgba(255, 255, 255, 0.85);
-      background: rgb(69, 92, 85);
+      color: var(--htd-text-dim);
+      border: 1px solid var(--htd-border-strong);
+      background: var(--htd-surface-2);
       font-size: 14px;
-      font-weight: bold;
+      font-weight: 600;
       text-decoration: none;
       display: flex;
       height: 1.6em;
-      padding: 0 0.5em 0.1em;
+      padding: 0 0.6em 0.1em;
       align-content: center;
       justify-content: center;
       align-items: center;
-      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
     }
     .rgthree-info-dialog .rgthree-info-area > li.rgthree-info-tag > *:empty {
       display: none;
     }
     .rgthree-info-dialog .rgthree-info-area > li.-type > * {
-      background: rgb(73, 54, 94);
-      color: rgb(228, 209, 248);
+      border-color: #355f8f;
+      background: #14273d;
+      color: var(--htd-info, #b9dafc);
     }
     .rgthree-info-dialog .rgthree-info-area > li.rgthree-info-menu {
       margin-left: auto;
@@ -594,12 +617,12 @@ function ensureDialogStyles() {
     }
     .rgthree-info-dialog .rgthree-info-table td {
       position: relative;
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      border: 1px solid var(--htd-border);
       padding: 0;
       vertical-align: top;
     }
     .rgthree-info-dialog .rgthree-info-table td:first-child {
-      background: rgba(255, 255, 255, 0.075);
+      background: var(--htd-surface-2);
       width: 10px;
     }
     .rgthree-info-dialog .rgthree-info-table td:first-child > *:first-child {
@@ -639,12 +662,17 @@ function ensureDialogStyles() {
     .rgthree-info-dialog .rgthree-info-table td > textarea {
       padding: 5px 10px;
       border: 0;
-      box-shadow: inset 1px 1px 5px 0 rgba(0, 0, 0, 0.5);
+      box-shadow: inset 0 0 0 1px var(--htd-border-strong);
       font: inherit;
       appearance: none;
-      background: #fff;
-      color: #121212;
+      background: var(--htd-bg);
+      color: var(--htd-text);
       resize: vertical;
+    }
+    .rgthree-info-dialog .rgthree-info-table td > input:focus-visible,
+    .rgthree-info-dialog .rgthree-info-table td > textarea:focus-visible {
+      outline: none;
+      box-shadow: var(--htd-ring);
     }
     .rgthree-info-dialog .rgthree-info-table td > input:only-child,
     .rgthree-info-dialog .rgthree-info-table td > textarea:only-child {
@@ -683,10 +711,11 @@ function ensureDialogStyles() {
       display: inline-flex;
       margin: 2px;
       vertical-align: top;
-      border-radius: 4px;
+      border-radius: var(--htd-radius-sm);
       line-height: 1;
-      color: rgba(255, 255, 255, 0.85);
-      background: rgb(73, 91, 106);
+      color: var(--htd-text-dim);
+      background: var(--htd-surface-2);
+      border: 1px solid var(--htd-border-strong);
       font-size: 1.2em;
       font-weight: 600;
       text-decoration: none;
@@ -694,13 +723,15 @@ function ensureDialogStyles() {
       align-content: center;
       justify-content: center;
       align-items: center;
-      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
       cursor: pointer;
       white-space: nowrap;
       max-width: 183px;
+      transition: background .12s ease, border-color .12s ease, color .12s ease;
     }
     .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list > li:hover {
-      background: rgb(68, 109, 142);
+      background: var(--htd-surface-hover);
+      border-color: var(--htd-border-hover);
+      color: #fff;
     }
     .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list > li > svg {
       width: auto;
@@ -722,7 +753,10 @@ function ensureDialogStyles() {
       background: rgba(0, 0, 0, 0.2);
     }
     .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list > li.-rgthree-is-selected {
-      background: rgb(42, 126, 193);
+      background: var(--htd-accent-bg);
+      border-color: var(--htd-accent-border);
+      color: var(--htd-accent-strong);
+      box-shadow: var(--htd-shadow-glow, 0 0 10px rgba(241,199,92,0.35));
     }
     .rgthree-info-dialog .rgthree-info-images {
       list-style: none;
@@ -774,7 +808,7 @@ function ensureDialogStyles() {
       padding: 2px 4px;
       margin: 2px;
       border-radius: 2px;
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid var(--htd-border-strong);
       word-break: break-word;
     }
     .rgthree-info-dialog .rgthree-info-images > li figure figcaption > span label {

@@ -179,7 +179,8 @@ function installTakeCapturePreviewStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-    .helto-take-capture-preview { width: 100%; height: ${PREVIEW_HEIGHT}px; box-sizing: border-box; background: #060a10; border: 1px solid rgba(120,132,150,0.28); border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    /* Helto tokens used as literals (this style is global on <head>, outside the token scope). Near-black covers (#060a10 / #050505) are intentional privacy concealment — keep them opaque and dark. */
+    .helto-take-capture-preview { width: 100%; height: ${PREVIEW_HEIGHT}px; box-sizing: border-box; background: #060a10; border: 1px solid #2a3346; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
     .helto-take-capture-preview video { width: 100%; height: 100%; object-fit: contain; background: #050505; opacity: 0; transition: opacity 120ms ease; }
     .helto-take-capture-preview:hover video,
     .helto-take-capture-preview.is-revealed video { opacity: 1; }
