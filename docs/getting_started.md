@@ -82,7 +82,7 @@ For first tests, use short durations and small workflows:
 - LTX: start with one Text Section and a short duration.
 - WAN: start in `Plan Only` backend mode.
 - Media workflows: attach one image or video before trying multi-section edits.
-- Privacy workflows: enable Privacy Mode before saving private workflow state.
+- Privacy workflows: Privacy Mode is enabled by default for new Director projects; check that it was not explicitly turned off before saving private workflow state.
 
 ## Common Setup Problems
 

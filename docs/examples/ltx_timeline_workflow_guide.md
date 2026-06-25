@@ -95,9 +95,9 @@ For the runtime path, connect the combined or single `LTX_IDENTITY_ANCHOR` to th
 
 ![Privacy mode preview flow](../assets/privacy-mode-preview-flow.png)
 
-Enable `Privacy Mode` in Project Settings when timeline content should be hidden outside the node/picker/modal hover area.
+Privacy Mode is enabled by default for new Director projects. Keep it on when timeline content should be hidden outside the node/picker/modal hover area.
 
-When enabled:
+While enabled:
 
 - The timeline and prompt text are masked while the cursor is outside the Director node.
 - Picker thumbnails and audio filenames are masked while the cursor is outside the picker panel.
@@ -121,4 +121,4 @@ Privacy Mode protects this nodepack's timeline state and preview cache. It does 
 - If source-video extension uses the wrong tail frames, check `Source In`, `Source Out`, `Guidance Range`, and `Guide Frames`.
 - If generated duration is wrong, remember that Project Duration is the generated output duration, not source duration plus output duration.
 - If identity helpers cannot find a reference, inspect Runtime `guide_data.reference_images` and use the selector's available labels/ids.
-- If privacy content appears in clear text, stop and check that `Privacy Mode` is enabled before saving the workflow.
+- If privacy content appears in clear text, stop and check that `Privacy Mode` was not explicitly turned off before saving the workflow.

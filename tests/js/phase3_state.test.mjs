@@ -5,6 +5,7 @@ import {
   mountTimelineState,
   VIDEO_TIMELINE_WIDGET,
 } from "../../web/timeline/state.js";
+import { normalizeVideoTimeline } from "../../web/timeline/migration.js";
 import { PRIVACY_SCHEMA } from "../../web/timeline/privacy.js";
 import {
   ASSET_SOURCE_GENERATED,
@@ -31,8 +32,17 @@ function createWidget(name, value) {
   return { name, value, type: "string" };
 }
 
+function createPublicVideoTimeline() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.privacy.mode = false;
+  return timeline;
+}
+
 function createNode(options = {}) {
   const dirtyCalls = [];
+  const timelineValue = Object.prototype.hasOwnProperty.call(options, "timelineValue")
+    ? options.timelineValue
+    : JSON.stringify(createPublicVideoTimeline());
   return {
     id: 7,
     selected: options.selected ?? true,
@@ -47,7 +57,7 @@ function createNode(options = {}) {
       createWidget("aspect_ratio", "16:9"),
       createWidget("orientation", "Landscape"),
       createWidget("quality_preset", "Standard"),
-      createWidget(VIDEO_TIMELINE_WIDGET, ""),
+      createWidget(VIDEO_TIMELINE_WIDGET, timelineValue),
     ],
     dirtyCalls,
   };
@@ -182,6 +192,31 @@ async function testDefaultTimelineProjectIdentityStorage() {
   assert.equal(timeline.project.storage.schema_version, 1);
   assert.equal(timeline.project.storage.asset_root_directory, "");
   assert.equal(timeline.project.storage.project_directory_name.includes(timeline.project.identity.project_id), true);
+}
+
+async function testDefaultTimelinePrivacyModeIsEnabled() {
+  const timeline = createDefaultVideoTimeline();
+
+  assert.equal(timeline.project.privacy.mode, true);
+}
+
+async function testNormalizePrivacyDefaultsAndExplicitOptOut() {
+  const missingPrivacy = createDefaultVideoTimeline();
+  delete missingPrivacy.project.privacy;
+  assert.deepEqual(normalizeVideoTimeline(missingPrivacy).project.privacy, { mode: true });
+
+  const explicitPublic = createDefaultVideoTimeline();
+  explicitPublic.project.privacy = { mode: false };
+  assert.deepEqual(normalizeVideoTimeline(explicitPublic).project.privacy, { mode: false });
+
+  const legacyPrivate = createDefaultVideoTimeline();
+  legacyPrivate.project.privacy = {
+    mode: false,
+    hide_media_previews: true,
+    hide_text_prompts: false,
+    encrypt_previews: false,
+  };
+  assert.deepEqual(normalizeVideoTimeline(legacyPrivate).project.privacy, { mode: true });
 }
 
 async function testCommitUpdatesHiddenWidgetAndMarksGraphDirty() {
@@ -612,7 +647,7 @@ async function testReplaceTimelineClearsLibraryLinkAndIsUndoable() {
     timeline.ui_state.selected_item_id = "section_001";
   }, "link timeline");
 
-  controller.replaceTimeline(createDefaultVideoTimeline(), "clear current timeline");
+  controller.replaceTimeline(createPublicVideoTimeline(), "clear current timeline");
 
   const cleared = getHiddenTimeline(node);
   assert.equal("library_item_id" in cleared.project.metadata, false);
@@ -716,6 +751,24 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
   }
 }
 
+async function testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget() {
+  const restoreXhr = installPrivacyXhrStub();
+  try {
+    const node = createNode({ timelineValue: "" });
+    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+
+    const hiddenValue = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
+    const payload = JSON.parse(hiddenValue);
+    const request = JSON.parse(Buffer.from(payload.ciphertext, "base64").toString("utf8"));
+    assert.equal(controller.timeline.project.privacy.mode, true);
+    assert.equal(payload.encrypted, true);
+    assert.equal(payload.schema, PRIVACY_SCHEMA);
+    assert.equal(request.state.timeline.project.privacy.mode, true);
+  } finally {
+    restoreXhr();
+  }
+}
+
 async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
   const previousFetch = globalThis.fetch;
   const node = createNode();
@@ -762,6 +815,8 @@ async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
 }
 
 await testDefaultTimelineProjectIdentityStorage();
+await testDefaultTimelinePrivacyModeIsEnabled();
+await testNormalizePrivacyDefaultsAndExplicitOptOut();
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();
 await testLongMultilinePromptSurvivesCommit();
 await testUndoRedoUpdatesStateAndWidget();
@@ -781,6 +836,7 @@ await testDeleteKeyIsIgnoredWhileTyping();
 await testUndoRestoresDeleteKeyRemoval();
 await testReplaceTimelineClearsLibraryLinkAndIsUndoable();
 await testPrivacyModeWritesEncryptedHiddenWidget();
+await testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget();
 await testEncryptedWorkflowLoadDecryptsBeforeRender();
 
 console.log("phase3 state tests passed");

@@ -1,6 +1,6 @@
 # Privacy Mode Limitations
 
-Privacy Mode is a local workflow-state and preview-cache protection feature for this nodepack.
+Privacy Mode is enabled by default for new Director projects. It is a local workflow-state and preview-cache protection feature for this nodepack.
 
 ## Protected
 
@@ -18,3 +18,5 @@ Privacy Mode is a local workflow-state and preview-cache protection feature for 
 - Runtime tensors and normal ComfyUI execution artifacts are outside this feature's scope.
 
 If privacy encryption or decryption fails, the Director should fail clearly rather than silently saving private timeline content as clear text.
+
+Existing workflows that explicitly saved Privacy Mode off remain public until the user turns it back on.

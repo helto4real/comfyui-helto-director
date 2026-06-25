@@ -105,9 +105,10 @@ thumbnails, waveform arrays, video bytes, image bytes, audio bytes, blobs, or
 data URLs.
 
 Original media stays where it already lives. Preview thumbnails and waveforms
-are cache data. When Privacy Mode is enabled, private timeline state is
-encrypted in the hidden `video_timeline_json` widget and UI previews are masked
-outside the relevant Director/picker/optimizer surfaces.
+are cache data. Privacy Mode is enabled by default for new Director projects:
+private timeline state is encrypted in the hidden `video_timeline_json` widget
+and UI previews are masked outside the relevant Director/picker/optimizer
+surfaces.
 
 Read more:
 
@@ -152,8 +153,9 @@ See [Shot, Take, And Sequence Workflow](docs/shot_take_sequence_workflow.md).
   Section or use a text-capable mode/path.
 - Media loading fails: reselect the file if it was moved, renamed, or no longer
   readable by ComfyUI.
-- Privacy mode content appears in clear text: stop, enable Privacy Mode before
-  saving, and check [Privacy mode limitations](docs/privacy_limitations.md).
+- Privacy mode content appears in clear text: stop, check that Privacy Mode was
+  not explicitly disabled before saving, and review
+  [Privacy mode limitations](docs/privacy_limitations.md).
 
 ## Docs Map
 

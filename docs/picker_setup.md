@@ -23,4 +23,4 @@ Sections and audio clips reference those assets by `asset_id`.
 
 ## Privacy Mode
 
-When Privacy Mode is enabled, picker thumbnails and audio filenames are masked while the cursor is outside the picker panel, and preview cache files are encrypted by this nodepack.
+Privacy Mode is enabled by default for new Director projects. While it is enabled, picker thumbnails and audio filenames are masked while the cursor is outside the picker panel, and preview cache files are encrypted by this nodepack.

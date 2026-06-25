@@ -85,7 +85,7 @@ def create_default_video_timeline() -> dict:
                 "default_fade_out_seconds": DEFAULT_AUDIO_FADE_OUT_SECONDS,
             },
             "privacy": {
-                "mode": False,
+                "mode": True,
             },
             "display": {
                 "show_section_labels": True,

@@ -284,7 +284,7 @@ export function createDefaultVideoTimeline() {
         default_fade_out_seconds: 0.0,
       },
       privacy: {
-        mode: false,
+        mode: true,
       },
       display: {
         show_section_labels: true,

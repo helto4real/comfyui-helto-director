@@ -42,6 +42,12 @@ function createWidget(name, value) {
   return { name, value, type: "string" };
 }
 
+function createPublicVideoTimeline() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.privacy.mode = false;
+  return timeline;
+}
+
 function createNode() {
   const dirtyCalls = [];
   return {
@@ -58,7 +64,7 @@ function createNode() {
       createWidget("aspect_ratio", "16:9"),
       createWidget("orientation", "Landscape"),
       createWidget("quality_preset", "Standard"),
-      createWidget(VIDEO_TIMELINE_WIDGET, ""),
+      createWidget(VIDEO_TIMELINE_WIDGET, JSON.stringify(createPublicVideoTimeline())),
     ],
     dirtyCalls,
   };
@@ -109,7 +115,7 @@ async function testLibraryTimelineReplacementSyncsWidgetsAndUndo() {
   controller.timeline.project.global_prompt.prompt = "pending edit";
   controller.scheduleDebouncedCommit("prompt typing");
 
-  const next = createDefaultVideoTimeline();
+  const next = createPublicVideoTimeline();
   next.project.duration_seconds = 9;
   next.project.frame_rate = 12;
   next.project.aspect_ratio = "1:1";

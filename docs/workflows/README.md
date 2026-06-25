@@ -9,7 +9,7 @@ Before queueing:
 
 1. Replace placeholder checkpoint, VAE, text encoder, or media filenames with files installed in your ComfyUI setup.
 2. Open the Director node and adjust timeline media through the pickers when needed.
-3. Keep Privacy Mode off for examples unless you are testing encrypted timeline serialization locally.
+3. These examples intentionally keep Privacy Mode off so their timeline JSON stays inspectable; turn it on when adapting an example for private work.
 
 Examples:
 

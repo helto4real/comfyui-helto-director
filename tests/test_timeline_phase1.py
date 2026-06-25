@@ -225,7 +225,7 @@ def test_create_default_video_timeline_shape():
     assert timeline["project"]["settings"]["allow_gaps"] is True
     assert timeline["project"]["settings"]["auto_close_gaps"] is False
     assert timeline["project"]["audio"]["use_native_audio"] is False
-    assert timeline["project"]["privacy"] == {"mode": False}
+    assert timeline["project"]["privacy"] == {"mode": True}
     assert timeline["project"]["display"]["show_audio_waveforms"] is True
     assert timeline["project"]["identity"]["project_id"].startswith("proj_")
     assert timeline["project"]["identity"]["name"] == "Untitled Project"
@@ -295,6 +295,24 @@ def test_legacy_privacy_flags_normalize_to_single_mode():
     assert normalized["project"]["privacy"] == {"mode": True}
 
 
+def test_missing_privacy_normalizes_to_default_private_mode():
+    timeline = create_default_video_timeline()
+    timeline["project"].pop("privacy")
+
+    normalized = normalize_video_timeline(timeline)
+
+    assert normalized["project"]["privacy"] == {"mode": True}
+
+
+def test_explicit_public_privacy_mode_is_preserved():
+    timeline = create_default_video_timeline()
+    timeline["project"]["privacy"] = {"mode": False}
+
+    normalized = normalize_video_timeline(timeline)
+
+    assert normalized["project"]["privacy"] == {"mode": False}
+
+
 def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
     timeline = {
         "type": VIDEO_TIMELINE_TYPE,
@@ -316,6 +334,7 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
 
     assert normalized["project"]["frame_rate"] == 24.0
     assert normalized["project"]["duration_seconds"] == 10.0
+    assert normalized["project"]["privacy"] == {"mode": True}
     assert normalized["ui_state"]["view_start_seconds"] == 0
     assert normalized["ui_state"]["view_end_seconds"] == 5
     assert section["custom_note"] == "keep me"
