@@ -1,14 +1,21 @@
 const PREVIEW_WIDGET_NAME = "helto_take_capture_preview";
-const NATIVE_PREVIEW_WIDGET_NAME = "$$canvas-image-preview";
+const NATIVE_PREVIEW_WIDGET_NAMES = new Set(["$$canvas-image-preview", "$$comfy_animation_preview", "video-preview"]);
 const STYLE_ID = "helto-take-capture-preview-style";
 const PREVIEW_HEIGHT = 180;
+const PREVIEW_WIDGET_MARGIN = 10;
+const PREVIEW_BOTTOM_PADDING = 16;
+const FILENAME_PREFIX_WIDGET_NAME = "filename_prefix";
+const SHOT_ID_OVERRIDE_WIDGET_NAME = "shot_id_override";
+const ACCEPT_WIDGET_NAME = "accept";
+const UPDATE_CLIP_INSTANCE_WIDGET_NAME = "update_clip_instance";
 
 export function takeCapturePreviewFromOutput(output, apiRef = null) {
-  if (!isTakeCapturePreviewOutput(output) || !firstValue(output?.helto_privacy_mode)) return null;
+  if (!isTakeCapturePreviewOutput(output)) return null;
   const source = Array.isArray(output?.images) ? output.images[0] : null;
   const url = takeCapturePreviewUrl(source, apiRef);
   if (!url) return null;
   return {
+    privacyMode: Boolean(firstValue(output?.helto_privacy_mode)),
     source,
     url,
   };
@@ -31,17 +38,27 @@ export function isTakeCapturePreviewOutput(output) {
   return Boolean(firstValue(output?.helto_take_capture_preview));
 }
 
-export function installTakeCapturePrivacyPreview(nodeType, appRef, apiRef) {
+export function stripTakeCapturePreviewMedia(output) {
+  if (!isTakeCapturePreviewOutput(output) || !output || typeof output !== "object") return output;
+  const { images: _images, animated: _animated, ...stripped } = output;
+  return stripped;
+}
+
+export function installTakeCapturePreview(nodeType, appRef, apiRef) {
   const onNodeCreated = nodeType.prototype.onNodeCreated;
   nodeType.prototype.onNodeCreated = function () {
     const result = onNodeCreated?.apply(this, arguments);
+    if (repairTakeCaptureShiftedSocketlessWidgetValues(this)) {
+      setCanvasDirty(this, appRef);
+    }
     ensureTakeCapturePreviewWidget(this);
     return result;
   };
 
   const onExecuted = nodeType.prototype.onExecuted;
   nodeType.prototype.onExecuted = function (output) {
-    const result = onExecuted?.apply(this, arguments);
+    const nativeArgs = [stripTakeCapturePreviewMedia(output), ...Array.prototype.slice.call(arguments, 1)];
+    const result = onExecuted?.apply(this, nativeArgs);
     syncTakeCapturePreview(this, output, { appRef, apiRef });
     return result;
   };
@@ -59,6 +76,13 @@ export function installTakeCapturePrivacyPreview(nodeType, appRef, apiRef) {
     setTakeCapturePreviewReveal(this, false);
     return result;
   };
+
+  const onDrawForeground = nodeType.prototype.onDrawForeground;
+  nodeType.prototype.onDrawForeground = function () {
+    const result = onDrawForeground?.apply(this, arguments);
+    maintainTakeCapturePreview(this, { appRef });
+    return result;
+  };
 }
 
 export function syncTakeCapturePreview(node, output, { appRef = null, apiRef = null } = {}) {
@@ -69,15 +93,36 @@ export function syncTakeCapturePreview(node, output, { appRef = null, apiRef = n
   }
   const state = ensureTakeCapturePreviewWidget(node);
   if (!state) return false;
-  clearNativeTakeCapturePreview(node);
+  capturePreviousHideOutputImages(node, state);
+  node.hideOutputImages = true;
+  suppressNativeTakeCapturePreview(node, output);
   state.url = preview.url;
   state.source = preview.source;
+  state.privacyMode = preview.privacyMode;
+  state.container.classList.toggle("privacy-mode", state.privacyMode);
+  state.video.setAttribute("aria-label", state.privacyMode ? "Private take capture preview" : "Take capture preview");
   state.video.src = preview.url;
   state.video.currentTime = 0;
   state.container.hidden = false;
+  setTakeCapturePreviewWidgetActive(state, true);
+  prepareTakeCapturePreviewFitTarget(node, state);
   setTakeCapturePreviewReveal(node, false);
+  ensureTakeCapturePreviewNodeFits(node);
+  scheduleTakeCapturePreviewMaintenance(node, output, appRef);
   setCanvasDirty(node, appRef);
   return true;
+}
+
+export function maintainTakeCapturePreview(node, { appRef = null } = {}) {
+  const state = node?._heltoTakeCapturePreview;
+  if (!state?.url) return false;
+  const changed = suppressNativeTakeCapturePreview(node);
+  const resized = ensureTakeCapturePreviewNodeFits(node);
+  if (changed || resized) {
+    setCanvasDirty(node, appRef);
+    return true;
+  }
+  return false;
 }
 
 export function setTakeCapturePreviewReveal(node, revealed) {
@@ -103,14 +148,44 @@ export function clearNativeTakeCapturePreview(node) {
     node.imgs = [];
     changed = true;
   }
+  if (node.videoContainer !== undefined) {
+    node.videoContainer = undefined;
+    changed = true;
+  }
   if (Array.isArray(node.widgets)) {
-    const nextWidgets = node.widgets.filter((widget) => widget?.name !== NATIVE_PREVIEW_WIDGET_NAME);
+    const nextWidgets = [];
+    for (const widget of node.widgets) {
+      if (NATIVE_PREVIEW_WIDGET_NAMES.has(widget?.name)) {
+        widget?.onRemove?.();
+        changed = true;
+      } else {
+        nextWidgets.push(widget);
+      }
+    }
     if (nextWidgets.length !== node.widgets.length) {
       node.widgets = nextWidgets;
       changed = true;
     }
   }
   return changed;
+}
+
+export function suppressNativeTakeCapturePreview(node, output = null) {
+  if (!node) return false;
+  let changed = false;
+  if (Array.isArray(output?.images) && node.images !== output.images) {
+    node.images = output.images;
+    changed = true;
+  }
+  if (node.animatedImages) {
+    node.animatedImages = false;
+    changed = true;
+  }
+  if (node.previewMediaType !== undefined) {
+    node.previewMediaType = undefined;
+    changed = true;
+  }
+  return clearNativeTakeCapturePreview(node) || changed;
 }
 
 export function ensureTakeCapturePreviewWidget(node, documentRef = globalThis.document) {
@@ -136,21 +211,70 @@ export function ensureTakeCapturePreviewWidget(node, documentRef = globalThis.do
   const state = {
     container,
     video,
+    hasPreviousHideOutputImages: false,
+    previousHideOutputImages: undefined,
+    previousHideOutputImagesWasOwnProperty: false,
+    privacyMode: false,
     source: null,
     url: "",
     revealed: false,
   };
-  const widgetHeight = () => (state.url ? PREVIEW_HEIGHT : -4);
+  const widgetHeight = () => takeCapturePreviewStateOuterHeight(state);
   const widget = node.addDOMWidget(PREVIEW_WIDGET_NAME, "Take Capture Preview", container, {
     serialize: false,
     hideOnZoom: false,
+    margin: PREVIEW_WIDGET_MARGIN,
     getMinHeight: widgetHeight,
     getMaxHeight: widgetHeight,
     getHeight: widgetHeight,
   });
   state.widget = widget;
+  state.fitTargetHeight = 0;
+  setTakeCapturePreviewWidgetActive(state, false);
   node._heltoTakeCapturePreview = state;
   return state;
+}
+
+export function ensureTakeCapturePreviewNodeFits(node) {
+  if (!node || typeof node.setSize !== "function") return false;
+  const state = node._heltoTakeCapturePreview;
+  if (!state?.url) return false;
+  const currentWidth = finiteNumber(node.size?.[0], 0);
+  const currentHeight = finiteNumber(node.size?.[1], 0);
+  const nextWidth = currentWidth;
+  const nextHeight = Math.max(currentHeight, takeCapturePreviewRequiredNodeHeight(node));
+  if (nextWidth <= currentWidth && nextHeight <= currentHeight) return false;
+  node.setSize([nextWidth, nextHeight]);
+  return true;
+}
+
+export function repairTakeCaptureShiftedSocketlessWidgetValues(node) {
+  const shotIdOverrideWidget = findNodeWidget(node, SHOT_ID_OVERRIDE_WIDGET_NAME);
+  const filenamePrefixWidget = findNodeWidget(node, FILENAME_PREFIX_WIDGET_NAME);
+  if (!shotIdOverrideWidget || !filenamePrefixWidget) return false;
+  const shiftedFilenamePrefix = String(shotIdOverrideWidget.value ?? "").trim();
+  if (!shiftedFilenamePrefix || !isBooleanLikeWidgetValue(filenamePrefixWidget.value)) return false;
+
+  const acceptWidget = findNodeWidget(node, ACCEPT_WIDGET_NAME);
+  const updateClipInstanceWidget = findNodeWidget(node, UPDATE_CLIP_INSTANCE_WIDGET_NAME);
+  const shiftedAccept = filenamePrefixWidget.value;
+  const shiftedUpdateClipInstance = acceptWidget?.value;
+
+  shotIdOverrideWidget.value = "";
+  filenamePrefixWidget.value = shiftedFilenamePrefix;
+  if (acceptWidget) {
+    acceptWidget.value = booleanFromWidgetValue(shiftedAccept, false);
+  }
+  if (updateClipInstanceWidget && isBooleanLikeWidgetValue(shiftedUpdateClipInstance)) {
+    updateClipInstanceWidget.value = booleanFromWidgetValue(shiftedUpdateClipInstance, updateClipInstanceWidget.value);
+  }
+  return true;
+}
+
+export function takeCapturePreviewRequiredNodeHeight(node) {
+  const state = node?._heltoTakeCapturePreview;
+  if (!state?.url) return 0;
+  return prepareTakeCapturePreviewFitTarget(node, state);
 }
 
 function resetTakeCapturePreview(node) {
@@ -158,11 +282,104 @@ function resetTakeCapturePreview(node) {
   if (!state) return;
   state.url = "";
   state.source = null;
+  state.privacyMode = false;
   state.container.hidden = true;
+  setTakeCapturePreviewWidgetActive(state, false);
   state.container.classList.remove("is-revealed");
+  state.container.classList.remove("privacy-mode");
   state.video.pause?.();
   state.video.removeAttribute("src");
   state.video.load?.();
+  restorePreviousHideOutputImages(node, state);
+}
+
+function setTakeCapturePreviewWidgetActive(state, active) {
+  if (!state?.widget) return;
+  state.widget.hidden = !active;
+}
+
+function capturePreviousHideOutputImages(node, state) {
+  if (state.hasPreviousHideOutputImages) return;
+  state.previousHideOutputImagesWasOwnProperty = Object.prototype.hasOwnProperty.call(node, "hideOutputImages");
+  state.previousHideOutputImages = node.hideOutputImages;
+  state.hasPreviousHideOutputImages = true;
+}
+
+function restorePreviousHideOutputImages(node, state) {
+  if (!state.hasPreviousHideOutputImages) return;
+  if (state.previousHideOutputImagesWasOwnProperty) {
+    node.hideOutputImages = state.previousHideOutputImages;
+  } else {
+    delete node.hideOutputImages;
+  }
+  state.previousHideOutputImages = undefined;
+  state.previousHideOutputImagesWasOwnProperty = false;
+  state.hasPreviousHideOutputImages = false;
+}
+
+function scheduleTakeCapturePreviewMaintenance(node, output = null, appRef = null) {
+  const refresh = () => {
+    const changed = suppressNativeTakeCapturePreview(node, output);
+    const resized = ensureTakeCapturePreviewNodeFits(node);
+    if (changed || resized) {
+      setCanvasDirty(node, appRef);
+    }
+  };
+  if (typeof globalThis.queueMicrotask === "function") {
+    globalThis.queueMicrotask(refresh);
+  }
+  if (typeof globalThis.requestAnimationFrame === "function") {
+    globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(refresh));
+  } else if (typeof globalThis.setTimeout === "function") {
+    globalThis.setTimeout(refresh, 0);
+  }
+}
+
+function prepareTakeCapturePreviewFitTarget(node, state) {
+  if (!state?.url) return 0;
+  const currentHeight = finiteNumber(node?.size?.[1], 0);
+  const previewHeight = takeCapturePreviewStateOuterHeight(state) + PREVIEW_BOTTOM_PADDING;
+  if (!positiveFiniteNumber(state.fitTargetHeight)) {
+    state.fitTargetHeight = Math.ceil(currentHeight + previewHeight);
+  }
+  return state.fitTargetHeight;
+}
+
+function takeCapturePreviewStateOuterHeight(state) {
+  if (!state?.url) return 0;
+  const margin = finiteNumber(state.widget?.margin ?? state.widget?.options?.margin, PREVIEW_WIDGET_MARGIN);
+  return PREVIEW_HEIGHT + margin * 2;
+}
+
+function finiteNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function positiveFiniteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function findNodeWidget(node, name) {
+  return Array.isArray(node?.widgets) ? node.widgets.find((widget) => widget?.name === name) : null;
+}
+
+function isBooleanLikeWidgetValue(value) {
+  if (typeof value === "boolean") return true;
+  if (typeof value !== "string") return false;
+  const text = value.trim().toLowerCase();
+  return text === "true" || text === "false";
+}
+
+function booleanFromWidgetValue(value, fallback) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase();
+    if (text === "true") return true;
+    if (text === "false") return false;
+  }
+  return Boolean(fallback);
 }
 
 function setCanvasDirty(node, appRef = null) {

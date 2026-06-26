@@ -3,7 +3,7 @@ import { api } from "../../scripts/api.js";
 import { mountTimelineMediaCache, unmountTimelineMediaCache } from "./timeline/media_cache.js";
 import { mountTimelineState, unmountTimelineState } from "./timeline/state.js";
 import { mountTimelineRenderer, unmountTimelineRenderer } from "./timeline/renderer.js";
-import { installTakeCapturePrivacyPreview } from "./timeline/take_capture_preview.js";
+import { installTakeCapturePreview } from "./timeline/take_capture_preview.js";
 
 app.registerExtension({
   name: "helto.videoTimelineDirector.state",
@@ -14,7 +14,7 @@ app.registerExtension({
       return;
     }
     if (nodeData?.name === "HeltoTimelineTakeCapture") {
-      installTakeCapturePrivacyPreview(nodeType, app, api);
+      installTakeCapturePreview(nodeType, app, api);
       return;
     }
     if (nodeData?.name !== "HeltoVideoTimelineDirector") return;

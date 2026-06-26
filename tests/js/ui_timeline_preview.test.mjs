@@ -22,9 +22,16 @@ import {
 } from "../../web/timeline/renderer.js";
 import {
   clearNativeTakeCapturePreview,
+  ensureTakeCapturePreviewNodeFits,
+  installTakeCapturePreview,
+  maintainTakeCapturePreview,
+  repairTakeCaptureShiftedSocketlessWidgetValues,
   setTakeCapturePreviewReveal,
+  stripTakeCapturePreviewMedia,
+  suppressNativeTakeCapturePreview,
   syncTakeCapturePreview,
   takeCapturePreviewFromOutput,
+  takeCapturePreviewRequiredNodeHeight,
   takeCapturePreviewUrl,
 } from "../../web/timeline/take_capture_preview.js";
 
@@ -488,7 +495,7 @@ function testSharedMediaPreviewSupportsVideoControls() {
   assert.equal(previewSource.includes(".pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover video"), true);
 }
 
-function testTakeCapturePreviewHelpersUsePrivateTaggedOutput() {
+function testTakeCapturePreviewHelpersUseTaggedOutput() {
   const source = { filename: "shot take 001.mp4", subfolder: "takes/shot_001", type: "output" };
   const apiRef = { apiURL: (path) => `/api${path}` };
   const output = {
@@ -503,15 +510,24 @@ function testTakeCapturePreviewHelpersUsePrivateTaggedOutput() {
     "/api/view?filename=shot+take+001.mp4&type=output&subfolder=takes%2Fshot_001",
   );
   assert.deepEqual(takeCapturePreviewFromOutput(output, apiRef), {
+    privacyMode: true,
     source,
     url: "/api/view?filename=shot+take+001.mp4&type=output&subfolder=takes%2Fshot_001",
   });
-  assert.equal(takeCapturePreviewFromOutput({ ...output, helto_privacy_mode: [false] }, apiRef), null);
+  assert.deepEqual(takeCapturePreviewFromOutput({ ...output, helto_privacy_mode: [false] }, apiRef), {
+    privacyMode: false,
+    source,
+    url: "/api/view?filename=shot+take+001.mp4&type=output&subfolder=takes%2Fshot_001",
+  });
   assert.equal(takeCapturePreviewFromOutput({ ...output, helto_take_capture_preview: [false] }, apiRef), null);
   assert.equal(takeCapturePreviewFromOutput({ ...output, images: [] }, apiRef), null);
+  assert.deepEqual(stripTakeCapturePreviewMedia(output), {
+    helto_take_capture_preview: [true],
+    helto_privacy_mode: [true],
+  });
 }
 
-function testTakeCapturePrivatePreviewClearsNativeAndRevealsOnHover() {
+function testTakeCapturePreviewClearsNativeAndRevealsOnHover() {
   const previousDocument = globalThis.document;
   globalThis.document = createFakeDocument();
   try {
@@ -526,10 +542,24 @@ function testTakeCapturePrivatePreviewClearsNativeAndRevealsOnHover() {
 
     assert.equal(syncTakeCapturePreview(node, output, { apiRef: { apiURL: (path) => path }, appRef }), true);
     assert.equal(node.imgs.length, 0);
+    assert.equal(node.videoContainer, undefined);
+    assert.equal(node.images, output.images);
+    assert.equal(node.animatedImages, false);
+    assert.equal(node.previewMediaType, undefined);
     assert.equal(node.widgets.some((widget) => widget.name === "$$canvas-image-preview"), false);
+    assert.equal(node.widgets.some((widget) => widget.name === "$$comfy_animation_preview"), false);
+    assert.equal(node.widgets.some((widget) => widget.name === "video-preview"), false);
+    assert.equal(node.removedNativeWidgets, 3);
+    assert.equal(node.hideOutputImages, true);
     assert.equal(node._heltoTakeCapturePreview.url, "/view?filename=private.mp4&type=output&subfolder=takes");
     assert.equal(node._heltoTakeCapturePreview.container.hidden, false);
     assert.equal(node._heltoTakeCapturePreview.container.classList.contains("is-revealed"), false);
+    assert.equal(node._heltoTakeCapturePreview.container.classList.contains("privacy-mode"), true);
+    assert.equal(node._heltoTakeCapturePreview.video.attributes["aria-label"], "Private take capture preview");
+    assert.equal(node._heltoTakeCapturePreview.widget.hidden, false);
+    assert.equal(node._heltoTakeCapturePreview.widget.options.getHeight(), 200);
+    assert.equal("computeSize" in node._heltoTakeCapturePreview.widget, false);
+    assert.deepEqual(node.setSizes, [[320, 696]]);
     assert.deepEqual(node.graph.dirty, [[true, true]]);
     assert.deepEqual(appRef.canvas.dirty, [[true, true]]);
 
@@ -546,18 +576,226 @@ function testTakeCapturePrivatePreviewClearsNativeAndRevealsOnHover() {
   }
 }
 
+function testTakeCapturePublicPreviewUsesHoverWidgetAndRestoresNativeVisibility() {
+  const previousDocument = globalThis.document;
+  globalThis.document = createFakeDocument();
+  try {
+    const node = createFakeTakeCaptureNode({ hideOutputImages: false });
+    const output = {
+      images: [{ filename: "public.mp4", subfolder: "takes", type: "output" }],
+      animated: [true],
+      helto_take_capture_preview: [true],
+      helto_privacy_mode: [false],
+    };
+
+    assert.equal(syncTakeCapturePreview(node, output, { apiRef: { apiURL: (path) => path } }), true);
+    assert.equal(node.hideOutputImages, true);
+    assert.equal(node._heltoTakeCapturePreview.container.hidden, false);
+    assert.equal(node._heltoTakeCapturePreview.container.classList.contains("privacy-mode"), false);
+    assert.equal(node._heltoTakeCapturePreview.video.attributes["aria-label"], "Take capture preview");
+
+    assert.equal(syncTakeCapturePreview(node, { images: [{ filename: "other.mp4" }] }), false);
+    assert.equal(node.hideOutputImages, false);
+    assert.equal(node._heltoTakeCapturePreview.container.hidden, true);
+    assert.equal(node._heltoTakeCapturePreview.widget.hidden, true);
+    assert.equal(node._heltoTakeCapturePreview.url, "");
+    assert.equal(node._heltoTakeCapturePreview.video.attributes.src, undefined);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+}
+
+function testTakeCapturePreviewInstallerStripsNativeMediaBeforeOriginalOnExecuted() {
+  const previousDocument = globalThis.document;
+  globalThis.document = createFakeDocument();
+  try {
+    let forwardedOutput = null;
+    function FakeNode() {
+      Object.assign(this, createFakeTakeCaptureNode());
+    }
+    FakeNode.prototype.onExecuted = function (output) {
+      forwardedOutput = output;
+      return "native-result";
+    };
+
+    installTakeCapturePreview(FakeNode, { canvas: { setDirty() {} } }, { apiURL: (path) => path });
+    const node = new FakeNode();
+    node.onNodeCreated();
+    const result = node.onExecuted({
+      images: [{ filename: "public.mp4", type: "output" }],
+      animated: [true],
+      helto_take_capture_preview: [true],
+      helto_privacy_mode: [false],
+    });
+
+    assert.equal(result, "native-result");
+    assert.equal("images" in forwardedOutput, false);
+    assert.equal("animated" in forwardedOutput, false);
+    assert.deepEqual(forwardedOutput, {
+      helto_take_capture_preview: [true],
+      helto_privacy_mode: [false],
+    });
+    assert.equal(node.hideOutputImages, true);
+    assert.equal(node._heltoTakeCapturePreview.url, "/view?filename=public.mp4&type=output");
+  } finally {
+    globalThis.document = previousDocument;
+  }
+}
+
+function testTakeCapturePreviewConsumesNativeStoredOutput() {
+  const output = {
+    images: [{ filename: "stored.mp4", type: "output" }],
+    animated: [true],
+    helto_take_capture_preview: [true],
+  };
+  const node = createFakeTakeCaptureNode({
+    images: [{ filename: "previous.mp4", type: "output" }],
+    animatedImages: true,
+    previewMediaType: "video",
+  });
+
+  assert.equal(suppressNativeTakeCapturePreview(node, output), true);
+  assert.equal(node.images, output.images);
+  assert.equal(node.animatedImages, false);
+  assert.equal(node.previewMediaType, undefined);
+  assert.equal(node.imgs.length, 0);
+  assert.equal(node.videoContainer, undefined);
+  assert.equal(node.widgets.some((widget) => widget.name === "video-preview"), false);
+}
+
+function testTakeCapturePreviewNodeGrowthUsesStableFitTarget() {
+  const node = createFakeTakeCaptureNode();
+  node._heltoTakeCapturePreview = {
+    url: "/view?filename=active.mp4&type=output",
+    widget: {
+      y: 500,
+      computedHeight: 200,
+      options: { margin: 10 },
+    },
+  };
+
+  assert.equal(takeCapturePreviewRequiredNodeHeight(node), 696);
+  assert.equal(ensureTakeCapturePreviewNodeFits(node), true);
+  assert.deepEqual(node.size, [320, 696]);
+  assert.deepEqual(node.setSizes, [[320, 696]]);
+
+  node.setSizes = [];
+  assert.equal(ensureTakeCapturePreviewNodeFits(node), false);
+  assert.deepEqual(node.setSizes, []);
+
+  node.computeSize = () => {
+    throw new Error("computeSize should not be used for active preview fitting");
+  };
+  node._heltoTakeCapturePreview.widget.y = 900;
+  node._heltoTakeCapturePreview.widget.computedHeight = 500;
+  assert.equal(takeCapturePreviewRequiredNodeHeight(node), 696);
+  assert.equal(ensureTakeCapturePreviewNodeFits(node), false);
+  assert.deepEqual(node.setSizes, []);
+}
+
+function testTakeCapturePreviewPreservesSocketlessWidgetOrder() {
+  const previousDocument = globalThis.document;
+  globalThis.document = createFakeDocument();
+  try {
+    const node = createFakeTakeCaptureNode({
+      widgets: [
+        { name: "$$canvas-image-preview", onRemove() { node.removedNativeWidgets += 1; } },
+        { name: "frame_rate" },
+        { name: "take_registration_json" },
+        { name: "generated_asset_path" },
+        { name: "shot_id_override" },
+        { name: "filename_prefix" },
+      ],
+    });
+    const inputWidgetOrder = [
+      "frame_rate",
+      "take_registration_json",
+      "generated_asset_path",
+      "shot_id_override",
+      "filename_prefix",
+    ];
+    const output = {
+      images: [{ filename: "ordered.mp4", type: "output" }],
+      helto_take_capture_preview: [true],
+    };
+
+    assert.equal(syncTakeCapturePreview(node, output, { apiRef: { apiURL: (path) => path } }), true);
+    const previewIndex = node.widgets.findIndex((widget) => widget.name === "helto_take_capture_preview");
+    const remainingInputOrder = node.widgets
+      .map((widget) => widget.name)
+      .filter((name) => inputWidgetOrder.includes(name));
+    assert.equal(previewIndex >= 0, true);
+    assert.deepEqual(remainingInputOrder, inputWidgetOrder);
+    assert.equal(previewIndex > node.widgets.findIndex((widget) => widget.name === "filename_prefix"), true);
+    assert.deepEqual(node.setSizes, [[320, 696]]);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+}
+
+function testTakeCapturePreviewRepairsPreviouslyShiftedSocketlessValues() {
+  const node = createFakeTakeCaptureNode({
+    widgets: [
+      { name: "frame_rate", value: 24 },
+      { name: "take_registration_json", value: "" },
+      { name: "generated_asset_path", value: "" },
+      { name: "shot_id_override", value: "%shot_id%_%take_id%" },
+      { name: "filename_prefix", value: false },
+      { name: "accept", value: true },
+      { name: "update_clip_instance", value: true },
+    ],
+  });
+
+  assert.equal(repairTakeCaptureShiftedSocketlessWidgetValues(node), true);
+  assert.equal(node.widgets.find((widget) => widget.name === "shot_id_override").value, "");
+  assert.equal(node.widgets.find((widget) => widget.name === "filename_prefix").value, "%shot_id%_%take_id%");
+  assert.equal(node.widgets.find((widget) => widget.name === "accept").value, false);
+  assert.equal(node.widgets.find((widget) => widget.name === "update_clip_instance").value, true);
+
+  assert.equal(repairTakeCaptureShiftedSocketlessWidgetValues(node), false);
+}
+
+function testTakeCapturePreviewMaintainsNodeGrowthDuringDraw() {
+  const node = createFakeTakeCaptureNode();
+  node._heltoTakeCapturePreview = {
+    url: "/view?filename=active.mp4&type=output",
+    widget: {
+      y: 500,
+      computedHeight: 200,
+      options: { margin: 10 },
+    },
+  };
+  const appRef = { canvas: { dirty: [], setDirty(...args) { this.dirty.push(args); } } };
+
+  assert.equal(maintainTakeCapturePreview(node, { appRef }), true);
+  assert.deepEqual(node.size, [320, 696]);
+  assert.deepEqual(node.setSizes, [[320, 696]]);
+  assert.deepEqual(node.graph.dirty, [[true, true]]);
+  assert.deepEqual(appRef.canvas.dirty, [[true, true]]);
+
+  node.setSizes = [];
+  node.graph.dirty = [];
+  appRef.canvas.dirty = [];
+  assert.equal(maintainTakeCapturePreview(node, { appRef }), false);
+  assert.deepEqual(node.setSizes, []);
+  assert.deepEqual(node.graph.dirty, []);
+}
+
 function testTakeCapturePreviewExtensionIsInstalled() {
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
 
   assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), true);
-  assert.equal(extensionSource.includes('import { installTakeCapturePrivacyPreview } from "./timeline/take_capture_preview.js";'), true);
+  assert.equal(extensionSource.includes('import { installTakeCapturePreview } from "./timeline/take_capture_preview.js";'), true);
   assert.equal(extensionSource.includes('nodeData?.name === "HeltoTimelineTakeCapture"'), true);
-  assert.equal(extensionSource.includes("installTakeCapturePrivacyPreview(nodeType, app, api)"), true);
+  assert.equal(extensionSource.includes("installTakeCapturePreview(nodeType, app, api)"), true);
 
   const previewSource = readFileSync(new URL("../../web/timeline/take_capture_preview.js", import.meta.url), "utf8");
   assert.equal(previewSource.includes("helto_take_capture_preview"), true);
   assert.equal(previewSource.includes("helto_privacy_mode"), true);
-  assert.equal(previewSource.includes("NATIVE_PREVIEW_WIDGET_NAME = \"$$canvas-image-preview\""), true);
+  assert.equal(previewSource.includes("\"$$canvas-image-preview\""), true);
+  assert.equal(previewSource.includes("\"$$comfy_animation_preview\""), true);
+  assert.equal(previewSource.includes("\"video-preview\""), true);
+  assert.equal(previewSource.includes("hideOutputImages = true"), true);
   assert.equal(previewSource.includes("getMinHeight: widgetHeight"), true);
   assert.equal(previewSource.includes("getMaxHeight: widgetHeight"), true);
   assert.equal(previewSource.includes("getHeight: widgetHeight"), true);
@@ -816,8 +1054,15 @@ testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testBoundarySelectionUsesInspectorHeightAndLiveFieldUpdates();
 testSectionPreviewUsesContainedRepeatedFrames();
 testSharedMediaPreviewSupportsVideoControls();
-testTakeCapturePreviewHelpersUsePrivateTaggedOutput();
-testTakeCapturePrivatePreviewClearsNativeAndRevealsOnHover();
+testTakeCapturePreviewHelpersUseTaggedOutput();
+testTakeCapturePreviewClearsNativeAndRevealsOnHover();
+testTakeCapturePublicPreviewUsesHoverWidgetAndRestoresNativeVisibility();
+testTakeCapturePreviewInstallerStripsNativeMediaBeforeOriginalOnExecuted();
+testTakeCapturePreviewConsumesNativeStoredOutput();
+testTakeCapturePreviewNodeGrowthUsesStableFitTarget();
+testTakeCapturePreviewPreservesSocketlessWidgetOrder();
+testTakeCapturePreviewRepairsPreviouslyShiftedSocketlessValues();
+testTakeCapturePreviewMaintainsNodeGrowthDuringDraw();
 testTakeCapturePreviewExtensionIsInstalled();
 testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
@@ -829,10 +1074,28 @@ testViewportMeasurementIgnoresCollapsedChildWidth();
 
 console.log("timeline preview UI tests passed");
 
-function createFakeTakeCaptureNode() {
-  return {
+function createFakeTakeCaptureNode(overrides = {}) {
+  const node = {
     imgs: [{ src: "native" }],
-    widgets: [{ name: "$$canvas-image-preview" }, { name: "other" }],
+    videoContainer: { source: "native-video" },
+    animatedImages: true,
+    previewMediaType: "video",
+    widgets: [
+      { name: "$$canvas-image-preview", onRemove() { node.removedNativeWidgets += 1; } },
+      { name: "$$comfy_animation_preview", onRemove() { node.removedNativeWidgets += 1; } },
+      { name: "video-preview", onRemove() { node.removedNativeWidgets += 1; } },
+      { name: "other" },
+    ],
+    removedNativeWidgets: 0,
+    size: [320, 480],
+    setSizes: [],
+    computeSize() {
+      return [360, 620];
+    },
+    setSize(nextSize) {
+      this.size = nextSize;
+      this.setSizes.push(nextSize);
+    },
     graph: {
       dirty: [],
       setDirtyCanvas(...args) {
@@ -840,11 +1103,12 @@ function createFakeTakeCaptureNode() {
       },
     },
     addDOMWidget(name, label, element, options) {
-      const widget = { name, label, element, options };
+      const widget = { name, label, element, options, margin: options?.margin };
       this.widgets.push(widget);
       return widget;
     },
   };
+  return Object.assign(node, overrides);
 }
 
 function createFakeDocument() {
