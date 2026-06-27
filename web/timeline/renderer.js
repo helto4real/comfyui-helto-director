@@ -36,6 +36,7 @@ import {
 } from "./media_actions.js";
 import {
   cloneProjectForDirectorLibrary,
+  confirmProjectUpdate,
   showDirectorLibrary,
 } from "./library.js";
 import { showMediaPicker } from "./media_picker.js";
@@ -1161,17 +1162,23 @@ export class TimelineRenderer {
     const capturePath = captureMediaPath(item);
     const existing = findAttachedTakeForCapture(timeline, shot, item);
     const previewData = this.captureVideoPreviewData(timeline, item, privacyRevealed);
-    if (previewData) actions.append(iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData)));
+    const status = el("span", `htd-take-status-pill${existing ? "" : " htd-take-status-placeholder"}`);
+    status.textContent = existing?.status ?? "Candidate";
+    status.title = existing ? `Attached Take Status: ${existing.status ?? "Candidate"}` : "Capture is not attached";
+    if (!existing) status.setAttribute("aria-hidden", "true");
+    actions.append(iconButton("preview-video", previewData ? "Preview Take Video" : "No preview available", () => {
+      if (previewData) this.openTakeVideoPreviewData(previewData);
+    }, { disabled: !previewData }));
     const remove = iconButton("delete", "Delete Take Files", () => {
       this.deleteProjectTakeCaptureFromItem(shot, item, { takeId, path: capturePath, label: label.textContent });
     });
     remove.classList.add("is-danger");
-    const attach = iconButton("insert", existing ? "Capture Already Attached" : "Attach Project Capture As Take", () => {
+    const attach = iconButton("insert", existing ? "Capture already attached" : "Attach Project Capture As Take", () => {
       this.commitMutation((currentTimeline) => {
         attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
       }, "attach project capture");
     }, { disabled: Boolean(existing) });
-    const accept = iconButton("accept", existing?.status === "Accepted" ? "Capture Already Accepted" : "Attach And Accept Project Capture", () => {
+    const accept = iconButton("accept", existing?.status === "Accepted" ? "Capture already accepted" : existing ? "Accept attached capture" : "Attach And Accept Project Capture", () => {
       this.commitMutation((currentTimeline) => {
         const liveShot = findShot(currentTimeline, shot.shot_id);
         const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item);
@@ -1179,18 +1186,16 @@ export class TimelineRenderer {
         if (result?.take) acceptTake(currentTimeline, shot.shot_id, result.take.take_id);
       }, "accept project capture");
     }, { disabled: existing?.status === "Accepted" });
-    actions.append(remove, attach, accept);
-    if (existing) {
-      actions.append(
-        iconButton("reject", "Mark Take Rejected", () => {
-          this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, existing.take_id, "Rejected"), "take change");
-        }, { disabled: existing.status === "Rejected" }),
-        iconButton("restore", "Restore Candidate Take", () => {
-          this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, existing.take_id, "Candidate"), "take change");
-        }, { disabled: existing.status === "Candidate" }),
-      );
-    }
-    row.append(label, summary, actions);
+    const reject = iconButton("reject", !existing ? "Attach capture before rejecting" : existing.status === "Rejected" ? "Capture already rejected" : "Mark Take Rejected", () => {
+      if (!existing) return;
+      this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, existing.take_id, "Rejected"), "take change");
+    }, { disabled: !existing || existing.status === "Rejected" });
+    const restore = iconButton("restore", !existing ? "Attach capture before restoring" : existing.status === "Candidate" ? "Capture already candidate" : "Restore Candidate Take", () => {
+      if (!existing) return;
+      this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, existing.take_id, "Candidate"), "take change");
+    }, { disabled: !existing || existing.status === "Candidate" });
+    actions.append(remove, attach, accept, reject, restore);
+    row.append(label, summary, status, actions);
     return row;
   }
 
@@ -1209,7 +1214,9 @@ export class TimelineRenderer {
     status.title = `Take Status: ${take.status ?? "Candidate"}`;
     const actions = el("span", "htd-take-actions");
     const previewData = this.takeVideoPreviewData(timeline, take, asset, privacyRevealed);
-    if (previewData) actions.append(iconButton("preview-video", "Preview Take Video", () => this.openTakeVideoPreviewData(previewData)));
+    actions.append(iconButton("preview-video", previewData ? "Preview Take Video" : "No preview available", () => {
+      if (previewData) this.openTakeVideoPreviewData(previewData);
+    }, { disabled: !previewData }));
     const remove = iconButton("delete", "Delete Take Files", () => {
       this.deleteProjectTakeFromTimelineTake(shot, take, asset, { label: label.textContent });
     });
@@ -1887,8 +1894,9 @@ export class TimelineRenderer {
   }
 
   async saveCurrentProjectToLibrary(control = null) {
-    this.controller.flushDebouncedCommit("project library save", { rerender: false });
     const itemId = projectLibraryItemIdFor(this.controller.timeline);
+    if (itemId && !confirmProjectUpdate(this.container.ownerDocument)) return false;
+    this.controller.flushDebouncedCommit("project library save", { rerender: false });
     await withDisabledControl(control, async () => {
       try {
         if (itemId) {
@@ -1915,6 +1923,7 @@ export class TimelineRenderer {
         this.alertProjectLibraryError(error);
       }
     });
+    return true;
   }
 
   stampCurrentProjectLibraryItemId(itemId, options = {}) {
@@ -2903,15 +2912,19 @@ function assetMediaPath(asset) {
   return String(asset?.path ?? asset?.file_path ?? "").trim();
 }
 
-function findAttachedTakeForCapture(timeline, shot, item) {
+export function findAttachedTakeForCapture(timeline, shot, item) {
   if (!shot) return null;
   const capturePath = captureMediaPath(item);
+  const takes = shot.takes ?? [];
   if (capturePath) {
-    const byPath = (shot.takes ?? []).find((take) => assetMediaPath(assetForId(timeline, take.asset_id)) === capturePath);
-    if (byPath) return byPath;
+    return takes.find((take) => assetMediaPath(assetForId(timeline, take.asset_id)) === capturePath) ?? null;
   }
   const takeId = captureTakeId(item);
-  return takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) ?? null : null;
+  if (!takeId) return null;
+  return takes.find((take) => (
+    take.take_id === takeId
+    && !assetMediaPath(assetForId(timeline, take.asset_id))
+  )) ?? null;
 }
 
 function captureOrderLabel(index, total) {
@@ -3746,8 +3759,13 @@ function installStyles(documentRef) {
     .htd-capture-row { grid-template-columns: minmax(92px, 0.28fr) minmax(160px, 1fr) auto; }
     .htd-take-row.is-compact, .htd-capture-row.is-compact { grid-template-columns: minmax(92px, 0.28fr) minmax(160px, 1fr) auto; }
     .htd-take-actions { min-width: 0; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+    .htd-captures-modal .htd-take-row, .htd-captures-modal .htd-capture-row { grid-template-columns: minmax(92px, 0.28fr) minmax(180px, 1fr) 96px 164px; }
+    .htd-captures-modal .htd-take-actions { width: 164px; display: grid; grid-template-columns: repeat(6, 24px); justify-content: end; gap: 4px; }
+    .htd-captures-modal .htd-take-actions .htd-menu { width: 24px; min-width: 24px; }
     .htd-take-label, .htd-take-asset-summary, .htd-lora-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-text); }
     .htd-take-asset-summary { color: var(--htd-text-dim); }
+    .htd-take-status-pill { width: 96px; justify-content: center; }
+    .htd-take-status-placeholder { visibility: hidden; pointer-events: none; }
     .htd-take-row .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
     .htd-take-row .htd-icon-button, .htd-capture-row .htd-icon-button { width: 24px; min-width: 24px; height: 22px; padding: 0; }
     .htd-shot-lora-targets-row { min-width: 0; min-height: 28px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--htd-text-dim); }

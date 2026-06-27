@@ -24,6 +24,7 @@ import { showMediaPreview } from "./media_preview.js";
 
 export const ROUTE_PREFIX = "/helto_director/library";
 export const PROJECT_REPLACE_CONFIRMATION = "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.";
+export const PROJECT_UPDATE_CONFIRMATION = "Update saved project with current timeline?\n\nThis will overwrite the linked Director Library project. Save as a new project if you want to keep the existing saved version.";
 
 const TAB_PROJECTS = "projects";
 const TAB_CHARACTERS = "characters";
@@ -1400,6 +1401,10 @@ async function saveCurrentProjectAsNew({ timeline, documentRef, setStatus, priva
 
 async function updateCurrentProjectLibraryItem({ timeline, itemId, documentRef, setStatus, callbacks }) {
   if (!timeline || !itemId) return;
+  if (!confirmProjectUpdate(documentRef)) {
+    setStatus?.("Project update canceled.");
+    return;
+  }
   try {
     await updateProjectLibraryItem(itemId, timeline);
     stampCurrentProjectLibraryItemId(callbacks, timeline, itemId);
@@ -1692,6 +1697,11 @@ function formatNumber(value) {
 function confirmDelete(documentRef, message) {
   const confirmFn = documentRef.defaultView?.confirm ?? globalThis.confirm;
   return !confirmFn || confirmFn(message);
+}
+
+export function confirmProjectUpdate(documentRef) {
+  const confirmFn = documentRef.defaultView?.confirm ?? globalThis.confirm;
+  return !confirmFn || confirmFn(PROJECT_UPDATE_CONFIRMATION);
 }
 
 function exportJson(documentRef, filename, payload) {

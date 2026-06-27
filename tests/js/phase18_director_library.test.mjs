@@ -21,11 +21,13 @@ import {
 import {
   ROUTE_PREFIX,
   PROJECT_REPLACE_CONFIRMATION,
+  PROJECT_UPDATE_CONFIRMATION,
   applyCharacterPreviewPayload,
   applyProjectPreviewPayload,
   clearDirectorLibraryDisplay,
   clearProjectLibraryItemId,
   cloneProjectForDirectorLibrary,
+  confirmProjectUpdate,
   forkProjectIdentity,
   libraryPreviewAssetForItem,
   libraryDialogClassName,
@@ -371,6 +373,29 @@ function testTimelineLibraryIdentityHelpers() {
   assert.equal("library_item_id" in timeline.project.metadata, false);
 }
 
+function testProjectUpdateConfirmationUsesDocumentConfirm() {
+  const cancelCalls = [];
+  const cancelDocument = {
+    defaultView: {
+      confirm(message) {
+        cancelCalls.push(message);
+        return false;
+      },
+    },
+  };
+  assert.equal(confirmProjectUpdate(cancelDocument), false);
+  assert.deepEqual(cancelCalls, [PROJECT_UPDATE_CONFIRMATION]);
+
+  const allowDocument = {
+    defaultView: {
+      confirm() {
+        return true;
+      },
+    },
+  };
+  assert.equal(confirmProjectUpdate(allowDocument), true);
+}
+
 function testTimelineLibrarySaveClonePrunesUnreferencedAssets() {
   const timeline = createDefaultVideoTimeline();
   const imageSection = addSection(timeline, "Image", 0);
@@ -475,7 +500,12 @@ function testRendererAndLibraryContractStrings() {
     PROJECT_REPLACE_CONFIRMATION,
     "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.",
   );
+  assert.equal(
+    PROJECT_UPDATE_CONFIRMATION,
+    "Update saved project with current timeline?\n\nThis will overwrite the linked Director Library project. Save as a new project if you want to keep the existing saved version.",
+  );
   assert.equal(rendererSource.includes('showDirectorLibrary,'), true);
+  assert.equal(rendererSource.includes('confirmProjectUpdate,'), true);
   assert.equal(rendererSource.includes('cloneProjectForDirectorLibrary,'), true);
   assert.equal(rendererSource.includes('iconButton("library", "Director Library", () => this.openDirectorLibrary())'), true);
   const directorLibraryButtonIndex = rendererSource.indexOf('iconButton("library", "Director Library", () => this.openDirectorLibrary())');
@@ -508,6 +538,8 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(mediaPreviewSource.includes("z-index: 10050"), true);
   assert.equal(librarySource.includes('htd-library-filter-toggle'), true);
   assert.equal(librarySource.includes('htd-library-inspector-actions'), true);
+  assert.equal(librarySource.includes("export function confirmProjectUpdate(documentRef)"), true);
+  assert.equal(librarySource.includes("if (!confirmProjectUpdate(documentRef))"), true);
   assert.equal(librarySource.includes('timelinePreviewAssets(item).slice(0, 3)'), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-preview img"), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-strip-thumb img"), true);
@@ -521,6 +553,7 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(rendererSource.includes('projectLibraryButton.classList.toggle("is-active", Boolean(projectLibraryItemId));'), true);
   assert.equal(rendererSource.includes('async saveCurrentProjectToLibrary(control = null)'), true);
   assert.equal(rendererSource.includes('const itemId = projectLibraryItemIdFor(this.controller.timeline);'), true);
+  assert.equal(rendererSource.includes("if (itemId && !confirmProjectUpdate(this.container.ownerDocument)) return false;"), true);
   assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`'), true);
   assert.equal(rendererSource.includes('method: "PUT"'), true);
   assert.equal(rendererSource.includes("body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId))"), true);
@@ -544,6 +577,7 @@ testLibraryItemNormalizationAndPrivacyHelpers();
 testCharacterLibraryPreviewUsesImageSourceMetadata();
 testPrivateCharacterPreviewHydratesImageShell();
 testTimelineLibraryIdentityHelpers();
+testProjectUpdateConfirmationUsesDocumentConfirm();
 testTimelineLibrarySaveClonePrunesUnreferencedAssets();
 testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia();
 testRendererAndLibraryContractStrings();

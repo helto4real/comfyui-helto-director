@@ -10,6 +10,7 @@ import {
 } from "../../web/timeline/geometry.js";
 import {
   ensureTimelineNodeFitsContent,
+  findAttachedTakeForCapture,
   getTimelineNodeMinimumHeight,
   getTimelineWidgetRenderedHeight,
   getTimelineWidgetHeight,
@@ -279,16 +280,17 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("return `Take ${String(number).padStart(3, \"0\")}`;"), true);
   assert.equal(rendererSource.includes("const previewData = this.captureVideoPreviewData(timeline, item, privacyRevealed)"), true);
   assert.equal(rendererSource.includes("const previewData = this.takeVideoPreviewData(timeline, take, asset, privacyRevealed)"), true);
-  assert.equal((rendererSource.match(/iconButton\("preview-video", "Preview Take Video"/g) ?? []).length, 2);
+  assert.equal((rendererSource.match(/iconButton\("preview-video", previewData \? "Preview Take Video" : "No preview available"/g) ?? []).length, 2);
   assert.equal((rendererSource.match(/iconButton\("delete", "Delete Take Files"/g) ?? []).length, 2);
-  assert.equal(rendererSource.includes('iconButton("insert", existing ? "Capture Already Attached"'), true);
+  assert.equal(rendererSource.includes('iconButton("insert", existing ? "Capture already attached"'), true);
   assert.equal(rendererSource.includes('iconButton("accept", existing?.status === "Accepted"'), true);
-  assert.equal(rendererSource.includes('iconButton("reject", "Mark Take Rejected"'), true);
-  assert.equal(rendererSource.includes('iconButton("restore", "Restore Candidate Take"'), true);
+  assert.equal(rendererSource.includes('iconButton("reject", !existing ? "Attach capture before rejecting"'), true);
+  assert.equal(rendererSource.includes('iconButton("restore", !existing ? "Attach capture before restoring"'), true);
   assert.equal(rendererSource.includes("remove.classList.add(\"is-danger\")"), true);
-  assert.equal(rendererSource.includes("actions.append(remove, attach, accept)"), true);
+  assert.equal(rendererSource.includes("actions.append(remove, attach, accept, reject, restore)"), true);
   assert.equal(rendererSource.includes("row.append(label, assetSummary, status, actions)"), true);
-  assert.equal(rendererSource.includes("if (previewData) actions.append(iconButton(\"preview-video\", \"Preview Take Video\""), true);
+  assert.equal(rendererSource.includes("row.append(label, summary, status, actions)"), true);
+  assert.equal(rendererSource.includes("if (previewData) actions.append(iconButton(\"preview-video\", \"Preview Take Video\""), false);
   assert.equal(rendererSource.includes("deleteProjectTakeCaptureFromItem(shot, item"), true);
   assert.equal(rendererSource.includes("deleteProjectTakeFromTimelineTake(shot, take, asset"), true);
   assert.equal(rendererSource.includes("const capturePath = captureMediaPath(item)"), true);
@@ -298,8 +300,11 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("confirmFn?.(`Delete ${label} from the timeline and permanently remove its project take files?`)"), true);
   assert.equal(rendererSource.includes("await deleteProjectTakeCapture(timeline, shotId, path"), true);
   assert.equal(rendererSource.includes("deleteTakesByAssetPath(currentTimeline, shotId, path, options.takeId)"), true);
-  assert.equal(rendererSource.includes("function findAttachedTakeForCapture(timeline, shot, item)"), true);
+  assert.equal(rendererSource.includes("export function findAttachedTakeForCapture(timeline, shot, item)"), true);
   assert.equal(rendererSource.includes("function captureMediaPath(item)"), true);
+  assert.equal(rendererSource.includes("if (capturePath) {"), true);
+  assert.equal(rendererSource.includes("return takes.find((take) => assetMediaPath(assetForId(timeline, take.asset_id)) === capturePath) ?? null;"), true);
+  assert.equal(rendererSource.includes("&& !assetMediaPath(assetForId(timeline, take.asset_id))"), true);
   assert.equal(rendererSource.includes("const existing = takeId ? (shot.takes ?? []).find((take) => take.take_id === takeId) : null"), false);
   assert.equal(rendererSource.includes("alertFn?.(error?.message || \"Could not delete project take files.\")"), true);
   assert.equal(rendererSource.includes("takeVideoPreviewData(timeline, take, asset = null"), true);
@@ -314,6 +319,9 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('restore: `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('refresh: `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes(".htd-capture-row { grid-template-columns:"), true);
+  assert.equal(rendererSource.includes(".htd-captures-modal .htd-take-row, .htd-captures-modal .htd-capture-row { grid-template-columns:"), true);
+  assert.equal(rendererSource.includes(".htd-captures-modal .htd-take-actions { width: 164px; display: grid; grid-template-columns: repeat(6, 24px);"), true);
+  assert.equal(rendererSource.includes(".htd-take-status-placeholder { visibility: hidden; pointer-events: none; }"), true);
   assert.equal(rendererSource.includes(".htd-captures-overlay { position: absolute;"), true);
   assert.equal(rendererSource.includes(".htd-captures-modal { width: min(860px, 100%);"), true);
   assert.equal(rendererSource.includes("event.target === overlay"), true);
@@ -475,6 +483,42 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   const migrationSource = readFileSync(new URL("../../web/timeline/migration.js", import.meta.url), "utf8");
   assert.equal(migrationSource.includes('normalized.video_guidance_range ??= "Last Frames"'), true);
   assert.equal(migrationSource.includes("normalized.video_guidance_frame_count ??= 17"), true);
+}
+
+function testProjectCaptureAttachmentMatchingPrefersPath() {
+  const timeline = {
+    assets: [
+      { asset_id: "asset_attached", type: "Video", path: "/project/takes/shot_001/old.mp4" },
+      { asset_id: "asset_other", type: "Video", path: "/project/takes/shot_001/other.mp4" },
+    ],
+  };
+  const attachedTake = { take_id: "take_001", asset_id: "asset_attached", status: "Candidate" };
+  const shot = { shot_id: "shot_001", takes: [attachedTake] };
+
+  assert.equal(findAttachedTakeForCapture(timeline, shot, {
+    path: "/project/takes/shot_001/old.mp4",
+    take_capture: { registration: { take: { take_id: "take_999" } } },
+  }), attachedTake);
+
+  assert.equal(findAttachedTakeForCapture(timeline, shot, {
+    path: "/project/takes/shot_001/new.mp4",
+    take_capture: { registration: { take: { take_id: "take_001" } } },
+  }), null);
+
+  assert.equal(findAttachedTakeForCapture(timeline, {
+    shot_id: "shot_002",
+    takes: [{ take_id: "take_001", asset_id: "asset_other", status: "Candidate" }],
+  }, {
+    take_capture: { registration: { take: { take_id: "take_001" } } },
+  }), null);
+
+  const pathlessTake = { take_id: "take_002", asset_id: "asset_missing", status: "Candidate" };
+  assert.equal(findAttachedTakeForCapture(timeline, {
+    shot_id: "shot_003",
+    takes: [pathlessTake],
+  }, {
+    take_capture: { registration: { take: { take_id: "take_002" } } },
+  }), pathlessTake);
 }
 
 function testSharedMediaPreviewSupportsVideoControls() {
@@ -1053,6 +1097,7 @@ testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();
 testBoundarySelectionUsesInspectorHeightAndLiveFieldUpdates();
 testSectionPreviewUsesContainedRepeatedFrames();
+testProjectCaptureAttachmentMatchingPrefersPath();
 testSharedMediaPreviewSupportsVideoControls();
 testTakeCapturePreviewHelpersUseTaggedOutput();
 testTakeCapturePreviewClearsNativeAndRevealsOnHover();
