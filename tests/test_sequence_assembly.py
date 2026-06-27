@@ -2,6 +2,7 @@ import json
 import math
 import struct
 import wave
+from fractions import Fraction
 from pathlib import Path
 
 import av
@@ -372,6 +373,87 @@ def test_sequence_assembly_mixes_timeline_audio(tmp_path):
     assert "waveform" not in json.dumps(debug)
 
 
+def test_sequence_assembly_preserves_embedded_audio_from_accepted_take(tmp_path):
+    video = _write_test_video_with_audio(tmp_path / "captured_with_audio.mp4", color=(255, 64, 64))
+    timeline = _timeline_with_assets(
+        [_video_asset("asset_video", video, ASSET_SOURCE_GENERATED)],
+        [_generated_shot("shot_video", "asset_video", 0.0, 1.0)],
+    )
+
+    _frames, mixed_audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert debug["audio"]["status"] == "mixed"
+    assert debug["audio"]["timeline_clip_count"] == 0
+    assert debug["audio"]["source_clip_count"] == 1
+    assert debug["audio"]["source_mixed_clip_count"] == 1
+    assert debug["audio"]["source_skipped_clip_count"] == 0
+    assert debug["audio"]["clip_count"] == 1
+    assert torch.is_tensor(mixed_audio["waveform"])
+    assert float(mixed_audio["waveform"].abs().max()) > 0.0
+    assert str(video) not in json.dumps(debug)
+
+
+def test_sequence_assembly_overlays_embedded_video_audio_and_timeline_audio(tmp_path):
+    video = _write_test_video_with_audio(tmp_path / "captured_with_audio.mp4", color=(255, 64, 64))
+    music = _write_test_wav(tmp_path / "music.wav", duration=1.0, frequency=880.0)
+    timeline = _timeline_with_assets(
+        [
+            _video_asset("asset_video", video, ASSET_SOURCE_GENERATED),
+            {
+                "asset_id": "asset_music",
+                "type": ASSET_TYPE_AUDIO,
+                "source_kind": ASSET_SOURCE_FILE_PATH,
+                "path": str(music),
+                "name": music.name,
+            },
+        ],
+        [_generated_shot("shot_video", "asset_video", 0.0, 2.0)],
+    )
+    timeline["audio_tracks"] = [
+        {
+            "track_id": "music",
+            "clips": [
+                {
+                    "item_id": "audio_001",
+                    "audio": {"asset_id": "asset_music"},
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                    "volume": 100.0,
+                }
+            ],
+        }
+    ]
+
+    _frames, mixed_audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert debug["audio"]["status"] == "mixed"
+    assert debug["audio"]["timeline_clip_count"] == 1
+    assert debug["audio"]["source_clip_count"] == 1
+    assert debug["audio"]["source_mixed_clip_count"] == 1
+    assert debug["audio"]["clip_count"] == 2
+    waveform = mixed_audio["waveform"]
+    assert float(waveform[:, :, :44100].abs().max()) > 0.0
+    assert float(waveform[:, :, 44100:].abs().max()) > 0.0
+
+
+def test_sequence_assembly_skips_source_video_without_audio(tmp_path):
+    video = _write_test_video(tmp_path / "silent_video.mp4", color=(128, 128, 128))
+    timeline = _timeline_with_assets(
+        [_video_asset("asset_video", video, ASSET_SOURCE_GENERATED)],
+        [_generated_shot("shot_video", "asset_video", 0.0, 1.0)],
+    )
+
+    _frames, mixed_audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert debug["audio"]["status"] == "empty"
+    assert debug["audio"]["source_clip_count"] == 1
+    assert debug["audio"]["source_mixed_clip_count"] == 0
+    assert debug["audio"]["source_skipped_clip_count"] == 1
+    assert debug["audio"]["clip_count"] == 0
+    assert any("no decodable audio stream" in entry for entry in debug["audio"]["diagnostics"])
+    assert float(mixed_audio["waveform"].abs().max()) == 0.0
+
+
 def _timeline_with_assets(assets, shots, *, boundaries=None):
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 2.0
@@ -467,6 +549,52 @@ def _write_test_video(
             for packet in stream.encode(frame):
                 container.mux(packet)
         for packet in stream.encode():
+            container.mux(packet)
+    return path
+
+
+def _write_test_video_with_audio(
+    path: Path,
+    *,
+    color: tuple[int, int, int],
+    frame_count: int = 4,
+    fps: int = 4,
+    width: int = 16,
+    height: int = 16,
+    frequency: float = 440.0,
+) -> Path:
+    sample_rate = 44100
+    samples_per_video_frame = sample_rate // fps
+    audio_position = 0
+    with av.open(str(path), "w") as container:
+        video_stream = container.add_stream("mpeg4", rate=fps)
+        video_stream.width = width
+        video_stream.height = height
+        video_stream.pix_fmt = "yuv420p"
+        audio_stream = container.add_stream("aac", rate=sample_rate, layout="stereo")
+        for frame_index in range(frame_count):
+            array = np.zeros((height, width, 3), dtype=np.uint8)
+            array[:, :, 0] = color[0]
+            array[:, :, 1] = color[1]
+            array[:, :, 2] = color[2]
+            video_frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            video_frame.pts = frame_index
+            video_frame.time_base = Fraction(1, fps)
+            for packet in video_stream.encode(video_frame):
+                container.mux(packet)
+
+            sample_indices = np.arange(samples_per_video_frame, dtype=np.float32) + audio_position
+            tone = (0.25 * np.sin(2.0 * math.pi * frequency * sample_indices / sample_rate)).astype(np.float32)
+            audio_frame = av.AudioFrame.from_ndarray(np.stack([tone, tone]), format="fltp", layout="stereo")
+            audio_frame.sample_rate = sample_rate
+            audio_frame.pts = audio_position
+            audio_frame.time_base = Fraction(1, sample_rate)
+            audio_position += samples_per_video_frame
+            for packet in audio_stream.encode(audio_frame):
+                container.mux(packet)
+        for packet in video_stream.encode():
+            container.mux(packet)
+        for packet in audio_stream.encode(None):
             container.mux(packet)
     return path
 

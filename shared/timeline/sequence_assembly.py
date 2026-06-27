@@ -67,6 +67,10 @@ def assemble_timeline_sequence(
         "audio": {
             "status": "not_built",
             "clip_count": 0,
+            "timeline_clip_count": 0,
+            "source_clip_count": 0,
+            "source_mixed_clip_count": 0,
+            "source_skipped_clip_count": 0,
             "diagnostics": [],
         },
         "warnings": [],
@@ -84,7 +88,8 @@ def assemble_timeline_sequence(
         return _empty_sequence_result(frame_rate, debug)
 
     frames = _assemble_clip_frames(clip_entries, timeline, debug)
-    audio = _assemble_audio(timeline, frames, frame_rate, debug)
+    debug["clips"] = [_clip_debug_entry(entry) for entry in clip_entries]
+    audio = _assemble_audio(timeline, clip_entries, frames, frame_rate, debug)
     debug["summary"]["status"] = "assembled"
     debug["summary"]["included_clip_count"] = len(clip_entries)
     debug["summary"]["output_frame_count"] = int(frames.shape[0])
@@ -179,6 +184,7 @@ def _decode_sequence_clips(
             "asset_id": asset_id,
             "take_id": source.get("take_id"),
             "source_kind": source["source_kind"],
+            "path": str(path),
             "boundary_conditioning": _take_boundary_conditioning_from_take(source.get("take")),
             "frames": fitted,
             "source_fps": float(source_fps),
@@ -195,13 +201,6 @@ def _decode_sequence_clips(
                 "take_id": source.get("take_id"),
                 "source_kind": source["source_kind"],
                 "output_frame_count": int(fitted.shape[0]),
-            }
-        )
-        debug["clips"].append(
-            {
-                key: value
-                for key, value in clip_entry.items()
-                if key != "frames"
             }
         )
         debug["shots"].append(shot_debug)
@@ -319,11 +318,17 @@ def _assemble_clip_frames(
         debug["resolution"]["resized_clip_count"] += 1
 
     output = clip_entries[0]["frames"]
+    clip_entries[0]["output_start_frame"] = 0
+    clip_entries[0]["output_end_frame_exclusive"] = int(output.shape[0])
     previous_entry = clip_entries[0]
     boundaries_by_pair = _boundaries_by_pair(timeline)
     for entry in clip_entries[1:]:
         boundary = boundaries_by_pair.get((previous_entry["shot_id"], entry["shot_id"]))
+        output_frame_count = int(output.shape[0])
+        overlap_frames = _boundary_overlap_frames(output, entry["frames"], boundary)
+        entry["output_start_frame"] = max(0, output_frame_count - overlap_frames)
         output = _append_with_boundary(output, entry["frames"], boundary, previous_entry, entry, debug)
+        entry["output_end_frame_exclusive"] = entry["output_start_frame"] + int(entry["frames"].shape[0])
         previous_entry = entry
     return output
 
@@ -398,6 +403,7 @@ def _append_with_boundary(
 
 def _assemble_audio(
     timeline: dict[str, Any],
+    clip_entries: list[dict[str, Any]],
     frames: torch.Tensor,
     frame_rate: float,
     debug: dict[str, Any],
@@ -405,11 +411,17 @@ def _assemble_audio(
     from ..ltx.runtime.audio import empty_audio, mix_timeline_audio
 
     duration = max(0.0, int(frames.shape[0]) / frame_rate if frame_rate > 0 else 0.0)
-    audio_plan = _build_audio_plan(timeline, frame_rate)
+    source_audio_plan = _build_source_audio_plan(clip_entries, frame_rate, debug)
+    timeline_audio_plan = _build_audio_plan(timeline, frame_rate)
+    audio_plan = [*source_audio_plan, *timeline_audio_plan]
+    debug["audio"]["timeline_clip_count"] = len(timeline_audio_plan)
     debug["audio"]["clip_count"] = len(audio_plan)
     if not audio_plan:
         debug["audio"]["status"] = "empty"
-        debug["audio"]["diagnostics"].append("No timeline audio clips were present; returned silent audio.")
+        if debug["audio"]["source_clip_count"] > 0:
+            debug["audio"]["diagnostics"].append("No decodable source video audio or timeline audio clips were present; returned silent audio.")
+        else:
+            debug["audio"]["diagnostics"].append("No timeline audio clips were present; returned silent audio.")
         return empty_audio(duration)
     mix_plan = {
         "project": deepcopy(timeline.get("project") or {}),
@@ -433,8 +445,54 @@ def _assemble_audio(
         )
         return empty_audio(duration)
     debug["audio"]["status"] = "mixed"
+    if debug["audio"]["source_mixed_clip_count"] > 0:
+        debug["audio"]["diagnostics"].append(
+            f"Mixed embedded source audio from {debug['audio']['source_mixed_clip_count']} assembled video clip(s)."
+        )
     debug["audio"]["diagnostics"].extend(diagnostics)
     return audio
+
+
+def _build_source_audio_plan(
+    clip_entries: list[dict[str, Any]],
+    frame_rate: float,
+    debug: dict[str, Any],
+) -> list[dict[str, Any]]:
+    audio_entries = []
+    debug["audio"]["source_clip_count"] = len(clip_entries)
+    for entry in clip_entries:
+        shot_id = str(entry.get("shot_id") or "")
+        path = entry.get("path")
+        if not path or not _source_audio_is_decodable(str(path)):
+            debug["audio"]["source_skipped_clip_count"] += 1
+            debug["audio"]["diagnostics"].append(
+                f"Skipped source video audio for shot {shot_id or 'unknown'}; no decodable audio stream was found."
+            )
+            continue
+        start_frame = max(0, int(entry.get("output_start_frame") or 0))
+        end_frame = max(start_frame, int(entry.get("output_end_frame_exclusive") or start_frame))
+        source_range = entry.get("source_range") if isinstance(entry.get("source_range"), dict) else {}
+        audio_entries.append(
+            {
+                "track_id": "sequence_source_audio",
+                "item_id": f"source_audio_{shot_id or len(audio_entries) + 1}",
+                "asset_id": entry.get("asset_id"),
+                "path": path,
+                "start_frame": start_frame,
+                "end_frame_exclusive": end_frame,
+                "start_time": start_frame / frame_rate if frame_rate > 0 else 0.0,
+                "end_time": end_frame / frame_rate if frame_rate > 0 else 0.0,
+                "source_in": source_range.get("start", 0.0),
+                "source_out": source_range.get("end"),
+                "volume": 100.0,
+                "fade_in": 0.0,
+                "fade_out": 0.0,
+                "enabled": True,
+                "lane": None,
+            }
+        )
+    debug["audio"]["source_mixed_clip_count"] = len(audio_entries)
+    return audio_entries
 
 
 def _build_audio_plan(timeline: dict[str, Any], frame_rate: float) -> list[dict[str, Any]]:
@@ -476,6 +534,14 @@ def _resolve_asset_reference(reference: Any, assets_by_id: dict[str, dict[str, A
         if asset_id is not None:
             return assets_by_id.get(str(asset_id))
     return None
+
+
+def _clip_debug_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in entry.items()
+        if key not in {"frames", "path"}
+    }
 
 
 def _sequence_shots(timeline: dict[str, Any]) -> list[dict[str, Any]]:
@@ -551,6 +617,18 @@ def _boundaries_by_pair(timeline: dict[str, Any]) -> dict[tuple[str, str], dict[
     return output
 
 
+def _boundary_overlap_frames(
+    current: torch.Tensor,
+    next_frames: torch.Tensor,
+    boundary: dict[str, Any] | None,
+) -> int:
+    mode = boundary.get("mode") if isinstance(boundary, dict) else BOUNDARY_MODE_HARD_CUT
+    if mode != BOUNDARY_MODE_BLEND_SEAM:
+        return 0
+    blend_frames = max(0, int((boundary or {}).get("blend_frames") or 0))
+    return blend_frames if _can_blend(current, next_frames, blend_frames) else 0
+
+
 def _take_boundary_conditioning_from_take(take: Any) -> dict[str, Any]:
     if not isinstance(take, dict):
         return {}
@@ -618,6 +696,24 @@ def _blend_frames(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         device=left.device,
     ).reshape((count,) + (1,) * (left.ndim - 1))
     return left * (1.0 - weights) + right * weights
+
+
+def _source_audio_is_decodable(path: str) -> bool:
+    import av
+
+    from ..media_cache import resolve_media_path
+
+    try:
+        resolved = resolve_media_path(path)
+        with av.open(str(resolved)) as container:
+            stream = next((stream for stream in container.streams if stream.type == "audio"), None)
+            if stream is None:
+                return False
+            for _frame in container.decode(stream):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _add_warning(
