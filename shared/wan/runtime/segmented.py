@@ -8,6 +8,7 @@ import torch
 from ..bernini import BERNINI_MODEL_MODE
 from ..planner import _build_prompt_relay, _latent_chunk_count
 from ...ltx.runtime.audio import mix_timeline_audio
+from ...timeline.global_settings import global_privacy_mode
 from ...segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
@@ -79,7 +80,7 @@ def build_wan_segmented_executor_outputs(
         total=(len(segments) * 12) + 4,
     )
     status_reporter.report("timeline.prepare", f"WAN Executor: preparing {len(segments)} segment(s)")
-    privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
+    privacy_mode = global_privacy_mode()
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     cleanup_state: dict[str, Any] = {}
     spill_records = []

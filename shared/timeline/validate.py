@@ -38,6 +38,7 @@ from ..contracts.video_timeline import (
     TAKE_STATUSES,
 )
 from .gaps import detect_director_gaps
+from .global_settings import load_global_settings, normalize_global_settings
 from .migration import migrate_video_timeline
 from .normalize import normalize_video_timeline
 from .references import (
@@ -63,9 +64,12 @@ RESOLVED_LORA_TARGETS_BY_FAMILY = {
 }
 
 
-def validate_video_timeline(timeline: Any) -> dict:
+def validate_video_timeline(timeline: Any, global_settings: Any | None = None) -> dict:
     migrated = migrate_video_timeline(timeline)
     normalized = normalize_video_timeline(migrated)
+    settings = normalize_global_settings(
+        global_settings if global_settings is not None else load_global_settings()
+    )
     entries: list[dict[str, Any]] = []
     duration = _as_float(normalized["project"].get("duration_seconds"))
     assets = normalized.get("assets", [])
@@ -77,7 +81,14 @@ def validate_video_timeline(timeline: Any) -> dict:
     entries.extend(_validate_assets(assets))
     references = get_character_references(normalized)
     entries.extend(_validate_character_references(references))
-    entries.extend(_validate_director_sections(sections, duration, assets_by_id))
+    entries.extend(
+        _validate_director_sections(
+            sections,
+            duration,
+            assets_by_id,
+            settings["timeline"]["minimum_section_duration_seconds"],
+        )
+    )
     entries.extend(
         _validate_project_model_loras(
             normalized["project"].get("model_loras", {}),
@@ -101,7 +112,7 @@ def validate_video_timeline(timeline: Any) -> dict:
             are_character_references_enabled(normalized),
         )
     )
-    entries.extend(_gap_entries(normalized))
+    entries.extend(_gap_entries(normalized, settings))
     entries.extend(_validate_audio_tracks(normalized.get("audio_tracks", []), duration, assets_by_id))
 
     return create_validation_result(entries)
@@ -280,7 +291,12 @@ def _validate_prompt_reference_tags(
     return entries
 
 
-def _validate_director_sections(sections: list[dict], duration: float | None, assets_by_id: dict) -> list[dict]:
+def _validate_director_sections(
+    sections: list[dict],
+    duration: float | None,
+    assets_by_id: dict,
+    minimum_section_duration_seconds: float,
+) -> list[dict]:
     entries = []
     sorted_sections = sorted(
         sections,
@@ -322,6 +338,22 @@ def _validate_director_sections(sections: list[dict], duration: float | None, as
                     "Section must stay within Project Duration.",
                     "Move or trim the section inside the project boundary.",
                     {"duration_seconds": duration, "start_time": start, "end_time": end},
+                )
+            )
+        elif end - start < minimum_section_duration_seconds:
+            entries.append(
+                create_validation_entry(
+                    "SECTION_BELOW_MINIMUM_DURATION",
+                    SEVERITY_ERROR,
+                    "Director",
+                    "Section",
+                    item_id,
+                    "Section is shorter than the global minimum duration.",
+                    "Extend the section or lower Minimum Section Duration in Global Settings.",
+                    {
+                        "minimum_section_duration_seconds": minimum_section_duration_seconds,
+                        "duration_seconds": end - start,
+                    },
                 )
             )
 
@@ -1119,19 +1151,26 @@ def _validate_lora_payload(payload: Any, scope: str, item_id: str, code_prefix: 
     return []
 
 
-def _gap_entries(timeline: dict) -> list[dict]:
+def _gap_entries(timeline: dict, global_settings: dict) -> list[dict]:
     entries = []
+    allow_gaps = bool(global_settings["timeline"]["allow_gaps"])
+    auto_close_gaps = bool(global_settings["timeline"]["auto_close_gaps"])
     for index, gap in enumerate(detect_director_gaps(timeline)):
+        details = {
+            **gap,
+            "allow_gaps": allow_gaps,
+            "auto_close_gaps": auto_close_gaps,
+        }
         entries.append(
             create_validation_entry(
                 "DIRECTOR_GAP",
-                SEVERITY_INFO,
+                SEVERITY_INFO if allow_gaps else SEVERITY_ERROR,
                 "Director",
                 "Gap",
                 f"gap_{index + 1:03d}",
-                "Director Track gap means No Guidance.",
-                "This is allowed. Planner nodes may apply model-specific policy later.",
-                gap,
+                "Director Track gap means No Guidance." if allow_gaps else "Director Track gaps are disabled in Global Settings.",
+                "This is allowed. Planner nodes may apply model-specific policy later." if allow_gaps else "Close the gap or turn on Allow Gaps in Global Settings.",
+                details,
             )
         )
     return entries

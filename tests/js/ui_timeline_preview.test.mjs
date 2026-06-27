@@ -62,10 +62,6 @@ function testClearTimelineButtonEnablementHelper() {
   assert.equal(isDefaultEmptyTimeline(timeline), false);
   timeline.project.identity.name = "Untitled Project";
 
-  timeline.project.storage.asset_root_directory = "/tmp/assets";
-  assert.equal(isDefaultEmptyTimeline(timeline), false);
-  timeline.project.storage.asset_root_directory = "";
-
   timeline.project.metadata.library_item_id = "timeline_123";
   assert.equal(isDefaultEmptyTimeline(timeline), false);
   delete timeline.project.metadata.library_item_id;
@@ -311,7 +307,7 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("captureVideoPreviewData(timeline, item"), true);
   assert.equal(rendererSource.includes("caption: assetDisplayLabel(resolvedAsset, privacyRevealed, \"Video Take\")"), true);
   assert.equal(rendererSource.includes("caption: captureSummaryLabel(item, privacyRevealed)"), true);
-  assert.equal(rendererSource.includes("privacyMode: Boolean(timeline?.project?.privacy?.mode)"), true);
+  assert.equal(rendererSource.includes("privacyMode: this.isGlobalPrivacyMode()"), true);
   assert.equal(rendererSource.includes("openTakeVideoPreviewData(previewData)"), true);
   assert.equal(rendererSource.includes('"preview-video": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('accept: `<svg viewBox="0 0 24 24">'), true);
@@ -398,10 +394,10 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("const pointerTime = this.dragTimeFromClientX(event.clientX)"), true);
   assert.equal(rendererSource.includes("moveSelectedItems(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset)"), true);
   assert.equal(rendererSource.includes('this.drag.mode === "shot-move"'), true);
-  assert.equal(rendererSource.includes('resizeSection(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
-  assert.equal(rendererSource.includes('resizeSection(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
-  assert.equal(rendererSource.includes('resizeAudioClip(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
-  assert.equal(rendererSource.includes('resizeAudioClip(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset)'), true);
+  assert.equal(rendererSource.includes('resizeSection(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() })'), true);
+  assert.equal(rendererSource.includes('resizeSection(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() })'), true);
+  assert.equal(rendererSource.includes('resizeAudioClip(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() })'), true);
+  assert.equal(rendererSource.includes('resizeAudioClip(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() })'), true);
   assert.equal(rendererSource.includes("this.drag.timeContainer = this.findDragTimeContainer(this.drag.itemId)"), true);
   assert.equal(rendererSource.includes("Number(event.clientX) - Number(this.drag.startX)"), false);
   assert.equal(rendererSource.includes("deltaSeconds"), false);
@@ -877,7 +873,7 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes("if (replaceLabel && selectedCount === 1)"), true);
   assert.equal(rendererSource.includes("sectionImagePreviewData(section)"), true);
   assert.equal(rendererSource.includes("section?.type !== ASSET_TYPE_IMAGE"), true);
-  assert.equal(rendererSource.includes("timeline.project.privacy.mode && (!this.privacyRevealActive || this.privacyExternalModalOpen)"), true);
+  assert.equal(rendererSource.includes("this.isGlobalPrivacyMode() && (!this.privacyRevealActive || this.privacyExternalModalOpen)"), true);
   assert.equal(rendererSource.includes("const url = mediaViewUrl(asset);"), true);
   assert.equal(rendererSource.includes("openSectionMediaPreviewData(previewData)"), true);
   assert.equal(rendererSource.includes("if (!previewData?.url) return false;"), true);
@@ -905,7 +901,7 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes('const deleteButton = iconButton("delete", "Delete", () => this.commitMutation((timeline) => deleteSelectedItem(timeline), "delete"))'), true);
   assert.equal(rendererSource.includes('deleteButton.classList.toggle("is-danger", Boolean(selectedSection))'), true);
   assert.equal(rendererSource.includes("const repairButtons = hasOverflow"), true);
-  assert.equal(rendererSource.includes('iconButton("shot", "Add Shot", () => this.commitMutation((timeline) => insertShotAfterCurrent(timeline), "add shot"))'), true);
+  assert.equal(rendererSource.includes('iconButton("shot", "Add Shot", () => this.commitMutation((timeline) => insertShotAfterCurrent(timeline, { globalSettings: this.globalSettings() }), "add shot"))'), true);
   assert.equal(rendererSource.includes("const start = Number(timeline.ui_state.playhead_time ?? 0)"), false);
   assert.equal(rendererSource.includes('"Fit Last Section"'), true);
   assert.equal(rendererSource.includes('"Fit All Sections Evenly"'), true);
@@ -949,7 +945,12 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes("promptOptimizerButton,"), true);
   assert.equal(rendererSource.indexOf("promptOptimizerButton,") < rendererSource.indexOf("settingsButton,"), true);
   assert.equal(rendererSource.includes('promptOptimizerButton.classList.add("htd-prompt-optimizer-button")'), true);
+  assert.equal(rendererSource.includes('const projectSettingsButton = iconButton("project-settings", "Project Settings", () => this.openProjectSettings())'), true);
   assert.equal(rendererSource.includes('settingsButton.classList.add("htd-settings-button")'), true);
+  assert.equal(rendererSource.includes('projectSettingsButton.classList.add("htd-project-settings-button")'), true);
+  assert.equal(rendererSource.indexOf("projectLibraryButton,") < rendererSource.indexOf("clearTimelineButton,"), true);
+  assert.equal(rendererSource.indexOf("clearTimelineButton,") < rendererSource.indexOf("projectSettingsButton,"), true);
+  assert.equal(rendererSource.indexOf("projectSettingsButton,") < rendererSource.indexOf("referenceManagerButton,"), true);
   assert.equal(rendererSource.includes('toggleIconButton("native-audio", "Use Native Audio"'), true);
   assert.equal(rendererSource.includes("timeline.project.audio.use_native_audio = !timeline.project.audio.use_native_audio"), true);
   assert.equal(rendererSource.includes('"native-audio": `<svg viewBox="0 0 24 24">'), true);
@@ -958,6 +959,9 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes('"fit-last-section": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('"fit-all-sections": `<svg viewBox="0 0 24 24">'), true);
   assert.equal(rendererSource.includes('sparkle: `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes('"project-settings": `<svg viewBox="0 0 24 24">'), true);
+  assert.equal(rendererSource.includes('this.renderSettingsActions("Project Settings", () => this.saveProjectSettings(), () => this.cancelProjectSettings())'), true);
+  assert.equal(rendererSource.includes('this.renderSettingsActions("Global Settings", (control) => this.saveGlobalSettings(control), () => this.cancelGlobalSettings())'), true);
   assert.equal(rendererSource.includes(".htd-toolbar-spacer {"), true);
   assert.equal(rendererSource.includes(".htd-button:disabled {"), true);
   assert.equal(rendererSource.includes(".htd-prompt-optimizer-button { margin-left: auto; }"), true);
@@ -996,12 +1000,15 @@ function testRendererUsesRealWaveformsOnly() {
   assert.equal(rendererSource.includes("waveformPeakRequestForClip"), true);
   assert.equal(rendererSource.includes("waveformPeaksForClip"), true);
   assert.equal(rendererSource.includes("is-loading"), true);
-  assert.equal(rendererSource.includes("if (shouldShowWaveform(timeline, this.privacyRevealActive))"), true);
+  assert.equal(rendererSource.includes("if (shouldShowWaveform(timeline, this.privacyRevealActive, this.globalSettings()))"), true);
   assert.equal(rendererSource.includes("item.style.height = `${AUDIO_LANE_HEIGHT - 8}px`;"), true);
-  assert.equal(rendererSource.includes('if (shouldShowWaveform(timeline, this.privacyRevealActive)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));\n    item.append(clipLabel);'), true);
+  assert.equal(rendererSource.includes('if (shouldShowWaveform(timeline, this.privacyRevealActive, this.globalSettings())) item.append(renderWaveform(this.node, timeline, clip, itemWidth));\n    item.append(clipLabel);'), true);
   assert.equal(rendererSource.includes(".htd-audio-label { position: absolute; z-index: 3;"), true);
   assert.equal(rendererSource.includes(".htd-waveform { position: absolute; z-index: 1; inset: 4px 9px;"), true);
-  assert.equal(rendererSource.includes('this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"])'), true);
+  assert.equal(rendererSource.includes('this.renderGlobalSettingCheckbox("Privacy Mode", draft, ["privacy", "mode"])'), true);
+  assert.equal(rendererSource.includes('this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"])'), false);
+  assert.equal(rendererSource.includes("renderGlobalSettings(timeline)"), true);
+  assert.equal(rendererSource.includes("renderProjectSettings(timeline)"), true);
   assert.equal(rendererSource.includes("Hide Media Previews"), false);
   assert.equal(rendererSource.includes("Hide Text Prompts"), false);
   assert.equal(rendererSource.includes("Encrypt Previews"), false);

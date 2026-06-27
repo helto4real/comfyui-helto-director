@@ -13,6 +13,7 @@ import {
   MODEL_LORA_TARGET_MAIN,
 } from "./schema.js";
 import { migrateVideoTimeline, normalizeVideoTimeline } from "./migration.js";
+import { normalizeGlobalSettings } from "./global_settings.js";
 import { containsEmbeddedMedia } from "./media.js";
 import {
   REFERENCE_KIND_CHARACTER,
@@ -62,9 +63,10 @@ export function createValidationResult(entries = []) {
   return validation;
 }
 
-export function validateVideoTimeline(timeline) {
+export function validateVideoTimeline(timeline, globalSettings = null) {
   const migrated = migrateVideoTimeline(timeline);
   const normalized = normalizeVideoTimeline(migrated);
+  const settings = normalizeGlobalSettings(globalSettings);
   const entries = [];
   const duration = asNumber(normalized.project.duration_seconds);
   const assetsById = new Map(normalized.assets.map((asset) => [asset.asset_id, asset]));
@@ -99,6 +101,20 @@ export function validateVideoTimeline(timeline) {
         section.item_id,
         "Section must stay within Project Duration.",
         "Move or trim the section inside the project boundary.",
+      ));
+    } else if (end - start < settings.timeline.minimum_section_duration_seconds) {
+      entries.push(createValidationEntry(
+        "SECTION_BELOW_MINIMUM_DURATION",
+        "Error",
+        "Director",
+        "Section",
+        section.item_id,
+        "Section is shorter than the global minimum duration.",
+        "Extend the section or lower Minimum Section Duration in Global Settings.",
+        {
+          minimum_section_duration_seconds: settings.timeline.minimum_section_duration_seconds,
+          duration_seconds: end - start,
+        },
       ));
     }
     if (previousEnd != null && start != null && start < previousEnd) {
@@ -203,15 +219,21 @@ export function validateVideoTimeline(timeline) {
   }
 
   for (const [index, gap] of detectDirectorGaps(normalized).entries()) {
+    const allowGaps = settings.timeline.allow_gaps;
+    const autoCloseGaps = settings.timeline.auto_close_gaps;
     entries.push(createValidationEntry(
       "DIRECTOR_GAP",
-      "Info",
+      allowGaps ? "Info" : "Error",
       "Director",
       "Gap",
       `gap_${String(index + 1).padStart(3, "0")}`,
-      "Director Track gap means No Guidance.",
-      "This is allowed. Planner nodes may apply model-specific policy later.",
-      gap,
+      allowGaps ? "Director Track gap means No Guidance." : "Director Track gaps are disabled in Global Settings.",
+      allowGaps ? "This is allowed. Planner nodes may apply model-specific policy later." : "Close the gap or turn on Allow Gaps in Global Settings.",
+      {
+        ...gap,
+        allow_gaps: allowGaps,
+        auto_close_gaps: autoCloseGaps,
+      },
     ));
   }
 

@@ -62,8 +62,8 @@ export function normalizeVideoTimeline(value) {
   normalized.sequence = normalizeSequence(normalized.sequence, normalized.director_track.sections);
   normalizeProjectIdentityStorage(normalized);
   normalizeProjectMetadata(normalized);
+  stripGlobalProjectSettings(normalized);
   normalizeProjectModelLoras(normalized);
-  normalizePrivacy(normalized);
   normalizeUiStateViewRange(normalized);
   normalizeUiStateSelection(normalized);
   return normalized;
@@ -143,9 +143,21 @@ function normalizeProjectIdentityStorage(timeline) {
   }
   project.storage = {
     schema_version: PROJECT_STORAGE_SCHEMA_VERSION,
-    asset_root_directory: String(storage.asset_root_directory ?? "").trim(),
     project_directory_name: directoryName,
   };
+}
+
+function stripGlobalProjectSettings(timeline) {
+  const project = timeline.project ??= {};
+  delete project.settings;
+  delete project.privacy;
+  delete project.display;
+  if (project.global_prompt && typeof project.global_prompt === "object" && !Array.isArray(project.global_prompt)) {
+    delete project.global_prompt.show_effective_prompt;
+  }
+  if (project.audio && typeof project.audio === "object" && !Array.isArray(project.audio)) {
+    delete project.audio.always_normalize;
+  }
 }
 
 function normalizeProjectModelLoras(timeline) {
@@ -453,21 +465,6 @@ function normalizeAudioClip(clip, index) {
   normalized.name ??= "";
   normalized.lane ??= 0;
   return normalized;
-}
-
-function normalizePrivacy(timeline) {
-  const project = timeline.project ??= {};
-  const privacy = project.privacy && typeof project.privacy === "object" && !Array.isArray(project.privacy)
-    ? project.privacy
-    : {};
-  project.privacy = {
-    mode: Boolean(
-      privacy.mode ||
-      privacy.hide_media_previews ||
-      privacy.hide_text_prompts ||
-      privacy.encrypt_previews,
-    ),
-  };
 }
 
 function normalizeUiStateViewRange(timeline) {

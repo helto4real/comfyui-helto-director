@@ -24,6 +24,7 @@ import {
   deepClone,
 } from "./schema.js";
 import { clamp, getProjectWholeSeconds, snapTime } from "./geometry.js";
+import { normalizeGlobalSettings } from "./global_settings.js";
 
 const DEFAULT_SECTION_DURATION = 1.0;
 const MIN_SECTION_DURATION = 0.25;
@@ -166,13 +167,13 @@ export function moveSection(timeline, itemId, startTime) {
   return true;
 }
 
-export function resizeSection(timeline, itemId, edge, time) {
+export function resizeSection(timeline, itemId, edge, time, options = {}) {
   const section = findSection(timeline, itemId);
   if (!section) return false;
   if (timeline.ui_state.section_edit_mode === "Ripple Edit") {
-    return rippleResizeSection(timeline, section, edge, time);
+    return rippleResizeSection(timeline, section, edge, time, options);
   }
-  return trimResizeSection(timeline, section, edge, time);
+  return trimResizeSection(timeline, section, edge, time, options);
 }
 
 export function moveAudioClip(timeline, itemId, startTime) {
@@ -226,11 +227,11 @@ export function moveSelectedItems(timeline, itemId, startTime) {
   return true;
 }
 
-export function resizeAudioClip(timeline, itemId, edge, time) {
+export function resizeAudioClip(timeline, itemId, edge, time, options = {}) {
   const match = findAudioClipWithTrack(timeline, itemId);
   if (!match || match.clip.locked) return false;
   const { clip } = match;
-  const minDuration = getMinimumSectionDuration(timeline);
+  const minDuration = getMinimumSectionDuration(options.globalSettings);
   const snapped = snapTime(time, timeline);
   const oldStart = Number(clip.start_time);
   const oldEnd = Number(clip.end_time);
@@ -250,8 +251,8 @@ export function resizeAudioClip(timeline, itemId, edge, time) {
   return true;
 }
 
-function trimResizeSection(timeline, section, edge, time) {
-  const minDuration = getMinimumSectionDuration(timeline);
+function trimResizeSection(timeline, section, edge, time, options = {}) {
+  const minDuration = getMinimumSectionDuration(options.globalSettings);
   const neighbors = getSectionNeighbors(timeline, section);
   const snapped = snapTime(time, timeline);
 
@@ -281,8 +282,8 @@ function trimResizeSection(timeline, section, edge, time) {
   return true;
 }
 
-function rippleResizeSection(timeline, section, edge, time) {
-  const minDuration = getMinimumSectionDuration(timeline);
+function rippleResizeSection(timeline, section, edge, time, options = {}) {
+  const minDuration = getMinimumSectionDuration(options.globalSettings);
   const snapped = snapTime(time, timeline);
   if (edge === "start") {
     const neighbors = getSectionNeighbors(timeline, section);
@@ -322,7 +323,7 @@ export function createShot(timeline, options = {}) {
     metadata: options.metadata && typeof options.metadata === "object" && !Array.isArray(options.metadata) ? deepClone(options.metadata) : {},
   };
   if (shot.end_time <= shot.start_time) {
-    shot.end_time = Math.min(getDuration(timeline), shot.start_time + getMinimumSectionDuration(timeline));
+    shot.end_time = Math.min(getDuration(timeline), shot.start_time + getMinimumSectionDuration(options.globalSettings));
   }
   sequence.shots.push(shot);
   syncShotTimingFromSections(timeline);
@@ -1293,8 +1294,8 @@ function getDuration(timeline) {
   return Number(timeline.project.duration_seconds ?? 5);
 }
 
-function getMinimumSectionDuration(timeline) {
-  return Number(timeline.project.settings?.minimum_section_duration_seconds ?? MIN_SECTION_DURATION);
+function getMinimumSectionDuration(globalSettings = null) {
+  return Number(normalizeGlobalSettings(globalSettings).timeline.minimum_section_duration_seconds ?? MIN_SECTION_DURATION);
 }
 
 function makeId(prefix) {

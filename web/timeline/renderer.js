@@ -21,6 +21,7 @@ import {
   VIDEO_GUIDANCE_RANGES,
   VIDEO_TIMING_MODES,
   createDefaultVideoTimeline,
+  deepClone,
 } from "./schema.js";
 import {
   mediaLabel,
@@ -72,6 +73,11 @@ import {
   secondsToPixels,
   timeFromClientX,
 } from "./geometry.js";
+import {
+  globalAssetRootLabel,
+  isGlobalPrivacyMode,
+  normalizeGlobalSettings,
+} from "./global_settings.js";
 import {
   acceptTake,
   attachVideoAssetAsTake,
@@ -208,7 +214,10 @@ export class TimelineRenderer {
     this.container = container;
     this.widget = widget;
     this.drag = null;
-    this.settingsOpen = false;
+    this.globalSettingsOpen = false;
+    this.projectSettingsOpen = false;
+    this.globalSettingsDraft = null;
+    this.projectSettingsDraft = null;
     this.referencesOpen = false;
     this.openMenu = null;
     this.contextMenuElement = null;
@@ -264,7 +273,7 @@ export class TimelineRenderer {
     this.container.replaceChildren();
     const root = el("div", "htd-root");
     root.style.width = `${this.viewportWidth}px`;
-    const privacyMode = Boolean(timeline?.project?.privacy?.mode);
+    const privacyMode = this.isGlobalPrivacyMode();
     const privacyRevealed = !privacyMode || (this.privacyRevealActive && !this.privacyExternalModalOpen);
     root.classList.toggle("is-private", privacyMode);
     root.classList.toggle("is-privacy-modal-open", this.privacyExternalModalOpen);
@@ -288,7 +297,8 @@ export class TimelineRenderer {
         this.captureModalShotId = "";
       }
     }
-    if (this.settingsOpen) root.append(this.renderProjectSettings(timeline));
+    if (this.globalSettingsOpen) root.append(this.renderGlobalSettings(timeline));
+    if (this.projectSettingsOpen) root.append(this.renderProjectSettings(timeline));
     if (this.referencesOpen) root.append(this.renderReferenceManager(timeline));
     this.container.append(root);
     this.updateMeasuredContentHeight(timeline);
@@ -299,11 +309,69 @@ export class TimelineRenderer {
     const next = Boolean(active);
     if (next === this.privacyRevealActive) return;
     this.privacyRevealActive = next;
-    if (this.controller.timeline?.project?.privacy?.mode) this.render();
+    if (this.isGlobalPrivacyMode()) this.render();
   }
 
   isPrivacyRevealed(timeline = this.controller.timeline) {
-    return !timeline?.project?.privacy?.mode || (this.privacyRevealActive && !this.privacyExternalModalOpen);
+    return !this.isGlobalPrivacyMode() || (this.privacyRevealActive && !this.privacyExternalModalOpen);
+  }
+
+  isGlobalPrivacyMode() {
+    return isGlobalPrivacyMode(this.controller.globalSettings);
+  }
+
+  globalSettings() {
+    return normalizeGlobalSettings(this.controller.globalSettings);
+  }
+
+  openGlobalSettings() {
+    this.globalSettingsDraft = deepClone(this.globalSettings());
+    this.globalSettingsOpen = true;
+    this.projectSettingsOpen = false;
+    this.render();
+  }
+
+  openProjectSettings() {
+    this.projectSettingsDraft = deepClone(this.controller.timeline);
+    this.projectSettingsOpen = true;
+    this.globalSettingsOpen = false;
+    this.render();
+  }
+
+  cancelGlobalSettings() {
+    this.globalSettingsDraft = null;
+    this.globalSettingsOpen = false;
+    this.render();
+  }
+
+  cancelProjectSettings() {
+    this.projectSettingsDraft = null;
+    this.projectSettingsOpen = false;
+    this.render();
+  }
+
+  saveProjectSettings() {
+    const draftProject = deepClone((this.projectSettingsDraft ?? this.controller.timeline).project);
+    this.projectSettingsDraft = null;
+    this.projectSettingsOpen = false;
+    this.commitMutation((timeline) => {
+      timeline.project = draftProject;
+    }, "project settings change");
+  }
+
+  async saveGlobalSettings(control = null) {
+    const draft = deepClone(this.globalSettingsDraft ?? this.globalSettings());
+    await withDisabledControl(control, async () => {
+      try {
+        await this.controller.updateGlobalSettings((settings) => replaceObject(settings, draft));
+        this.globalSettingsDraft = null;
+        this.globalSettingsOpen = false;
+        this.render();
+      } catch (error) {
+        this.controller.globalSettingsError = error.message;
+        this.render();
+      }
+    });
   }
 
   renderToolbar() {
@@ -311,10 +379,8 @@ export class TimelineRenderer {
     const hasOverflow = hasDirectorSectionOverflow(this.controller.timeline);
     const referenceCount = getCharacterReferences(this.controller.timeline).length;
     const referencesEnabled = areCharacterReferencesEnabled(this.controller.timeline);
-    const settingsButton = iconButton("settings", "Project Settings", () => {
-      this.settingsOpen = true;
-      this.render();
-    });
+    const settingsButton = iconButton("settings", "Global Settings", () => this.openGlobalSettings());
+    const projectSettingsButton = iconButton("project-settings", "Project Settings", () => this.openProjectSettings());
     const referenceManagerButton = iconButton("references", "Manage Character References", () => this.openReferenceManager());
     const referenceToggleTitle = referenceCount
       ? referencesEnabled
@@ -355,12 +421,13 @@ export class TimelineRenderer {
     referencePresentButton.classList.toggle("is-active", referenceCount > 0 && referencesEnabled);
     referencePresentButton.setAttribute("aria-pressed", referenceCount > 0 && referencesEnabled ? "true" : "false");
     settingsButton.classList.add("htd-settings-button");
+    projectSettingsButton.classList.add("htd-project-settings-button");
     toolbar.append(
       iconButton("text", "Add Text Section", () => this.commitMutation((timeline) => addSection(timeline, "Text"), "add")),
       iconButton("image", "Add Image Section", () => this.openMediaPicker(ASSET_TYPE_IMAGE)),
       iconButton("video", "Add Video Section", () => this.openMediaPicker(ASSET_TYPE_VIDEO)),
       iconButton("audio", "Add Audio Clip", () => this.openMediaPicker(ASSET_TYPE_AUDIO)),
-      iconButton("shot", "Add Shot", () => this.commitMutation((timeline) => insertShotAfterCurrent(timeline), "add shot")),
+      iconButton("shot", "Add Shot", () => this.commitMutation((timeline) => insertShotAfterCurrent(timeline, { globalSettings: this.globalSettings() }), "add shot")),
       toolbarSpacer(),
       this.renderToolbarMenu("display", "Display Mode", "layers", this.controller.timeline.ui_state.timeline_display_mode, TIMELINE_DISPLAY_MODES, (value) => {
         this.commitMutation((timeline) => { timeline.ui_state.timeline_display_mode = value; }, "settings change");
@@ -386,6 +453,9 @@ export class TimelineRenderer {
       iconButton("library", "Director Library", () => this.openDirectorLibrary()),
       projectLibraryButton,
       clearTimelineButton,
+      toolbarSpacer(),
+      projectSettingsButton,
+      toolbarSpacer(),
       referenceManagerButton,
       referencePresentButton,
       toolbarSpacer(),
@@ -600,12 +670,12 @@ export class TimelineRenderer {
     item.style.left = `${secondsToPixels(section.start_time, timeline, this.viewportWidth)}px`;
     const itemWidth = Math.max(12, durationToPixels(section.end_time - section.start_time, timeline, this.viewportWidth));
     item.style.width = `${itemWidth}px`;
-    const thumbnail = sectionThumbnailUrl(this.node, timeline, section, this.privacyRevealActive);
+    const thumbnail = sectionThumbnailUrl(this.node, timeline, section, this.privacyRevealActive, this.globalSettings());
     if (thumbnail) {
       item.classList.add("has-preview");
       item.append(renderSectionPreview(timeline, thumbnail, itemWidth));
     }
-    const labelText = sectionLabel(timeline, section);
+    const labelText = sectionLabel(timeline, section, this.globalSettings());
     const labelElement = el("span", "htd-section-label");
     labelElement.textContent = labelText;
     item.append(labelElement);
@@ -658,7 +728,7 @@ export class TimelineRenderer {
     item.style.width = `${itemWidth}px`;
     const clipLabel = el("div", "htd-audio-label");
     clipLabel.textContent = clip.name || mediaLabel(timeline, clip.audio, "Audio");
-    if (shouldShowWaveform(timeline, this.privacyRevealActive)) item.append(renderWaveform(this.node, timeline, clip, itemWidth));
+    if (shouldShowWaveform(timeline, this.privacyRevealActive, this.globalSettings())) item.append(renderWaveform(this.node, timeline, clip, itemWidth));
     item.append(clipLabel);
     item.title = "Audio";
     item.setAttribute("aria-label", clip.name || mediaLabel(timeline, clip.audio, "Audio"));
@@ -1003,7 +1073,7 @@ export class TimelineRenderer {
 
   requestAvailableCaptures(timeline, shot, options = {}) {
     if (!shot?.shot_id) return;
-    const key = availableCapturesKey(timeline, shot, this.isPrivacyRevealed(timeline));
+    const key = availableCapturesKey(timeline, shot, this.isPrivacyRevealed(timeline), this.globalSettings());
     if (!options.force && this.availableCaptures.key === key) return;
     this.availableCaptures = {
       key,
@@ -1012,7 +1082,7 @@ export class TimelineRenderer {
       items: [],
     };
     if (options.rerender) this.render();
-    const privacyMode = Boolean(timeline?.project?.privacy?.mode && !this.isPrivacyRevealed(timeline));
+    const privacyMode = Boolean(this.isGlobalPrivacyMode() && !this.isPrivacyRevealed(timeline));
     fetchProjectTakeCaptures(timeline, shot.shot_id, privacyMode)
       .then((payload) => {
         if (this.availableCaptures.key !== key) return;
@@ -1037,7 +1107,7 @@ export class TimelineRenderer {
   }
 
   availableCaptureState(timeline, shot) {
-    const key = availableCapturesKey(timeline, shot, this.isPrivacyRevealed(timeline));
+    const key = availableCapturesKey(timeline, shot, this.isPrivacyRevealed(timeline), this.globalSettings());
     return this.availableCaptures.key === key ? this.availableCaptures : { loading: true, error: "", items: [] };
   }
 
@@ -1662,48 +1732,70 @@ export class TimelineRenderer {
   }
 
   renderProjectSettings(timeline) {
+    const draft = this.projectSettingsDraft ?? deepClone(timeline);
+    this.projectSettingsDraft = draft;
     const overlay = el("div", "htd-settings-overlay");
     const modal = el("div", "htd-settings-modal");
     const header = el("div", "htd-settings-header");
     const title = el("div", "htd-settings-title");
     title.textContent = "Project Settings";
-    header.append(title, button("X", "Close Project Settings", () => {
-      this.settingsOpen = false;
-      this.render();
-    }));
+    header.append(title, button("X", "Cancel Project Settings", () => this.cancelProjectSettings()));
 
     const body = el("div", "htd-settings-body");
     body.append(
-      this.renderProjectAssetRootSetting(timeline),
-      this.renderSettingReadonly("Project Folder", projectFolderDisplay(timeline, this.isPrivacyRevealed(timeline))),
-      this.renderSettingSelect("Default Crop Mode", ["project", "default_crop_mode"], CROP_MODES),
-      this.renderSettingCheckbox("Show Resolved Model Output", ["project", "settings", "show_resolved_model_output"]),
-      this.renderSettingCheckbox("Allow Gaps", ["project", "settings", "allow_gaps"]),
-      this.renderSettingCheckbox("Auto Close Gaps", ["project", "settings", "auto_close_gaps"]),
-      this.renderSettingNumber("Minimum Section Duration", ["project", "settings", "minimum_section_duration_seconds"], { min: 0.05, step: 0.05 }),
-      this.renderSettingText("Global Prompt", ["project", "global_prompt", "prompt"], true),
-      this.renderSettingSelect("Global Prompt Position", ["project", "global_prompt", "position"], GLOBAL_PROMPT_POSITIONS),
-      this.renderSettingCheckbox("Show Effective Prompt", ["project", "global_prompt", "show_effective_prompt"]),
-      this.renderSettingCheckbox("Always Normalize Audio", ["project", "audio", "always_normalize"]),
-      this.renderSettingSelect("Audio Normalization Mode", ["project", "audio", "normalization_mode"], AUDIO_NORMALIZATION_MODES),
-      this.renderSettingNumber("Target LUFS", ["project", "audio", "target_lufs"], { step: 0.5 }),
-      this.renderSettingNumber("True Peak Limit", ["project", "audio", "true_peak_limit_db"], { step: 0.1 }),
-      this.renderSettingNumber("Default Audio Volume", ["project", "audio", "default_volume"], { min: 0, max: 400, step: 1 }),
-      this.renderSettingNumber("Default Audio Fade In", ["project", "audio", "default_fade_in_seconds"], { min: 0, step: 0.05 }),
-      this.renderSettingNumber("Default Audio Fade Out", ["project", "audio", "default_fade_out_seconds"], { min: 0, step: 0.05 }),
-      this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"]),
-      this.renderSettingCheckbox("Show Section Labels", ["project", "display", "show_section_labels"]),
-      this.renderSettingCheckbox("Show Thumbnails", ["project", "display", "show_thumbnails"]),
-      this.renderSettingCheckbox("Show Audio Waveforms", ["project", "display", "show_audio_waveforms"]),
-      this.renderProjectLoraSettings(timeline),
+      this.renderSettingReadonly("Project Folder", projectFolderDisplay(draft, this.isPrivacyRevealed(timeline), this.globalSettings())),
+      this.renderDraftSettingSelect("Default Crop Mode", draft, ["project", "default_crop_mode"], CROP_MODES),
+      this.renderDraftSettingText("Global Prompt", draft, ["project", "global_prompt", "prompt"], true),
+      this.renderDraftSettingSelect("Global Prompt Position", draft, ["project", "global_prompt", "position"], GLOBAL_PROMPT_POSITIONS),
+      this.renderDraftSettingSelect("Audio Normalization Mode", draft, ["project", "audio", "normalization_mode"], AUDIO_NORMALIZATION_MODES),
+      this.renderDraftSettingNumber("Target LUFS", draft, ["project", "audio", "target_lufs"], { step: 0.5 }),
+      this.renderDraftSettingNumber("True Peak Limit", draft, ["project", "audio", "true_peak_limit_db"], { step: 0.1 }),
+      this.renderDraftSettingNumber("Default Audio Volume", draft, ["project", "audio", "default_volume"], { min: 0, max: 400, step: 1 }),
+      this.renderDraftSettingNumber("Default Audio Fade In", draft, ["project", "audio", "default_fade_in_seconds"], { min: 0, step: 0.05 }),
+      this.renderDraftSettingNumber("Default Audio Fade Out", draft, ["project", "audio", "default_fade_out_seconds"], { min: 0, step: 0.05 }),
+      this.renderProjectLoraSettings(draft, { draftMode: true }),
     );
-    modal.append(header, body);
+    modal.append(header, body, this.renderSettingsActions("Project Settings", () => this.saveProjectSettings(), () => this.cancelProjectSettings()));
+    overlay.append(modal);
+    return overlay;
+  }
+
+  renderGlobalSettings(timeline) {
+    const draft = this.globalSettingsDraft ?? deepClone(this.globalSettings());
+    this.globalSettingsDraft = draft;
+    const overlay = el("div", "htd-settings-overlay");
+    const modal = el("div", "htd-settings-modal");
+    const header = el("div", "htd-settings-header");
+    const title = el("div", "htd-settings-title");
+    title.textContent = "Global Settings";
+    header.append(title, button("X", "Cancel Global Settings", () => this.cancelGlobalSettings()));
+
+    const body = el("div", "htd-settings-body");
+    if (this.controller.globalSettingsError) {
+      const status = el("div", "htd-global-settings-status");
+      status.textContent = this.controller.globalSettingsError;
+      body.append(status);
+    }
+    body.append(
+      this.renderGlobalAssetRootSetting(timeline, draft),
+      this.renderGlobalSettingCheckbox("Show Resolved Model Output", draft, ["timeline", "show_resolved_model_output"]),
+      this.renderGlobalSettingCheckbox("Allow Gaps", draft, ["timeline", "allow_gaps"]),
+      this.renderGlobalSettingCheckbox("Auto Close Gaps", draft, ["timeline", "auto_close_gaps"]),
+      this.renderGlobalSettingNumber("Minimum Section Duration", draft, ["timeline", "minimum_section_duration_seconds"], { min: 0.05, step: 0.05 }),
+      this.renderGlobalSettingCheckbox("Show Effective Prompt", draft, ["global_prompt", "show_effective_prompt"]),
+      this.renderGlobalSettingCheckbox("Always Normalize Audio", draft, ["audio", "always_normalize"]),
+      this.renderGlobalSettingCheckbox("Privacy Mode", draft, ["privacy", "mode"]),
+      this.renderGlobalSettingCheckbox("Show Section Labels", draft, ["display", "show_section_labels"]),
+      this.renderGlobalSettingCheckbox("Show Thumbnails", draft, ["display", "show_thumbnails"]),
+      this.renderGlobalSettingCheckbox("Show Audio Waveforms", draft, ["display", "show_audio_waveforms"]),
+    );
+    modal.append(header, body, this.renderSettingsActions("Global Settings", (control) => this.saveGlobalSettings(control), () => this.cancelGlobalSettings()));
     overlay.append(modal);
     return overlay;
   }
 
   renderReferenceManager(timeline) {
-    const privacyMode = Boolean(timeline.project.privacy.mode);
+    const privacyMode = this.isGlobalPrivacyMode();
     const references = getCharacterReferences(timeline);
     const overlay = el("div", `htd-reference-overlay${privacyMode ? " privacy-mode" : ""}`);
     const modal = el("div", "htd-reference-modal");
@@ -1875,7 +1967,7 @@ export class TimelineRenderer {
         await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(referenceLibraryPayload(liveReference, Boolean(this.controller.timeline.project.privacy.mode))),
+          body: JSON.stringify(referenceLibraryPayload(liveReference, this.isGlobalPrivacyMode())),
         });
       } catch (error) {
         this.alertReferenceLibraryError(error);
@@ -1903,7 +1995,7 @@ export class TimelineRenderer {
           await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId)),
+            body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId, null, this.isGlobalPrivacyMode())),
           });
           this.stampCurrentProjectLibraryItemId(itemId, { rerender: false });
           return;
@@ -1913,7 +2005,7 @@ export class TimelineRenderer {
         const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name)),
+          body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name, this.isGlobalPrivacyMode())),
         });
         const nextItemId = String(data?.item?.id ?? "").trim();
         if (!nextItemId) throw new Error("Director Library did not return a project id.");
@@ -1938,9 +2030,12 @@ export class TimelineRenderer {
   }
 
   openReferenceManager() {
-    const privacyMode = Boolean(this.controller.timeline.project.privacy.mode);
+    const privacyMode = this.isGlobalPrivacyMode();
     this.referencesOpen = true;
-    this.settingsOpen = false;
+    this.globalSettingsOpen = false;
+    this.projectSettingsOpen = false;
+    this.globalSettingsDraft = null;
+    this.projectSettingsDraft = null;
     if (privacyMode) {
       this.privacyExternalModalOpen = true;
       this.privacyRevealActive = false;
@@ -1970,7 +2065,7 @@ export class TimelineRenderer {
         node: this.node,
         documentRef: this.container.ownerDocument,
         mode: "reference",
-        privacyMode: Boolean(this.controller.timeline.project.privacy.mode),
+        privacyMode: this.isGlobalPrivacyMode(),
       });
       if (!item) return;
       this.commitMutation((timeline) => {
@@ -2004,6 +2099,15 @@ export class TimelineRenderer {
     }, "insert reference tag");
   }
 
+  renderSettingsActions(title, onSave, onCancel) {
+    const actions = el("div", "htd-settings-actions");
+    let save;
+    save = button("Save", `Save ${title}`, () => onSave(save));
+    save.classList.add("is-primary");
+    actions.append(save, button("Cancel", `Cancel ${title}`, onCancel));
+    return actions;
+  }
+
   renderSettingCheckbox(title, path) {
     const row = settingRow(title);
     row.append(toggleButton("On", title, Boolean(getPath(this.controller.timeline, path)), () => {
@@ -2020,11 +2124,82 @@ export class TimelineRenderer {
     return row;
   }
 
-  renderProjectAssetRootSetting(timeline) {
-    if (timeline.project?.privacy?.mode && !this.isPrivacyRevealed(timeline)) {
+  renderDraftSettingSelect(title, draft, path, options) {
+    const row = settingRow(title);
+    row.append(selectControl(title, getPath(draft, path), options, (value) => {
+      setPath(draft, path, value);
+    }));
+    return row;
+  }
+
+  renderDraftSettingNumber(title, draft, path, options = {}) {
+    const row = settingRow(title);
+    const input = el("input", "htd-setting-number");
+    input.type = "number";
+    input.step = String(options.step ?? 1);
+    if (options.min != null) input.min = String(options.min);
+    if (options.max != null) input.max = String(options.max);
+    input.value = String(getPath(draft, path) ?? "");
+    input.addEventListener("change", () => {
+      setPath(draft, path, Number(input.value));
+    });
+    row.append(input);
+    return row;
+  }
+
+  renderDraftSettingText(title, draft, path, multiline = false) {
+    const row = settingRow(title);
+    const input = multiline ? el("textarea", "htd-setting-text") : el("input", "htd-setting-text");
+    input.value = getPath(draft, path) ?? "";
+    input.addEventListener("change", () => {
+      setPath(draft, path, input.value);
+    });
+    row.append(input);
+    return row;
+  }
+
+  renderGlobalAssetRootSetting(timeline, draft) {
+    const settings = normalizeGlobalSettings(draft);
+    const privacyRevealed = !isGlobalPrivacyMode(settings) || (this.privacyRevealActive && !this.privacyExternalModalOpen);
+    if (isGlobalPrivacyMode(settings) && !privacyRevealed) {
       return this.renderSettingReadonly("Asset Root Directory", "Private path");
     }
-    return this.renderSettingText("Asset Root Directory", ["project", "storage", "asset_root_directory"]);
+    const row = settingRow("Asset Root Directory");
+    const input = el("input", "htd-setting-text");
+    input.value = settings.storage.asset_root_directory;
+    input.placeholder = settings.storage.default_asset_root_directory;
+    input.addEventListener("change", () => {
+      setPath(draft, ["storage", "asset_root_directory"], input.value);
+      this.controller.globalSettingsError = "";
+    });
+    row.append(input);
+    return row;
+  }
+
+  renderGlobalSettingCheckbox(title, draft, path) {
+    const row = settingRow(title);
+    row.append(toggleButton("On", title, Boolean(getPath(draft, path)), () => {
+      setPath(draft, path, !getPath(draft, path));
+      this.controller.globalSettingsError = "";
+      this.render();
+    }));
+    return row;
+  }
+
+  renderGlobalSettingNumber(title, draft, path, options = {}) {
+    const row = settingRow(title);
+    const input = el("input", "htd-setting-number");
+    input.type = "number";
+    input.step = String(options.step ?? 1);
+    if (options.min != null) input.min = String(options.min);
+    if (options.max != null) input.max = String(options.max);
+    input.value = String(getPath(draft, path) ?? "");
+    input.addEventListener("change", () => {
+      setPath(draft, path, Number(input.value));
+      this.controller.globalSettingsError = "";
+    });
+    row.append(input);
+    return row;
   }
 
   renderSettingReadonly(title, value) {
@@ -2063,33 +2238,42 @@ export class TimelineRenderer {
     return row;
   }
 
-  renderProjectLoraSettings(timeline) {
+  renderProjectLoraSettings(timeline, options = {}) {
     const block = el("div", "htd-project-loras");
     const title = el("div", "htd-project-loras-title");
     title.textContent = "Project Model LoRAs";
     block.append(
       title,
-      this.renderProjectLoraStackRow(timeline, "LTX Main", MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN),
-      this.renderProjectLoraStackRow(timeline, "WAN High", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE),
-      this.renderProjectLoraStackRow(timeline, "WAN Low", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_LOW_NOISE),
+      this.renderProjectLoraStackRow(timeline, "LTX Main", MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN, options),
+      this.renderProjectLoraStackRow(timeline, "WAN High", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE, options),
+      this.renderProjectLoraStackRow(timeline, "WAN Low", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_LOW_NOISE, options),
     );
     return block;
   }
 
-  renderProjectLoraStackRow(timeline, labelText, modelKey, targetKey) {
+  renderProjectLoraStackRow(timeline, labelText, modelKey, targetKey, options = {}) {
     const stack = timeline.project?.model_loras?.global?.[modelKey]?.[targetKey] ?? { loras: [], ui: {} };
     const row = el("div", "htd-project-lora-row");
     const label = el("span", "htd-project-lora-label");
     label.textContent = labelText;
     const summary = this.renderLoraStackSummary(stack, { privacyRevealed: this.isPrivacyRevealed(timeline) });
+    const onEdit = options.draftMode
+      ? () => this.openProjectLoraStackEditor(labelText, modelKey, targetKey, { draft: timeline })
+      : () => this.openProjectLoraStackEditor(labelText, modelKey, targetKey);
+    const onClear = options.draftMode
+      ? () => {
+          clearProjectModelLoraStack(timeline, modelKey, targetKey);
+          this.render();
+        }
+      : () => this.commitMutation((currentTimeline) => {
+          clearProjectModelLoraStack(currentTimeline, modelKey, targetKey);
+        }, "project lora clear target");
     row.append(label, summary, this.renderLoraTargetActions({
       timeline,
       labelText,
       stack,
-      onEdit: () => this.openProjectLoraStackEditor(labelText, modelKey, targetKey),
-      onClear: () => this.commitMutation((currentTimeline) => {
-        clearProjectModelLoraStack(currentTimeline, modelKey, targetKey);
-      }, "project lora clear target"),
+      onEdit,
+      onClear,
     }));
     return row;
   }
@@ -2123,8 +2307,8 @@ export class TimelineRenderer {
     return actions;
   }
 
-  openProjectLoraStackEditor(labelText, modelKey, targetKey) {
-    const timeline = this.controller.timeline;
+  openProjectLoraStackEditor(labelText, modelKey, targetKey, options = {}) {
+    const timeline = options.draft ?? this.controller.timeline;
     if (this.isLoraEditingLocked(timeline)) return;
     const stack = timeline.project?.model_loras?.global?.[modelKey]?.[targetKey];
     showTimelineLoraStackEditor({
@@ -2133,6 +2317,11 @@ export class TimelineRenderer {
       stack,
       profile: loraEditorProfileForTarget(modelKey, targetKey),
       onSave: (nextStack) => {
+        if (options.draft) {
+          setProjectModelLoraStack(timeline, modelKey, targetKey, nextStack);
+          this.render();
+          return;
+        }
         this.commitMutation((currentTimeline) => {
           setProjectModelLoraStack(currentTimeline, modelKey, targetKey, nextStack);
         }, "project lora edit");
@@ -2159,7 +2348,7 @@ export class TimelineRenderer {
   }
 
   isLoraEditingLocked(timeline) {
-    return Boolean(timeline?.project?.privacy?.mode && !this.isPrivacyRevealed(timeline));
+    return Boolean(this.isGlobalPrivacyMode() && !this.isPrivacyRevealed(timeline));
   }
 
   startSectionDrag(event, section, mode) {
@@ -2260,16 +2449,16 @@ export class TimelineRenderer {
       this.drag.hasMoved = true;
       moveSelectedItems(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset);
     } else if (this.drag.mode === "start") {
-      resizeSection(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset);
+      resizeSection(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() });
     } else if (this.drag.mode === "audio-move") {
       this.drag.hasMoved = true;
       moveSelectedItems(timeline, this.drag.itemId, pointerTime - this.drag.pointerTimeOffset);
     } else if (this.drag.mode === "audio-start") {
-      resizeAudioClip(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset);
+      resizeAudioClip(timeline, this.drag.itemId, "start", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() });
     } else if (this.drag.mode === "audio-end") {
-      resizeAudioClip(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset);
+      resizeAudioClip(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() });
     } else {
-      resizeSection(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset);
+      resizeSection(timeline, this.drag.itemId, "end", pointerTime - this.drag.pointerEdgeTimeOffset, { globalSettings: this.globalSettings() });
     }
     this.render(timeline);
     this.drag.timeContainer = this.findDragTimeContainer(this.drag.itemId) ?? this.drag.timeContainer;
@@ -2413,14 +2602,14 @@ export class TimelineRenderer {
   sectionImagePreviewData(section) {
     if (section?.type !== ASSET_TYPE_IMAGE) return null;
     const timeline = this.controller.timeline;
-    if (timeline.project.privacy.mode && (!this.privacyRevealActive || this.privacyExternalModalOpen)) return null;
+    if (this.isGlobalPrivacyMode() && (!this.privacyRevealActive || this.privacyExternalModalOpen)) return null;
     const asset = resolveMediaReference(timeline, section.image);
     const url = mediaViewUrl(asset);
     if (!url) return null;
     return {
       type: ASSET_TYPE_IMAGE,
       url,
-      caption: mediaLabel(timeline, section.image, sectionLabel(timeline, section)),
+      caption: mediaLabel(timeline, section.image, sectionLabel(timeline, section, this.globalSettings())),
     };
   }
 
@@ -2433,7 +2622,7 @@ export class TimelineRenderer {
       type: ASSET_TYPE_VIDEO,
       url,
       caption: assetDisplayLabel(resolvedAsset, privacyRevealed, "Video Take"),
-      privacyMode: Boolean(timeline?.project?.privacy?.mode),
+      privacyMode: this.isGlobalPrivacyMode(),
     };
   }
 
@@ -2454,7 +2643,7 @@ export class TimelineRenderer {
       type: ASSET_TYPE_VIDEO,
       url,
       caption: captureSummaryLabel(item, privacyRevealed),
-      privacyMode: Boolean(timeline?.project?.privacy?.mode),
+      privacyMode: this.isGlobalPrivacyMode(),
     };
   }
 
@@ -2501,7 +2690,7 @@ export class TimelineRenderer {
     try {
       await deleteProjectTakeCapture(timeline, shotId, path, {
         takeId: options.takeId,
-        privacyMode: Boolean(timeline?.project?.privacy?.mode && !privacyRevealed),
+        privacyMode: Boolean(this.isGlobalPrivacyMode() && !privacyRevealed),
       });
       if (path || options.takeId) {
         this.commitMutation((currentTimeline) => {
@@ -2525,7 +2714,7 @@ export class TimelineRenderer {
     this.contextMenuDocument = null;
     this.contextMenuElement?.remove?.();
     this.contextMenuElement = null;
-    if (hadMenu && this.controller.timeline?.project?.privacy?.mode && !this.container.matches?.(":hover")) {
+    if (hadMenu && this.isGlobalPrivacyMode() && !this.container.matches?.(":hover")) {
       this.privacyRevealActive = false;
     }
     if (options.rerender) this.render();
@@ -2550,7 +2739,7 @@ export class TimelineRenderer {
         node: this.node,
         documentRef: this.container.ownerDocument,
         mode: options.mode ?? "add",
-        privacyMode: Boolean(this.controller.timeline.project.privacy.mode),
+        privacyMode: this.isGlobalPrivacyMode(),
       });
       if (!item) return;
       const reason = options.mode === "replace" ? "replace media" : "add";
@@ -2570,7 +2759,7 @@ export class TimelineRenderer {
   }
 
   openPromptOptimizer() {
-    const privacyMode = Boolean(this.controller.timeline.project.privacy.mode);
+    const privacyMode = this.isGlobalPrivacyMode();
     if (privacyMode) {
       this.privacyExternalModalOpen = true;
       this.privacyRevealActive = false;
@@ -2600,7 +2789,7 @@ export class TimelineRenderer {
   }
 
   openDirectorLibrary() {
-    const privacyMode = Boolean(this.controller.timeline.project.privacy.mode);
+    const privacyMode = this.isGlobalPrivacyMode();
     if (privacyMode) {
       this.privacyExternalModalOpen = true;
       this.privacyRevealActive = false;
@@ -2862,14 +3051,14 @@ function assetSummaryLabel(asset, privacyRevealed) {
   return assetDisplayLabel(asset, true, asset.source_kind === "Generated" ? "Generated Video" : "Video Asset");
 }
 
-function availableCapturesKey(timeline, shot, privacyRevealed) {
+function availableCapturesKey(timeline, shot, privacyRevealed, globalSettings = null) {
   const project = timeline?.project ?? {};
   const identity = project.identity ?? {};
   const storage = project.storage ?? {};
   return [
     shot?.shot_id ?? "",
     identity.project_id ?? "",
-    storage.asset_root_directory ?? "",
+    globalAssetRootLabel(globalSettings),
     storage.project_directory_name ?? "",
     privacyRevealed ? "reveal" : "private",
   ].join("|");
@@ -2947,10 +3136,10 @@ function captureTakeId(item) {
   return value == null ? "" : String(value);
 }
 
-function projectFolderDisplay(timeline, privacyRevealed) {
-  if (timeline?.project?.privacy?.mode && !privacyRevealed) return "Private path";
+function projectFolderDisplay(timeline, privacyRevealed, globalSettings = null) {
+  if (isGlobalPrivacyMode(globalSettings) && !privacyRevealed) return "Private path";
   const storage = timeline?.project?.storage ?? {};
-  const root = String(storage.asset_root_directory ?? "").trim() || "ComfyUI output/helto_director_projects";
+  const root = globalAssetRootLabel(globalSettings);
   const directory = String(storage.project_directory_name ?? "").trim();
   return directory ? `${root.replace(/[\\/]+$/, "")}/${directory}` : root;
 }
@@ -3102,10 +3291,11 @@ function shouldRenderPromptInput(timeline, item) {
   );
 }
 
-function shouldShowWaveform(timeline, privacyRevealActive = false) {
+function shouldShowWaveform(timeline, privacyRevealActive = false, globalSettings = null) {
+  const settings = normalizeGlobalSettings(globalSettings);
   return Boolean(
-    timeline.project.display.show_audio_waveforms &&
-    (!timeline.project.privacy.mode || privacyRevealActive),
+    settings.display.show_audio_waveforms &&
+    (!isGlobalPrivacyMode(settings) || privacyRevealActive),
   );
 }
 
@@ -3197,10 +3387,11 @@ function applyWaveformVolume(peaks, clip) {
   return peaks.map((value) => Math.max(0, Math.min(1, Number(value) * multiplier)));
 }
 
-function sectionThumbnailUrl(node, timeline, section, privacyRevealActive = false) {
+function sectionThumbnailUrl(node, timeline, section, privacyRevealActive = false, globalSettings = null) {
+  const settings = normalizeGlobalSettings(globalSettings);
   if (
-    (timeline.project.privacy.mode && !privacyRevealActive) ||
-    timeline.project.display.show_thumbnails === false
+    (isGlobalPrivacyMode(settings) && !privacyRevealActive) ||
+    settings.display.show_thumbnails === false
   ) {
     return null;
   }
@@ -3239,24 +3430,26 @@ function projectPreviewAspect(timeline) {
   return timeline?.project?.orientation === "Portrait" ? 1 / landscapeAspect : landscapeAspect;
 }
 
-function sectionLabel(timeline, section) {
-  if (!timeline.project.display.show_section_labels) return "";
+function sectionLabel(timeline, section, globalSettings = null) {
+  const settings = normalizeGlobalSettings(globalSettings);
+  if (!settings.display.show_section_labels) return "";
   if (timeline.ui_state.timeline_display_mode === "Media") {
     const reference = section.type === "Image" ? section.image : section.type === "Video" ? section.video : null;
     return mediaLabel(timeline, reference, section.type);
   }
   if (timeline.ui_state.timeline_display_mode === "Prompts" && "prompt" in section) {
-    return effectivePromptLabel(timeline, section) || section.type;
+    return effectivePromptLabel(timeline, section, settings) || section.type;
   }
   if (section.type === "Text") return section.prompt || "Text";
   return section.type;
 }
 
-function effectivePromptLabel(timeline, section) {
+function effectivePromptLabel(timeline, section, globalSettings = null) {
   const prompt = String(section.prompt ?? "").trim();
   const globalPrompt = timeline.project.global_prompt ?? {};
+  const settings = normalizeGlobalSettings(globalSettings);
   const globalText = String(globalPrompt.prompt ?? "").trim();
-  if (!globalPrompt.enabled || !globalPrompt.show_effective_prompt || !globalText) return prompt;
+  if (!globalPrompt.enabled || !settings.global_prompt.show_effective_prompt || !globalText) return prompt;
   if (!prompt) return globalText;
   return globalPrompt.position === "Suffix" ? `${prompt}, ${globalText}` : `${globalText}, ${prompt}`;
 }
@@ -3326,11 +3519,11 @@ function referenceLibraryPayload(reference, privacyMode) {
   };
 }
 
-function projectLibraryPayload(timeline, itemId, name = null) {
+function projectLibraryPayload(timeline, itemId, name = null, privacyMode = false) {
   const payloadTimeline = cloneProjectForDirectorLibrary(timeline, itemId, name);
   return {
     name: projectName(payloadTimeline),
-    private: Boolean(payloadTimeline?.project?.privacy?.mode),
+    private: Boolean(privacyMode),
     project: payloadTimeline,
   };
 }
@@ -3515,6 +3708,7 @@ const ICONS = {
   "fit-all-sections": `<svg viewBox="0 0 24 24"><path d="M5 6h14M5 18h14"/><path d="M8 10h8v4H8z"/><path d="M5 12h3M16 12h3"/></svg>`,
   fit: `<svg viewBox="0 0 24 24"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><path d="M8 8h8v8H8z"/></svg>`,
   settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>`,
+  "project-settings": `<svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 7V5a2 2 0 0 1 2-2h4l2 2h4a2 2 0 0 1 2 2v2"/><path d="M9 14h6M12 11v6"/></svg>`,
   director: `<svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg>`,
   crop: `<svg viewBox="0 0 24 24"><path d="M6 3v12a3 3 0 0 0 3 3h12"/><path d="M3 6h12a3 3 0 0 1 3 3v12"/><path d="M9 9h6v6H9z"/></svg>`,
   timing: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>`,
@@ -3559,6 +3753,12 @@ function setPath(root, path, value) {
     current = current[key];
   }
   current[path.at(-1)] = value;
+}
+
+function replaceObject(target, source) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, deepClone(source));
+  return target;
 }
 
 function trackLabel(iconName, title) {
@@ -3608,6 +3808,8 @@ function installStyles(documentRef) {
     .htd-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .htd-button.is-active { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); box-shadow: inset 0 0 0 1px rgba(241,199,92,0.18); }
     .htd-button.is-active:hover:not(:disabled) { background: linear-gradient(180deg, #5b4d27, #46391b); color: #fff3cf; }
+    .htd-button.is-primary { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); }
+    .htd-button.is-primary:hover:not(:disabled) { background: linear-gradient(180deg, #5b4d27, #46391b); color: #fff3cf; }
     .htd-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .htd-button.is-danger { border-color: var(--htd-danger-border); background: linear-gradient(180deg, #5a2330, #471b25); color: #ffd6dc; }
     .htd-button.is-danger:hover:not(:disabled) { border-color: #d0505f; background: linear-gradient(180deg, #6e2937, #57212c); color: #fff3f5; }
@@ -3792,6 +3994,8 @@ function installStyles(documentRef) {
     .htd-settings-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--htd-border); }
     .htd-settings-title { font-weight: 700; color: var(--htd-text); }
     .htd-settings-body { min-height: 0; overflow: auto; padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 8px; }
+    .htd-settings-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--htd-border); }
+    .htd-global-settings-status { grid-column: 1 / -1; color: var(--htd-danger); font-size: 11px; line-height: 1.35; }
     .htd-setting-row { min-width: 0; display: flex; align-items: center; gap: 6px; justify-content: space-between; padding: 5px 8px; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: var(--htd-text-dim); }
     .htd-setting-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .htd-setting-number, .htd-setting-text { width: 120px; min-width: 0; height: 26px; box-sizing: border-box; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface); color: var(--htd-text); padding: 0 8px; }

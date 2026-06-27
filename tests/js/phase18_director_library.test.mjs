@@ -45,9 +45,7 @@ function createWidget(name, value) {
 }
 
 function createPublicVideoTimeline() {
-  const timeline = createDefaultVideoTimeline();
-  timeline.project.privacy.mode = false;
-  return timeline;
+  return createDefaultVideoTimeline();
 }
 
 function createNode() {
@@ -111,6 +109,8 @@ async function testLibraryTimelineReplacementSyncsWidgetsAndUndo() {
   const node = createNode();
   const controller = new TimelineStateController(node, {}, {
     window: createWindowStub(),
+    globalSettings: { privacy: { mode: false } },
+    loadGlobalSettings: false,
     debounceMs: 10000,
   });
 
@@ -556,10 +556,10 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(rendererSource.includes("if (itemId && !confirmProjectUpdate(this.container.ownerDocument)) return false;"), true);
   assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`'), true);
   assert.equal(rendererSource.includes('method: "PUT"'), true);
-  assert.equal(rendererSource.includes("body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId))"), true);
+  assert.equal(rendererSource.includes("body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId, null, this.isGlobalPrivacyMode()))"), true);
   assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects`'), true);
   assert.equal(rendererSource.includes('method: "POST"'), true);
-  assert.equal(rendererSource.includes('body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name))'), true);
+  assert.equal(rendererSource.includes('body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name, this.isGlobalPrivacyMode()))'), true);
   assert.equal(rendererSource.includes('const nextItemId = String(data?.item?.id ?? "").trim();'), true);
   assert.equal(rendererSource.includes("this.stampCurrentProjectLibraryItemId(nextItemId);"), true);
   assert.equal(rendererSource.includes("stampProjectLibraryItemId(timeline, itemId)"), true);

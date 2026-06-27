@@ -45,6 +45,11 @@ from shared.timeline import (
     time_range_to_frames,
     validate_video_timeline,
 )
+from shared.timeline.global_settings import (
+    default_global_settings,
+    load_global_settings,
+    save_global_settings,
+)
 
 
 def _error_codes(validation: dict) -> list[str]:
@@ -68,10 +73,7 @@ def _shot_extraction_timeline(
         "enabled": True,
         "prompt": "shared look",
         "position": GLOBAL_PROMPT_POSITION_SUFFIX,
-        "show_effective_prompt": True,
     }
-    timeline["project"]["audio"]["always_normalize"] = True
-    timeline["project"]["privacy"] = {"mode": True}
     timeline["project"]["metadata"]["character_references"] = [
         {
             "id": "hero_ref",
@@ -219,18 +221,22 @@ def _shot_extraction_timeline(
 
 def test_create_default_video_timeline_shape():
     timeline = create_default_video_timeline()
+    global_settings = default_global_settings()
 
     assert timeline["schema_version"] == SCHEMA_VERSION
     assert timeline["type"] == VIDEO_TIMELINE_TYPE
-    assert timeline["project"]["settings"]["allow_gaps"] is True
-    assert timeline["project"]["settings"]["auto_close_gaps"] is False
+    assert global_settings["timeline"]["allow_gaps"] is True
+    assert global_settings["timeline"]["auto_close_gaps"] is False
+    assert global_settings["timeline"]["minimum_section_duration_seconds"] == 0.25
+    assert global_settings["storage"]["asset_root_directory"] == ""
     assert timeline["project"]["audio"]["use_native_audio"] is False
-    assert timeline["project"]["privacy"] == {"mode": True}
-    assert timeline["project"]["display"]["show_audio_waveforms"] is True
+    assert "settings" not in timeline["project"]
+    assert "privacy" not in timeline["project"]
+    assert "display" not in timeline["project"]
     assert timeline["project"]["identity"]["project_id"].startswith("proj_")
     assert timeline["project"]["identity"]["name"] == "Untitled Project"
-    assert timeline["project"]["storage"]["schema_version"] == 1
-    assert timeline["project"]["storage"]["asset_root_directory"] == ""
+    assert timeline["project"]["storage"]["schema_version"] == 2
+    assert "asset_root_directory" not in timeline["project"]["storage"]
     assert timeline["project"]["identity"]["project_id"] in timeline["project"]["storage"]["project_directory_name"]
     assert timeline["project"]["metadata"]["character_references_enabled"] is True
     assert timeline["project"]["metadata"]["character_references"] == []
@@ -271,6 +277,35 @@ def test_create_default_video_timeline_shape():
     }
 
 
+def test_global_settings_defaults_save_clear_and_validate_asset_root(tmp_path):
+    assert load_global_settings(tmp_path) == default_global_settings()
+
+    saved = save_global_settings(
+        {
+            "storage": {"asset_root_directory": str(tmp_path / "assets")},
+            "timeline": {
+                "show_resolved_model_output": True,
+                "allow_gaps": False,
+                "auto_close_gaps": True,
+                "minimum_section_duration_seconds": 1.5,
+            },
+            "privacy": {"mode": False},
+        },
+        tmp_path,
+    )
+
+    assert saved["storage"]["asset_root_directory"] == str(tmp_path / "assets")
+    assert saved["timeline"]["allow_gaps"] is False
+    assert saved["timeline"]["minimum_section_duration_seconds"] == 1.5
+    assert load_global_settings(tmp_path) == saved
+
+    cleared = save_global_settings({"storage": {"asset_root_directory": ""}}, tmp_path)
+    assert cleared["storage"]["asset_root_directory"] == ""
+
+    with pytest.raises(ValueError, match="GLOBAL_ASSET_ROOT_NOT_ABSOLUTE"):
+        save_global_settings({"storage": {"asset_root_directory": "relative/assets"}}, tmp_path)
+
+
 def test_migrate_accepts_json_string():
     timeline = create_default_video_timeline()
     timeline["schema_version"] = "0.9"
@@ -281,36 +316,37 @@ def test_migrate_accepts_json_string():
     assert migrated["type"] == VIDEO_TIMELINE_TYPE
 
 
-def test_legacy_privacy_flags_normalize_to_single_mode():
+def test_global_owned_project_fields_are_stripped_on_normalize():
     timeline = create_default_video_timeline()
+    timeline["project"]["settings"] = {
+        "show_resolved_model_output": True,
+        "allow_gaps": False,
+        "auto_close_gaps": True,
+        "minimum_section_duration_seconds": 2.0,
+    }
     timeline["project"]["privacy"] = {
         "mode": False,
         "hide_media_previews": True,
         "hide_text_prompts": False,
         "encrypt_previews": False,
     }
+    timeline["project"]["display"] = {
+        "show_section_labels": False,
+        "show_thumbnails": False,
+        "show_audio_waveforms": False,
+    }
+    timeline["project"]["global_prompt"]["show_effective_prompt"] = True
+    timeline["project"]["audio"]["always_normalize"] = True
+    timeline["project"]["storage"]["asset_root_directory"] = "/tmp/timeline_assets"
 
     normalized = normalize_video_timeline(timeline)
 
-    assert normalized["project"]["privacy"] == {"mode": True}
-
-
-def test_missing_privacy_normalizes_to_default_private_mode():
-    timeline = create_default_video_timeline()
-    timeline["project"].pop("privacy")
-
-    normalized = normalize_video_timeline(timeline)
-
-    assert normalized["project"]["privacy"] == {"mode": True}
-
-
-def test_explicit_public_privacy_mode_is_preserved():
-    timeline = create_default_video_timeline()
-    timeline["project"]["privacy"] = {"mode": False}
-
-    normalized = normalize_video_timeline(timeline)
-
-    assert normalized["project"]["privacy"] == {"mode": False}
+    assert "settings" not in normalized["project"]
+    assert "privacy" not in normalized["project"]
+    assert "display" not in normalized["project"]
+    assert "show_effective_prompt" not in normalized["project"]["global_prompt"]
+    assert "always_normalize" not in normalized["project"]["audio"]
+    assert "asset_root_directory" not in normalized["project"]["storage"]
 
 
 def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
@@ -334,7 +370,6 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
 
     assert normalized["project"]["frame_rate"] == 24.0
     assert normalized["project"]["duration_seconds"] == 10.0
-    assert normalized["project"]["privacy"] == {"mode": True}
     assert normalized["ui_state"]["view_start_seconds"] == 0
     assert normalized["ui_state"]["view_end_seconds"] == 5
     assert section["custom_note"] == "keep me"
@@ -342,6 +377,7 @@ def test_normalization_fills_safe_defaults_and_preserves_unknown_fields():
     assert section["guide_strength"] == 1.0
     assert normalized["project"]["identity"]["project_id"].startswith("proj_")
     assert normalized["project"]["identity"]["project_id"] in normalized["project"]["storage"]["project_directory_name"]
+    assert "privacy" not in normalized["project"]
 
 
 def test_project_identity_storage_normalizes_and_preserves_stable_directory_name():
@@ -363,8 +399,7 @@ def test_project_identity_storage_normalizes_and_preserves_stable_directory_name
         "name": "First Name",
     }
     assert normalized["project"]["storage"] == {
-        "schema_version": 1,
-        "asset_root_directory": "/tmp/timeline_assets",
+        "schema_version": 2,
         "project_directory_name": "first_name_proj_custom123",
     }
 
@@ -831,7 +866,7 @@ def test_extract_extended_shot_preserves_source_video_section():
     assert local_section["source_in"] == 3.5
 
 
-def test_shot_extraction_preserves_project_assets_privacy_references_and_loras():
+def test_shot_extraction_preserves_project_assets_references_and_loras():
     timeline = _shot_extraction_timeline()
     normalized = normalize_video_timeline(timeline)
 
@@ -841,7 +876,9 @@ def test_shot_extraction_preserves_project_assets_privacy_references_and_loras()
     assert local["assets"] == normalized["assets"]
     assert local["project"]["global_prompt"] == normalized["project"]["global_prompt"]
     assert local["project"]["audio"] == normalized["project"]["audio"]
-    assert local["project"]["privacy"] == {"mode": True}
+    assert "privacy" not in local["project"]
+    assert "display" not in local["project"]
+    assert "settings" not in local["project"]
     assert local["project"]["metadata"]["character_references"] == normalized["project"]["metadata"]["character_references"]
     assert local["project"]["model_loras"]["global"][MODEL_LORA_MODEL_LTX_2_3][
         MODEL_LORA_TARGET_MAIN
@@ -1631,6 +1668,28 @@ def test_director_gap_gives_info_not_error():
         "DIRECTOR_GAP",
         "DIRECTOR_GAP",
     ]
+
+
+def test_validation_uses_global_gap_policy_and_minimum_duration():
+    timeline = create_default_video_timeline()
+    timeline["project"]["duration_seconds"] = 3.0
+    timeline["director_track"]["sections"].append(
+        {
+            "item_id": "section_short",
+            "type": SECTION_TYPE_TEXT,
+            "start_time": 1.0,
+            "end_time": 1.5,
+            "prompt": "short middle",
+        }
+    )
+    global_settings = default_global_settings()
+    global_settings["timeline"]["allow_gaps"] = False
+    global_settings["timeline"]["minimum_section_duration_seconds"] = 1.0
+
+    validation = validate_video_timeline(timeline, global_settings)
+
+    assert "SECTION_BELOW_MINIMUM_DURATION" in _error_codes(validation)
+    assert [entry["code"] for entry in validation["errors"]].count("DIRECTOR_GAP") == 2
 
 
 def test_time_mapping_uses_exclusive_end_frame():

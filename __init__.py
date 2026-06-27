@@ -74,6 +74,9 @@ register_prompt_optimizer_routes = importlib.import_module(
 register_privacy_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.privacy"
 ).register_privacy_routes
+register_global_settings_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.global_settings"
+).register_global_settings_routes
 register_timeline_library_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.timeline_library"
 ).register_timeline_library_routes
@@ -82,6 +85,7 @@ register_lora_info_routes = importlib.import_module(
 ).register_lora_info_routes
 
 register_privacy_routes()
+register_global_settings_routes()
 register_media_cache_routes()
 register_media_browser_routes()
 register_prompt_optimizer_routes()
@@ -181,6 +185,7 @@ __all__ = [
     "WANTimelineSegmentedExecutor",
     "register_media_browser_routes",
     "register_media_cache_routes",
+    "register_global_settings_routes",
     "register_privacy_routes",
     "register_prompt_optimizer_routes",
     "register_timeline_library_routes",

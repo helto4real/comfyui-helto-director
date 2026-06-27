@@ -15,6 +15,7 @@ from comfy_api.latest import InputImpl, Types, io, ui
 from ...shared.contracts.socket_types import DEBUG_INFO, VIDEO_TIMELINE
 from ...shared.contracts.video_timeline import ASSET_TYPE_VIDEO
 from ...shared.timeline.generated_capture import build_generated_take_capture_sidecar
+from ...shared.timeline.global_settings import global_privacy_mode
 from ...shared.timeline.normalize import normalize_video_timeline
 from ...shared.timeline.project_storage import (
     resolve_project_take_directory,
@@ -368,7 +369,7 @@ def _runtime_registration_shot_ids(registrations: list[dict[str, Any]]) -> list[
 
 def _skipped_debug_info(video_timeline: dict, runtime_debug: dict | None) -> dict[str, Any]:
     project = video_timeline.get("project") if isinstance(video_timeline.get("project"), dict) else {}
-    privacy_mode = bool(_raw_dict(project.get("privacy")).get("mode"))
+    privacy_mode = global_privacy_mode()
     storage_summary = resolved_project_storage_summary(project) if project else {}
     summary = runtime_debug.get("summary") if isinstance(runtime_debug, dict) and isinstance(runtime_debug.get("summary"), dict) else {}
     return {
@@ -399,7 +400,7 @@ def _registration_not_ready_debug_info(
     registration_status: dict[str, Any],
 ) -> dict[str, Any]:
     project = video_timeline.get("project") if isinstance(video_timeline.get("project"), dict) else {}
-    privacy_mode = bool(_raw_dict(project.get("privacy")).get("mode"))
+    privacy_mode = global_privacy_mode()
     storage_summary = resolved_project_storage_summary(project) if project else {}
     summary = runtime_debug.get("summary") if isinstance(runtime_debug, dict) and isinstance(runtime_debug.get("summary"), dict) else {}
     return {
@@ -653,7 +654,7 @@ def _debug_info(
 ) -> dict[str, Any]:
     timeline = result.get("timeline") if isinstance(result.get("timeline"), dict) else {}
     project = timeline.get("project") if isinstance(timeline.get("project"), dict) else {}
-    privacy_mode = bool(_raw_dict(project.get("privacy")).get("mode"))
+    privacy_mode = global_privacy_mode()
     storage_summary = resolved_project_storage_summary(project) if project else {}
     return {
         "type": "DEBUG_INFO",
@@ -702,8 +703,7 @@ def _debug_ui(saved_result: ui.SavedResult | None, *, privacy_mode: bool) -> dic
 
 
 def _timeline_privacy_mode(timeline: dict) -> bool:
-    project = timeline.get("project") if isinstance(timeline, dict) else {}
-    return bool(_raw_dict(_raw_dict(project).get("privacy")).get("mode"))
+    return global_privacy_mode()
 
 
 def _media_payload_for_video(

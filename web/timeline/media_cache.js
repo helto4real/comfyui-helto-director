@@ -3,6 +3,7 @@ import {
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
 } from "./schema.js";
+import { isGlobalPrivacyMode, normalizeGlobalSettings } from "./global_settings.js";
 
 const ROUTE_PREFIX = "/helto_director/media";
 export const MIN_WAVEFORM_PEAKS = 16;
@@ -27,8 +28,9 @@ export class TimelineMediaCache {
     this.pendingWaveforms.clear();
   }
 
-  refresh(timeline) {
-    const nextPrivacyMode = Boolean(timeline.project.privacy.mode);
+  refresh(timeline, globalSettings = null) {
+    const settings = normalizeGlobalSettings(globalSettings);
+    const nextPrivacyMode = isGlobalPrivacyMode(settings);
     if (nextPrivacyMode !== this.privacyMode) {
       this.thumbnailUrls.clear();
       this.waveforms.clear();
@@ -38,7 +40,7 @@ export class TimelineMediaCache {
 
     for (const asset of timeline.assets ?? []) {
       if (!asset?.asset_id || !asset.path) continue;
-      if ((asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && timeline.project.display.show_thumbnails) {
+      if ((asset.type === ASSET_TYPE_IMAGE || asset.type === ASSET_TYPE_VIDEO) && settings.display.show_thumbnails) {
         this.thumbnailUrls.set(asset.asset_id, thumbnailUrl(asset, 320, this.privacyMode));
       }
     }

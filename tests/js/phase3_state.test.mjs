@@ -6,6 +6,7 @@ import {
   VIDEO_TIMELINE_WIDGET,
 } from "../../web/timeline/state.js";
 import { normalizeVideoTimeline } from "../../web/timeline/migration.js";
+import { normalizeGlobalSettings, settingsPayload } from "../../web/timeline/global_settings.js";
 import { PRIVACY_SCHEMA } from "../../web/timeline/privacy.js";
 import {
   ASSET_SOURCE_GENERATED,
@@ -34,7 +35,6 @@ function createWidget(name, value) {
 
 function createPublicVideoTimeline() {
   const timeline = createDefaultVideoTimeline();
-  timeline.project.privacy.mode = false;
   return timeline;
 }
 
@@ -77,6 +77,27 @@ function createWindowStub() {
     setTimeout,
     clearTimeout,
   };
+}
+
+const PUBLIC_GLOBAL_SETTINGS = { privacy: { mode: false } };
+const PRIVATE_GLOBAL_SETTINGS = { privacy: { mode: true } };
+
+function createController(node, options = {}) {
+  return new TimelineStateController(node, {}, {
+    window: createWindowStub(),
+    globalSettings: PUBLIC_GLOBAL_SETTINGS,
+    loadGlobalSettings: false,
+    ...options,
+  });
+}
+
+function mountController(node, options = {}) {
+  return mountTimelineState(node, {}, {
+    window: createWindowStub(),
+    globalSettings: PUBLIC_GLOBAL_SETTINGS,
+    loadGlobalSettings: false,
+    ...options,
+  });
 }
 
 function getHiddenTimeline(node) {
@@ -189,39 +210,99 @@ async function testDefaultTimelineProjectIdentityStorage() {
 
   assert.equal(timeline.project.identity.project_id.startsWith("proj_"), true);
   assert.equal(timeline.project.identity.name, "Untitled Project");
-  assert.equal(timeline.project.storage.schema_version, 1);
-  assert.equal(timeline.project.storage.asset_root_directory, "");
+  assert.equal(timeline.project.storage.schema_version, 2);
+  assert.equal("asset_root_directory" in timeline.project.storage, false);
   assert.equal(timeline.project.storage.project_directory_name.includes(timeline.project.identity.project_id), true);
 }
 
-async function testDefaultTimelinePrivacyModeIsEnabled() {
+async function testDefaultTimelineStripsGlobalOwnedFields() {
   const timeline = createDefaultVideoTimeline();
 
-  assert.equal(timeline.project.privacy.mode, true);
+  assert.equal("settings" in timeline.project, false);
+  assert.equal("privacy" in timeline.project, false);
+  assert.equal("display" in timeline.project, false);
+  assert.equal("show_effective_prompt" in timeline.project.global_prompt, false);
+  assert.equal("always_normalize" in timeline.project.audio, false);
 }
 
-async function testNormalizePrivacyDefaultsAndExplicitOptOut() {
-  const missingPrivacy = createDefaultVideoTimeline();
-  delete missingPrivacy.project.privacy;
-  assert.deepEqual(normalizeVideoTimeline(missingPrivacy).project.privacy, { mode: true });
-
-  const explicitPublic = createDefaultVideoTimeline();
-  explicitPublic.project.privacy = { mode: false };
-  assert.deepEqual(normalizeVideoTimeline(explicitPublic).project.privacy, { mode: false });
-
-  const legacyPrivate = createDefaultVideoTimeline();
-  legacyPrivate.project.privacy = {
+async function testNormalizeStripsGlobalOwnedProjectFields() {
+  const timeline = createDefaultVideoTimeline();
+  timeline.project.settings = {
+    show_resolved_model_output: true,
+    allow_gaps: false,
+    auto_close_gaps: true,
+    minimum_section_duration_seconds: 2,
+  };
+  timeline.project.privacy = {
     mode: false,
     hide_media_previews: true,
     hide_text_prompts: false,
     encrypt_previews: false,
   };
-  assert.deepEqual(normalizeVideoTimeline(legacyPrivate).project.privacy, { mode: true });
+  timeline.project.display = { show_section_labels: false, show_thumbnails: false, show_audio_waveforms: false };
+  timeline.project.global_prompt.show_effective_prompt = true;
+  timeline.project.audio.always_normalize = true;
+  timeline.project.storage.asset_root_directory = "/tmp/assets";
+
+  const normalized = normalizeVideoTimeline(timeline);
+  assert.equal("settings" in normalized.project, false);
+  assert.equal("privacy" in normalized.project, false);
+  assert.equal("display" in normalized.project, false);
+  assert.equal("show_effective_prompt" in normalized.project.global_prompt, false);
+  assert.equal("always_normalize" in normalized.project.audio, false);
+  assert.equal("asset_root_directory" in normalized.project.storage, false);
+}
+
+async function testGlobalSettingsPayloadNormalizesRouteShape() {
+  const normalized = normalizeGlobalSettings({
+    settings: {
+      storage: { asset_root_directory: "/tmp/assets" },
+      timeline: {
+        show_resolved_model_output: true,
+        allow_gaps: false,
+        auto_close_gaps: true,
+        minimum_section_duration_seconds: 1.5,
+      },
+      global_prompt: { show_effective_prompt: true },
+      audio: { always_normalize: true },
+      privacy: { mode: false },
+      display: { show_section_labels: false, show_thumbnails: false, show_audio_waveforms: false },
+    },
+    storage: {
+      effective_asset_root_directory: "/tmp/assets",
+      default_asset_root_directory: "/tmp/default-assets",
+      configured: true,
+    },
+  });
+
+  assert.equal(normalized.storage.asset_root_directory, "/tmp/assets");
+  assert.equal(normalized.storage.effective_asset_root_directory, "/tmp/assets");
+  assert.equal(normalized.timeline.allow_gaps, false);
+  assert.equal(normalized.timeline.auto_close_gaps, true);
+  assert.equal(normalized.timeline.minimum_section_duration_seconds, 1.5);
+  assert.equal(normalized.global_prompt.show_effective_prompt, true);
+  assert.equal(normalized.audio.always_normalize, true);
+  assert.equal(normalized.privacy.mode, false);
+  assert.equal(normalized.display.show_thumbnails, false);
+  assert.deepEqual(settingsPayload(normalized), {
+    schema_version: 1,
+    storage: { asset_root_directory: "/tmp/assets" },
+    timeline: {
+      show_resolved_model_output: true,
+      allow_gaps: false,
+      auto_close_gaps: true,
+      minimum_section_duration_seconds: 1.5,
+    },
+    global_prompt: { show_effective_prompt: true },
+    audio: { always_normalize: true },
+    privacy: { mode: false },
+    display: { show_section_labels: false, show_thumbnails: false, show_audio_waveforms: false },
+  });
 }
 
 async function testCommitUpdatesHiddenWidgetAndMarksGraphDirty() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
 
   controller.updateTimeline((timeline) => {
     timeline.director_track.sections.push({
@@ -241,7 +322,7 @@ async function testCommitUpdatesHiddenWidgetAndMarksGraphDirty() {
 
 async function testLongMultilinePromptSurvivesCommit() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
   const prompt = longMultilinePrompt();
 
   controller.updateTimeline((timeline) => {
@@ -261,7 +342,7 @@ async function testLongMultilinePromptSurvivesCommit() {
 
 async function testUndoRedoUpdatesStateAndWidget() {
   const node = createNode();
-  const controller = mountTimelineState(node, {}, { window: createWindowStub() });
+  const controller = mountController(node);
 
   controller.updateTimeline((timeline) => {
     timeline.director_track.sections.push({
@@ -282,7 +363,7 @@ async function testUndoRedoUpdatesStateAndWidget() {
 
 async function testSequenceTakeAndLoraStructuresSerializeAndUndoRedo() {
   const node = createNode();
-  const controller = mountTimelineState(node, {}, { window: createWindowStub() });
+  const controller = mountController(node);
 
   controller.updateTimeline((timeline) => {
     const section = addSection(timeline, "Text", 0);
@@ -357,10 +438,7 @@ async function testSequenceTakeAndLoraStructuresSerializeAndUndoRedo() {
 
 async function testDebouncedCommit() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, {
-    window: createWindowStub(),
-    debounceMs: 0,
-  });
+  const controller = createController(node, { debounceMs: 0 });
 
   controller.timeline.project.global_prompt.prompt = "debounced";
   controller.scheduleDebouncedCommit("prompt typing");
@@ -371,10 +449,7 @@ async function testDebouncedCommit() {
 
 async function testFlushBeforeSerializationWritesPendingPromptWithoutRerender() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, {
-    window: createWindowStub(),
-    debounceMs: 10000,
-  });
+  const controller = createController(node, { debounceMs: 10000 });
   const prompt = longMultilinePrompt();
   let renderCount = 0;
   node._timelineRenderer = {
@@ -423,7 +498,7 @@ async function testExtensionFlushesBeforeNodeSerialize() {
 async function testGestureMouseupCommitBoundary() {
   const node = createNode();
   const windowStub = createWindowStub();
-  const controller = new TimelineStateController(node, {}, { window: windowStub });
+  const controller = createController(node, { window: windowStub });
 
   controller.beginTimelineGesture();
   controller.timeline.ui_state.view_start_seconds = 1;
@@ -439,7 +514,7 @@ async function testGestureMouseupCommitBoundary() {
 
 async function testDeleteKeyRemovesSelectedItem() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
 
   addSelectedTextSection(controller, "delete me");
 
@@ -455,7 +530,7 @@ async function testDeleteKeyRemovesSelectedItem() {
 
 async function testDeleteKeyRemovesMixedSelectedItems() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
 
   controller.updateTimeline((timeline) => {
     timeline.director_track.sections.push(
@@ -502,7 +577,7 @@ async function testDeleteKeyRemovesMixedSelectedItems() {
 
 async function testDeleteKeyRemovesSelectedShotAndSections() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
 
   controller.updateTimeline((timeline) => {
     const section = addSection(timeline, "Text", 0);
@@ -524,7 +599,7 @@ async function testDeleteKeyRemovesSelectedShotAndSections() {
 
 async function testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFocused() {
   const node = createNode({ selected: false });
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
   const { scope, item } = createTimelineKeyboardScope();
   controller.setTimelineKeyboardScope(scope);
 
@@ -540,7 +615,7 @@ async function testDeleteKeyRemovesTimelineItemWhenNodeInactiveButTimelineItemFo
 
 async function testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem() {
   const node = createNode({ selected: false });
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
   const { scope, documentRef } = createTimelineKeyboardScope();
   const outside = createMockTarget({ ownerDocument: documentRef });
   documentRef.activeElement = outside;
@@ -558,7 +633,7 @@ async function testDeleteKeyIsIgnoredWhenInactiveNodeAndFocusOutsideTimelineItem
 async function testDeleteKeyIsIgnoredOnInteractiveTimelineControls() {
   for (const tagName of ["input", "textarea", "select", "button"]) {
     const node = createNode({ selected: false });
-    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+    const controller = createController(node);
     const { scope, item, documentRef } = createTimelineKeyboardScope();
     const control = createMockTarget({ tagName, item, ownerDocument: documentRef });
     documentRef.activeElement = control;
@@ -576,7 +651,7 @@ async function testDeleteKeyIsIgnoredOnInteractiveTimelineControls() {
 
 async function testDeleteKeyIsIgnoredInsideDirectorLibraryDialog() {
   const node = createNode({ selected: false });
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
   const { scope, documentRef } = createTimelineKeyboardScope();
   const libraryDialog = createMockTarget({ className: "htd-library-dialog", ownerDocument: documentRef });
   documentRef.activeElement = libraryDialog;
@@ -593,7 +668,7 @@ async function testDeleteKeyIsIgnoredInsideDirectorLibraryDialog() {
 
 async function testDeleteKeyIsIgnoredWhileTyping() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
 
   addSelectedTextSection(controller, "keep me");
 
@@ -607,7 +682,7 @@ async function testDeleteKeyIsIgnoredWhileTyping() {
 
 async function testUndoRestoresDeleteKeyRemoval() {
   const node = createNode();
-  const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+  const controller = createController(node);
 
   addSelectedTextSection(controller, "restore me");
 
@@ -621,7 +696,7 @@ async function testUndoRestoresDeleteKeyRemoval() {
 
 async function testReplaceTimelineClearsLibraryLinkAndIsUndoable() {
   const node = createNode();
-  const controller = mountTimelineState(node, {}, { window: createWindowStub() });
+  const controller = mountController(node);
 
   controller.updateTimeline((timeline) => {
     timeline.project.metadata.library_item_id = "timeline_123";
@@ -669,10 +744,9 @@ async function testPrivacyModeWritesEncryptedHiddenWidget() {
   const restoreXhr = installPrivacyXhrStub();
   try {
     const node = createNode();
-    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
 
     controller.updateTimeline((timeline) => {
-      timeline.project.privacy.mode = true;
       timeline.project.global_prompt.prompt = "private global";
       timeline.assets.push({
         asset_id: "asset_001",
@@ -755,15 +829,15 @@ async function testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget() {
   const restoreXhr = installPrivacyXhrStub();
   try {
     const node = createNode({ timelineValue: "" });
-    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
 
     const hiddenValue = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
     const payload = JSON.parse(hiddenValue);
     const request = JSON.parse(Buffer.from(payload.ciphertext, "base64").toString("utf8"));
-    assert.equal(controller.timeline.project.privacy.mode, true);
+    assert.equal("privacy" in controller.timeline.project, false);
     assert.equal(payload.encrypted, true);
     assert.equal(payload.schema, PRIVACY_SCHEMA);
-    assert.equal(request.state.timeline.project.privacy.mode, true);
+    assert.equal("privacy" in request.state.timeline.project, false);
   } finally {
     restoreXhr();
   }
@@ -804,19 +878,20 @@ async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
     }),
   });
   try {
-    const controller = new TimelineStateController(node, {}, { window: createWindowStub() });
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     assert.equal(controller.timeline.director_track.sections[0].prompt, "decrypted prompt");
-    assert.equal(controller.timeline.project.privacy.mode, true);
+    assert.equal("privacy" in controller.timeline.project, false);
   } finally {
     globalThis.fetch = previousFetch;
   }
 }
 
 await testDefaultTimelineProjectIdentityStorage();
-await testDefaultTimelinePrivacyModeIsEnabled();
-await testNormalizePrivacyDefaultsAndExplicitOptOut();
+await testDefaultTimelineStripsGlobalOwnedFields();
+await testNormalizeStripsGlobalOwnedProjectFields();
+await testGlobalSettingsPayloadNormalizesRouteShape();
 await testCommitUpdatesHiddenWidgetAndMarksGraphDirty();
 await testLongMultilinePromptSurvivesCommit();
 await testUndoRedoUpdatesStateAndWidget();

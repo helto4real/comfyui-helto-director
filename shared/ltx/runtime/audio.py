@@ -8,6 +8,7 @@ import torch
 
 from ...contracts.video_timeline import SECTION_TYPE_VIDEO
 from ...media_cache import resolve_media_path
+from ...timeline.global_settings import global_always_normalize_audio
 
 
 TARGET_SAMPLE_RATE = 44100
@@ -68,7 +69,7 @@ def mix_timeline_audio(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]
             continue
         output[:, start_sample:end_sample] += clip_waveform[:, :length]
 
-    output = normalize_audio_waveform(output, enabled=bool(plan.get("project", {}).get("audio", {}).get("always_normalize")))
+    output = normalize_audio_waveform(output, enabled=global_always_normalize_audio())
     return {"waveform": output.unsqueeze(0), "sample_rate": TARGET_SAMPLE_RATE}, diagnostics
 
 
@@ -146,7 +147,7 @@ def build_native_source_video_audio_fallback(plan: dict[str, Any]) -> tuple[dict
             diagnostics.append("Native source-video audio fallback unavailable; no decodable source-video audio was found.")
         return None, diagnostics
 
-    output = normalize_audio_waveform(output, enabled=bool(plan.get("project", {}).get("audio", {}).get("always_normalize")))
+    output = normalize_audio_waveform(output, enabled=global_always_normalize_audio())
     return {"waveform": output.unsqueeze(0), "sample_rate": TARGET_SAMPLE_RATE}, diagnostics
 
 

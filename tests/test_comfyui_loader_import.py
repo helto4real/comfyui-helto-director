@@ -10,6 +10,14 @@ from comfy_execution.graph_utils import ExecutionBlocker
 
 from shared.contracts.video_timeline import ASSET_TYPE_VIDEO, SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline, validate_video_timeline
+import shared.timeline.global_settings as timeline_global_settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_global_settings(tmp_path, monkeypatch):
+    config_dir = tmp_path / "timeline_global_config"
+    monkeypatch.setattr(timeline_global_settings, "CONFIG_DIR", config_dir)
+    timeline_global_settings.save_global_settings({"privacy": {"mode": False}})
 
 
 def load_nodepack_like_comfyui():
@@ -31,6 +39,9 @@ def load_nodepack_like_comfyui():
             if Path(path or ".").resolve() != module_path
         ]
         spec.loader.exec_module(module)
+        runtime_global_settings = sys.modules.get("comfyui_helto_director_runtime.shared.timeline.global_settings")
+        if runtime_global_settings is not None:
+            runtime_global_settings.CONFIG_DIR = timeline_global_settings.CONFIG_DIR
         return module
     finally:
         sys.path = previous_path
@@ -152,7 +163,6 @@ def test_timeline_take_capture_skips_media_when_runtime_reports_no_generation(tm
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
-    timeline_input["project"]["storage"]["asset_root_directory"] = str(tmp_path / "takes")
     runtime_debug = {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
@@ -194,7 +204,6 @@ def test_timeline_take_capture_skips_non_ready_runtime_registration_without_writ
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
-    timeline_input["project"]["storage"]["asset_root_directory"] = str(tmp_path / "takes")
     runtime_debug = {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
@@ -241,7 +250,7 @@ def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
-    timeline_input["project"]["storage"]["asset_root_directory"] = str(tmp_path / "takes")
+    timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(tmp_path / "takes")}, "privacy": {"mode": False}})
     runtime_debug = {
         "type": "DEBUG_INFO",
         "source": "WAN Runtime",
@@ -374,7 +383,7 @@ def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_wri
     media_path.write_bytes(b"source video")
     timeline_input = _timeline_with_shot()
     capture_root = tmp_path / "takes"
-    timeline_input["project"]["storage"]["asset_root_directory"] = str(capture_root)
+    timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(capture_root)}, "privacy": {"mode": False}})
     project_directory = capture_root / timeline_input["project"]["storage"]["project_directory_name"]
 
     output = node.execute(
@@ -471,7 +480,7 @@ def test_timeline_take_capture_private_preview_is_tagged_and_debug_redacted(tmp_
     node_module = sys.modules[node.__module__]
     monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(tmp_path))
     timeline_input = _timeline_with_shot()
-    timeline_input["project"]["privacy"]["mode"] = True
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
     video = FakeVideo()
 
     output = node.execute(
@@ -519,7 +528,7 @@ def test_timeline_take_capture_node_saves_video_to_absolute_project_root(tmp_pat
     comfy_output = tmp_path / "comfy_output"
     capture_root = tmp_path / "external_takes"
     timeline_input = _timeline_with_shot()
-    timeline_input["project"]["storage"]["asset_root_directory"] = str(capture_root)
+    timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(capture_root)}, "privacy": {"mode": False}})
     project_directory = capture_root / timeline_input["project"]["storage"]["project_directory_name"]
     monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(comfy_output))
     video = FakeVideo()
@@ -559,10 +568,12 @@ def test_timeline_take_capture_node_rejects_relative_project_asset_root(tmp_path
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
-    timeline_input["project"]["storage"]["asset_root_directory"] = "relative/takes"
+    path = timeline_global_settings.settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"storage": {"asset_root_directory": "relative/takes"}, "privacy": {"mode": False}}), encoding="utf-8")
     video = FakeVideo()
 
-    with pytest.raises(Exception, match="PROJECT_STORAGE_ROOT_NOT_ABSOLUTE"):
+    with pytest.raises(Exception, match="GLOBAL_ASSET_ROOT_NOT_ABSOLUTE"):
         node.execute(
             timeline_input,
             take_registration_json=json.dumps(
@@ -596,7 +607,6 @@ class FakeVideo:
 def _timeline_with_shot() -> dict:
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 2.0
-    timeline["project"]["privacy"]["mode"] = False
     timeline["director_track"]["sections"] = [
         {
             "item_id": "section_001",

@@ -123,7 +123,8 @@ def test_timeline_crud_duplicate_delete_and_use(tmp_path):
     assert duplicate["project"]["project"]["identity"]["project_id"] != replaced["project"]["project"]["identity"]["project_id"]
     assert duplicate["project"]["project"]["identity"]["name"] == "Timeline B Copy"
     assert duplicate["project"]["project"]["storage"]["project_directory_name"] != replaced["project"]["project"]["storage"]["project_directory_name"]
-    assert duplicate["project"]["project"]["storage"]["asset_root_directory"] == replaced["project"]["project"]["storage"]["asset_root_directory"]
+    assert "asset_root_directory" not in duplicate["project"]["project"]["storage"]
+    assert "asset_root_directory" not in replaced["project"]["project"]["storage"]
     duplicate_take_asset = next(asset for asset in duplicate["project"]["assets"] if asset["asset_id"] == "accepted_take_asset")
     assert duplicate_take_asset["path"] == old_take_path
 

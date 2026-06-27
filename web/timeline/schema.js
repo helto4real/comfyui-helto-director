@@ -1,6 +1,6 @@
 export const SCHEMA_VERSION = "2.0";
 export const VIDEO_TIMELINE_TYPE = "VIDEO_TIMELINE";
-export const PROJECT_STORAGE_SCHEMA_VERSION = 1;
+export const PROJECT_STORAGE_SCHEMA_VERSION = 2;
 export const DEFAULT_PROJECT_NAME = "Untitled Project";
 
 export const SECTION_TYPE_IMAGE = "Image";
@@ -243,7 +243,6 @@ export function createDefaultProjectIdentity() {
 export function createDefaultProjectStorage(identity = createDefaultProjectIdentity()) {
   return {
     schema_version: PROJECT_STORAGE_SCHEMA_VERSION,
-    asset_root_directory: "",
     project_directory_name: projectDirectoryName(identity.name, identity.project_id),
   };
 }
@@ -261,35 +260,19 @@ export function createDefaultVideoTimeline() {
       orientation: DEFAULT_ORIENTATION,
       quality_preset: DEFAULT_QUALITY_PRESET,
       default_crop_mode: CROP_MODE_PROJECT_DEFAULT,
-      settings: {
-        allow_gaps: true,
-        auto_close_gaps: false,
-        minimum_section_duration_seconds: 0.25,
-        show_resolved_model_output: false,
-      },
       global_prompt: {
         enabled: false,
         prompt: "",
         position: "Prefix",
-        show_effective_prompt: false,
       },
       audio: {
         use_native_audio: false,
-        always_normalize: false,
         normalization_mode: "Integrated LUFS",
         target_lufs: -16.0,
         true_peak_limit_db: -1.0,
         default_volume: 100.0,
         default_fade_in_seconds: 0.0,
         default_fade_out_seconds: 0.0,
-      },
-      privacy: {
-        mode: true,
-      },
-      display: {
-        show_section_labels: true,
-        show_thumbnails: true,
-        show_audio_waveforms: true,
       },
       metadata: {
         character_references_enabled: true,

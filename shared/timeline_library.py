@@ -838,7 +838,6 @@ def _fork_project_payload_identity(kind: str, payload: dict[str, Any], name: str
         storage = {}
     project["storage"] = {
         **storage,
-        "asset_root_directory": _coerce_text(storage.get("asset_root_directory")),
         "project_directory_name": project_directory_name(new_name, new_project_id),
     }
 

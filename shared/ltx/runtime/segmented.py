@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from ...timeline.references import parse_reference_tags
+from ...timeline.global_settings import global_privacy_mode
 from ...ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from ...segmented_executor import (
     SegmentSpillStore,
@@ -78,7 +79,7 @@ def build_ltx_segmented_executor_outputs(
         total=(len(segments) * 12) + 4,
     )
     status_reporter.report("timeline.prepare", f"LTX Executor: preparing {len(segments)} segment(s)")
-    privacy_mode = bool(plan.get("project", {}).get("privacy", {}).get("mode"))
+    privacy_mode = global_privacy_mode()
     sampling_debug = _sampling_schedule_debug(sigmas, steps, scheduler)
     store = SegmentSpillStore(privacy_mode=privacy_mode)
     cleanup_state: dict[str, Any] = {}

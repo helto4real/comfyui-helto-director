@@ -42,7 +42,7 @@ export async function showDirectorLibrary(options = {}) {
   closeDirectorLibrary(documentRef);
 
   const timeline = options.timeline ?? null;
-  const privacyMode = Boolean(options.privacyMode ?? timeline?.project?.privacy?.mode);
+  const privacyMode = Boolean(options.privacyMode);
   const overlay = documentRef.createElement("div");
   overlay.className = libraryDialogClassName(privacyMode);
   overlay.setAttribute("role", "dialog");
@@ -87,6 +87,7 @@ export async function showDirectorLibrary(options = {}) {
             itemId: linkedId,
             documentRef,
             setStatus,
+            privacyMode,
             callbacks: options,
           });
           await refreshLibrary();
@@ -589,6 +590,7 @@ function renderProjectCardContent(documentRef, item, privacyMode, context) {
         itemId: item.id,
         documentRef,
         setStatus: context.setStatus,
+        privacyMode,
         callbacks: context.callbacks,
       });
       await context.refresh?.();
@@ -1284,7 +1286,6 @@ export function forkProjectIdentity(timeline, name = null) {
   timeline.project.storage = {
     ...currentStorage,
     schema_version: PROJECT_STORAGE_SCHEMA_VERSION,
-    asset_root_directory: String(currentStorage.asset_root_directory ?? "").trim(),
     project_directory_name: projectDirectoryName(identity.name, identity.project_id),
   };
   return timeline;
@@ -1382,7 +1383,7 @@ async function saveCurrentProjectAsNew({ timeline, documentRef, setStatus, priva
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          private: Boolean(privacyMode ?? projectPayload?.project?.privacy?.mode),
+          private: Boolean(privacyMode),
           project: projectPayload,
         }),
       });
@@ -1399,14 +1400,14 @@ async function saveCurrentProjectAsNew({ timeline, documentRef, setStatus, priva
   }
 }
 
-async function updateCurrentProjectLibraryItem({ timeline, itemId, documentRef, setStatus, callbacks }) {
+async function updateCurrentProjectLibraryItem({ timeline, itemId, documentRef, setStatus, privacyMode = false, callbacks }) {
   if (!timeline || !itemId) return;
   if (!confirmProjectUpdate(documentRef)) {
     setStatus?.("Project update canceled.");
     return;
   }
   try {
-    await updateProjectLibraryItem(itemId, timeline);
+    await updateProjectLibraryItem(itemId, timeline, privacyMode);
     stampCurrentProjectLibraryItemId(callbacks, timeline, itemId);
     setStatus?.("Updated project.");
   } catch (error) {
@@ -1524,14 +1525,14 @@ async function fetchCharacterForUse(item) {
   };
 }
 
-async function updateProjectLibraryItem(itemId, timeline) {
+async function updateProjectLibraryItem(itemId, timeline, privacyMode = false) {
   const timelinePayload = cloneProjectForDirectorLibrary(timeline, itemId);
   return fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(itemId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: projectName(timelinePayload),
-      private: Boolean(timelinePayload?.project?.privacy?.mode),
+      private: Boolean(privacyMode),
       project: timelinePayload,
     }),
   });

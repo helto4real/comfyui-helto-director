@@ -109,12 +109,8 @@ function testRefreshDoesNotPreloadAudioWaveforms() {
   cache.loadWaveform = () => { loadCount += 1; };
 
   cache.refresh({
-    project: {
-      privacy: { mode: false },
-      display: { show_thumbnails: true, show_audio_waveforms: true },
-    },
     assets: [{ asset_id: "asset_audio", type: "Audio", path: "/mnt/media/voice.wav" }],
-  });
+  }, { privacy: { mode: false }, display: { show_thumbnails: true, show_audio_waveforms: true } });
 
   assert.equal(loadCount, 0);
 }

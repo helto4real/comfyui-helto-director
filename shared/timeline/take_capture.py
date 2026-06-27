@@ -11,6 +11,7 @@ from ..contracts.video_timeline import (
     ASSET_TYPE_VIDEO,
     TAKE_STATUS_CANDIDATE,
 )
+from .global_settings import global_privacy_mode
 
 
 TAKE_CAPTURE_SCHEMA_VERSION = 1
@@ -42,7 +43,7 @@ def build_take_capture_metadata(
     if not shot_id and segment_context is None:
         return None
 
-    privacy_mode = bool(_raw_dict(_raw_dict(plan.get("project")).get("privacy")).get("mode"))
+    privacy_mode = global_privacy_mode()
     safe_resolved_loras = _safe_resolved_loras(resolved_loras, privacy_mode)
     prompt_hash = _stable_hash(_prompt_projection(plan))
     plan_hash = _stable_hash(

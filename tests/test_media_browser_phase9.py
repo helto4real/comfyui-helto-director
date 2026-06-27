@@ -13,6 +13,14 @@ from shared.contracts.video_timeline import ASSET_TYPE_VIDEO, MODEL_LORA_TARGET_
 from shared import media_browser
 from shared.privacy import CRYPTO_AVAILABLE
 from shared.timeline.generated_capture import build_generated_take_capture_sidecar
+import shared.timeline.global_settings as timeline_global_settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_global_settings(tmp_path, monkeypatch):
+    config_dir = tmp_path / "timeline_global_config"
+    monkeypatch.setattr(timeline_global_settings, "CONFIG_DIR", config_dir)
+    timeline_global_settings.save_global_settings({"privacy": {"mode": False}})
 
 
 def test_media_browser_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):
@@ -153,11 +161,11 @@ def test_video_browser_reads_generated_take_sidecar_and_privacy_redacts(tmp_path
 
 
 def test_project_take_capture_discovery_filters_by_shot_and_ignores_malformed_sidecars(tmp_path):
+    timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(tmp_path)}, "privacy": {"mode": False}})
     project = {
         "identity": {"project_id": "proj_capturetest", "name": "Capture Test"},
         "storage": {
-            "schema_version": 1,
-            "asset_root_directory": str(tmp_path),
+            "schema_version": 2,
             "project_directory_name": "capture_test_proj_capturetest",
         },
     }
@@ -367,11 +375,11 @@ def test_image_browser_thumbnail_privacy_returns_bytes_and_encrypted_cache(tmp_p
 
 
 def project_storage_payload(tmp_path):
+    timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(tmp_path)}, "privacy": {"mode": False}})
     return {
         "identity": {"project_id": "proj_capturetest", "name": "Capture Test"},
         "storage": {
-            "schema_version": 1,
-            "asset_root_directory": str(tmp_path),
+            "schema_version": 2,
             "project_directory_name": "capture_test_proj_capturetest",
         },
     }

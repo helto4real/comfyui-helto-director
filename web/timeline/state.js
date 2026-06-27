@@ -5,6 +5,12 @@ import { deleteSelectedItem } from "./operations.js";
 import { validateVideoTimeline } from "./validation.js";
 import { TimelineUndoStack } from "./undo.js";
 import {
+  fetchGlobalSettings,
+  isGlobalPrivacyMode,
+  normalizeGlobalSettings,
+  saveGlobalSettings,
+} from "./global_settings.js";
+import {
   encryptTimelineSync,
   fetchPrivacyJson,
   isEncryptedPrivacyPayload,
@@ -19,9 +25,12 @@ export class TimelineStateController {
     this.app = app;
     this.window = options.window ?? globalThis.window;
     this.debounceMs = options.debounceMs ?? 300;
+    this.autoLoadGlobalSettings = options.loadGlobalSettings !== false;
     this.undo = new TimelineUndoStack(options.undoLimit ?? 100);
     this.hiddenWidget = findWidget(node, VIDEO_TIMELINE_WIDGET);
-    this.timeline = loadTimelineState(node, { deferEncrypted: true });
+    this.globalSettings = normalizeGlobalSettings(options.globalSettings);
+    this.globalSettingsError = "";
+    this.timeline = loadTimelineState(node);
     this.pendingDebounce = null;
     this.gestureStartState = null;
     this.timelineKeyboardScope = null;
@@ -33,6 +42,7 @@ export class TimelineStateController {
 
     hideWidget(this.hiddenWidget);
     this.installEventListeners();
+    if (this.autoLoadGlobalSettings) this.loadGlobalSettings();
     if (this.hasEncryptedTimelineWidget()) {
       this.decryptTimelineWidget();
     } else {
@@ -79,14 +89,13 @@ export class TimelineStateController {
       const state = result.state || {};
       this.timeline = normalizeVideoTimeline(state.timeline || state || {});
       applyVisibleNodeProperties(this.timeline, this.node);
-      this.timeline.validation = validateVideoTimeline(this.timeline);
+      this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
       this.privacyError = "";
       this.requestRender();
       this.refreshAsyncMediaCaches("privacy decrypt", {});
       return true;
     } catch (error) {
       this.timeline = normalizeVideoTimeline("");
-      this.timeline.project.privacy.mode = true;
       this.privacyError = `Private timeline locked: ${error.message}`;
       console.error("Helto Director privacy decrypt failed", error);
       this.requestRender();
@@ -106,7 +115,7 @@ export class TimelineStateController {
     const previousState = options.previousState ?? deepClone(this.timeline);
     this.timeline = normalizeVideoTimeline(this.timeline);
     applyVisibleNodeProperties(this.timeline, this.node);
-    this.timeline.validation = validateVideoTimeline(this.timeline);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
     this.timeline.ui_state.state_revision = Number(this.timeline.ui_state.state_revision ?? 0) + 1;
 
     if (options.pushUndo !== false && serializeTimeline(previousState) !== serializeTimeline(this.timeline)) {
@@ -114,7 +123,7 @@ export class TimelineStateController {
     }
 
     try {
-      writeTimelineWidget(this.node, this.timeline);
+      writeTimelineWidget(this.node, this.timeline, this.globalSettings);
       if (!this.decryptingPrivacy) this.privacyError = "";
     } catch (error) {
       this.privacyError = `Privacy encryption failed: ${error.message}`;
@@ -241,7 +250,43 @@ export class TimelineStateController {
   }
 
   refreshAsyncMediaCaches() {
-    this.node?._timelineMediaCache?.refresh?.(this.timeline);
+    this.node?._timelineMediaCache?.refresh?.(this.timeline, this.globalSettings);
+  }
+
+  async loadGlobalSettings() {
+    try {
+      this.globalSettings = await fetchGlobalSettings();
+      this.globalSettingsError = "";
+      this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+      try {
+        writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+      } catch (error) {
+        this.privacyError = `Privacy encryption failed: ${error.message}`;
+      }
+      this.requestRender();
+      this.refreshAsyncMediaCaches("global settings", {});
+      return this.globalSettings;
+    } catch (error) {
+      this.globalSettingsError = `Global settings unavailable: ${error.message}`;
+      console.warn("Helto Director global settings failed", error);
+      this.requestRender();
+      return this.globalSettings;
+    }
+  }
+
+  async updateGlobalSettings(mutator) {
+    const previousPrivacy = isGlobalPrivacyMode(this.globalSettings);
+    const next = normalizeGlobalSettings(this.globalSettings);
+    mutator(next);
+    this.globalSettings = await saveGlobalSettings(next);
+    this.globalSettingsError = "";
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    if (previousPrivacy !== isGlobalPrivacyMode(this.globalSettings)) {
+      writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+    }
+    this.requestRender();
+    this.refreshAsyncMediaCaches("global settings", {});
+    return this.globalSettings;
   }
 }
 
@@ -263,6 +308,7 @@ export function mountTimelineState(node, app, options = {}) {
   node.redoTimelineChange = () => controller.redoTimelineChange();
   node.deleteSelectedTimelineItem = () => controller.deleteSelectedTimelineItem();
   node.setTimelineKeyboardScope = (element) => controller.setTimelineKeyboardScope(element);
+  node.updateTimelineGlobalSettings = (mutator) => controller.updateGlobalSettings(mutator);
   return controller;
 }
 
@@ -274,9 +320,7 @@ export function unmountTimelineState(node) {
 export function loadTimelineState(node) {
   const widget = findWidget(node, VIDEO_TIMELINE_WIDGET);
   if (isEncryptedPrivacyPayload(widget?.value)) {
-    const timeline = normalizeVideoTimeline("");
-    timeline.project.privacy.mode = true;
-    return timeline;
+    return normalizeVideoTimeline("");
   }
   const timeline = normalizeVideoTimeline(widget?.value ?? "");
   applyVisibleNodeProperties(timeline, node);
@@ -284,10 +328,10 @@ export function loadTimelineState(node) {
   return timeline;
 }
 
-export function writeTimelineWidget(node, timeline) {
+export function writeTimelineWidget(node, timeline, globalSettings = null) {
   const widget = findWidget(node, VIDEO_TIMELINE_WIDGET);
   if (widget) {
-    if (timeline?.project?.privacy?.mode) {
+    if (isGlobalPrivacyMode(globalSettings)) {
       const envelope = encryptTimelineSync(timeline);
       widget.value = JSON.stringify(envelope);
     } else {

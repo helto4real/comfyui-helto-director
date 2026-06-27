@@ -6,13 +6,11 @@ import re
 from typing import Any
 from uuid import uuid4
 
-import folder_paths
-
 from ..contracts.video_timeline import (
-    DEFAULT_PROJECT_ASSET_ROOT_SUBDIRECTORY,
     DEFAULT_PROJECT_NAME,
     PROJECT_STORAGE_SCHEMA_VERSION,
 )
+from .global_settings import resolve_global_asset_root
 
 
 PROJECT_ID_PREFIX = "proj_"
@@ -39,7 +37,6 @@ def create_default_project_storage(
     name = _safe_name(name) or DEFAULT_PROJECT_NAME
     return {
         "schema_version": PROJECT_STORAGE_SCHEMA_VERSION,
-        "asset_root_directory": "",
         "project_directory_name": project_directory_name(name, project_id),
     }
 
@@ -63,7 +60,6 @@ def normalize_project_identity_and_storage(project: dict[str, Any]) -> None:
         directory_name = project_directory_name(name, project_id)
     project["storage"] = {
         "schema_version": PROJECT_STORAGE_SCHEMA_VERSION,
-        "asset_root_directory": _safe_string(storage.get("asset_root_directory")),
         "project_directory_name": directory_name,
     }
 
@@ -85,18 +81,7 @@ def project_directory_name(name: str, project_id: str) -> str:
 
 
 def resolve_project_asset_root(project: dict[str, Any], *, create: bool = True) -> Path:
-    project = normalized_project(project)
-    configured = _safe_string(project["storage"].get("asset_root_directory"))
-    if configured:
-        root = Path(configured).expanduser()
-        if not root.is_absolute():
-            raise ProjectStorageError("PROJECT_STORAGE_ROOT_NOT_ABSOLUTE: Asset Root Directory must be an absolute path.")
-    else:
-        root = Path(folder_paths.get_output_directory()) / DEFAULT_PROJECT_ASSET_ROOT_SUBDIRECTORY
-    root = root.resolve()
-    if create:
-        root.mkdir(parents=True, exist_ok=True)
-    return root
+    return resolve_global_asset_root(create=create)
 
 
 def resolve_project_directory(project: dict[str, Any], *, create: bool = True) -> Path:
