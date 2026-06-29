@@ -136,7 +136,7 @@ def test_assemble_imported_clip_plus_generated_take(tmp_path):
     assert debug["clips"][1]["source_kind"] == "accepted_take"
 
 
-def test_missing_accepted_take_warns_and_skips_when_policy_allows(tmp_path):
+def test_multi_shot_missing_accepted_take_blocks_sequence_when_policy_allows(tmp_path):
     generated = _write_test_video(tmp_path / "generated.mp4", color=(128, 128, 255))
     timeline = _timeline_with_assets(
         [_video_asset("asset_generated", generated, ASSET_SOURCE_GENERATED)],
@@ -153,9 +153,23 @@ def test_missing_accepted_take_warns_and_skips_when_policy_allows(tmp_path):
 
     frames, _audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
 
-    assert tuple(frames.shape) == (4, 16, 16, 3)
+    assert tuple(frames.shape) == (1, 16, 16, 3)
+    assert debug["summary"]["status"] == "not_built"
+    assert debug["summary"]["included_clip_count"] == 0
+    assert debug["summary"]["output_frame_count"] == 0
+    assert debug["summary"]["placeholder_output_frame_count"] == 1
     assert debug["summary"]["missing_accepted_take_count"] == 1
     assert "SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING" in _warning_codes(debug)
+    assert "SEQUENCE_ASSEMBLY_INCOMPLETE_SEQUENCE" in _warning_codes(debug)
+    assert debug["shots"] == [
+        {
+            "shot_id": "shot_missing",
+            "type": SHOT_TYPE_GENERATED,
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "status": "blocked_missing_source",
+        }
+    ]
 
 
 def test_missing_accepted_take_media_warns_and_skips_when_policy_allows(tmp_path):
@@ -267,6 +281,25 @@ def test_missing_accepted_take_errors_when_policy_requires_it(tmp_path):
     )
 
     with pytest.raises(SequenceAssemblyError, match="SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING"):
+        assemble_timeline_sequence(timeline, missing_take_policy="error")
+
+
+def test_multi_shot_missing_accepted_take_errors_when_policy_requires_it(tmp_path):
+    generated = _write_test_video(tmp_path / "generated.mp4", color=(128, 128, 255))
+    timeline = _timeline_with_assets(
+        [_video_asset("asset_generated", generated, ASSET_SOURCE_GENERATED)],
+        [
+            _generated_shot("shot_generated", "asset_generated", 0.0, 1.0),
+            {
+                "shot_id": "shot_missing",
+                "type": SHOT_TYPE_GENERATED,
+                "start_time": 1.0,
+                "end_time": 2.0,
+            },
+        ],
+    )
+
+    with pytest.raises(SequenceAssemblyError, match="SEQUENCE_ASSEMBLY_INCOMPLETE_SEQUENCE"):
         assemble_timeline_sequence(timeline, missing_take_policy="error")
 
 

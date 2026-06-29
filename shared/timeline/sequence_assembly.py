@@ -85,6 +85,14 @@ def assemble_timeline_sequence(
             "errors": [],
         }
 
+        if _sequence_has_incomplete_shots(shots, missing_take_policy, debug):
+            if status_reporter is not None:
+                status_reporter.report("sequence.placeholder", "Sequence Assembly: sequence incomplete")
+            result = _empty_sequence_result(frame_rate, debug)
+            if status_reporter is not None:
+                status_reporter.done("Sequence Assembly: sequence incomplete")
+            return result
+
         clip_entries = _decode_sequence_clips(
             timeline,
             assets_by_id,
@@ -298,6 +306,77 @@ def _decode_sequence_clips(
         )
         debug["shots"].append(shot_debug)
     return clip_entries
+
+
+def _sequence_has_incomplete_shots(
+    shots: list[dict[str, Any]],
+    missing_take_policy: str,
+    debug: dict[str, Any],
+) -> bool:
+    debug["summary"]["shot_count"] = len(shots)
+    if len(shots) <= 1:
+        return False
+
+    incomplete_shots = []
+    for shot in shots:
+        if _shot_has_sequence_source(shot):
+            continue
+        shot_id = str(shot.get("shot_id") or "")
+        details = {"shot_id": shot_id, "shot_type": shot.get("type")}
+        incomplete_shots.append(details)
+        shot_debug = {
+            "shot_id": shot_id,
+            "type": shot.get("type"),
+            "start_time": shot.get("start_time"),
+            "end_time": shot.get("end_time"),
+            "status": "blocked_missing_source",
+        }
+        debug["shots"].append(shot_debug)
+        if missing_take_policy == "error":
+            _add_error(
+                debug,
+                "SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING",
+                f"Shot {shot_id} has no accepted take or clip instance.",
+                details,
+            )
+            continue
+        debug["summary"]["missing_accepted_take_count"] += 1
+        _add_warning(
+            debug,
+            "SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING",
+            f"Shot {shot_id} has no accepted take or clip instance; sequence assembly is blocked.",
+            details,
+        )
+
+    if not incomplete_shots:
+        return False
+
+    details = {"missing_shots": incomplete_shots, "shot_count": len(shots)}
+    if missing_take_policy == "error":
+        _add_error(
+            debug,
+            "SEQUENCE_ASSEMBLY_INCOMPLETE_SEQUENCE",
+            "All shots must have an accepted take or imported clip before sequence assembly.",
+            details,
+        )
+        raise SequenceAssemblyError(
+            "SEQUENCE_ASSEMBLY_INCOMPLETE_SEQUENCE: All shots must have an accepted take or imported clip before sequence assembly."
+        )
+
+    _add_warning(
+        debug,
+        "SEQUENCE_ASSEMBLY_INCOMPLETE_SEQUENCE",
+        "Sequence assembly is blocked until every shot has an accepted take or imported clip.",
+        details,
+    )
+    return True
+
+
+def _shot_has_sequence_source(shot: dict[str, Any]) -> bool:
+    if shot.get("type") == SHOT_TYPE_IMPORTED:
+        clip_instance = _clip_instance(shot)
+        return bool(clip_instance and clip_instance.get("asset_id"))
+    return _accepted_take(shot) is not None
 
 
 def _resolve_shot_source(

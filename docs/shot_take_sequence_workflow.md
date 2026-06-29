@@ -137,8 +137,10 @@ and audio mixing.
 
 When no accepted generated take or imported clip is ready, the Timeline Sequence
 Assembler blocks its media outputs silently instead of producing a black
-placeholder. This lets the graph stay fully connected while you render or review
-one not-yet-accepted shot.
+placeholder. Multi-shot sequences also block until every generated, edited, or
+extended shot has an accepted take; imported shots count as ready when they have
+an enabled imported video clip. This prevents partial sequence output while you
+render or review one not-yet-accepted shot.
 
 Blend seams can blend frames when clip shapes are compatible. Unsupported or
 advanced transition behavior falls back to hard-cut style assembly with warnings

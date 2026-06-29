@@ -217,7 +217,9 @@ components. It reads `VIDEO_TIMELINE`, applies a missing-take policy, and
 returns video, image frames, audio, frame rate, debug info, and whether a video
 was assembled. If no accepted or imported clip is ready, the media outputs block
 downstream execution silently so connected save/preview nodes can stay wired
-without producing a black placeholder.
+without producing a black placeholder. Multi-shot sequences also block until all
+non-imported shots have accepted takes; imported shots are ready when they have
+an enabled imported video clip.
 
 For the full workflow, read
 [Shot, Take, And Sequence Workflow](shot_take_sequence_workflow.md).
