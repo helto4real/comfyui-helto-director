@@ -582,4 +582,4 @@ testTimelineLibrarySaveClonePrunesUnreferencedAssets();
 testTimelinePreviewIgnoresOrphanAssetsAndUsesReferencedMedia();
 testRendererAndLibraryContractStrings();
 
-console.log("phase18 director library tests passed");
+console.log("director library tests passed");

@@ -616,7 +616,7 @@ def test_visual_keyframe_selector_preserves_start_end_and_marks_timed_unsupporte
 
 
 def _load_nodepack():
-    module_path = Path(__file__).resolve().parents[1]
+    module_path = Path(__file__).resolve().parents[2]
     sys_module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(
         sys_module_name,

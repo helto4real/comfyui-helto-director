@@ -122,4 +122,4 @@ testWaveformUrlClampsPeakCount();
 testWaveformCacheUsesAssetAndPeakCountKeys();
 testRefreshDoesNotPreloadAudioWaveforms();
 
-console.log("phase7 media cache tests passed");
+console.log("media cache tests passed");

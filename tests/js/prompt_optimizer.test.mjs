@@ -71,4 +71,4 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
 testPromptOptimizerRowsUseTimelineSectionsAndAssets();
 testPromptOptimizerUsesModernRouteAndApplyMutation();
 
-console.log("phase10 prompt optimizer tests passed");
+console.log("prompt optimizer tests passed");

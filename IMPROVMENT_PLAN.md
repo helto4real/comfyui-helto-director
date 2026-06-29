@@ -31,7 +31,7 @@ Suggested implementation route:
   duplicate, and movement.
 - Update `web/timeline/renderer.js` for selection interactions and selected
   styling.
-- Add or update focused JS tests in `tests/js/phase4_operations.test.mjs` and
+- Add or update focused JS tests in `tests/js/timeline_operations.test.mjs` and
   a UI-level test if needed.
 
 Validation:
@@ -103,7 +103,8 @@ Suggested implementation route:
 
 Validation:
 - Run focused JS timeline tests plus `npm run test:js`.
-- Run focused LTX Python tests such as `tests/test_ltx_phase9.py` and relevant
+- Run focused LTX Python tests such as
+  `tests/ltx/test_runtime_media_audio_loras.py` and relevant
   media/runtime tests.
 - Run `git diff --check`.
 

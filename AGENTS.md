@@ -118,8 +118,9 @@ Start here for Director node execution, visible widgets, hidden
 - `nodes/video_timeline_director/`
 - `shared/timeline/`
 - `shared/contracts/`
-- Tests: `tests/test_director_phase2.py`, `tests/test_timeline_phase1.py`,
-  `tests/test_comfyui_loader_import.py`
+- Tests: `tests/director/test_video_timeline_director_node.py`,
+  `tests/timeline/test_contract_normalization_validation.py`,
+  `tests/integration/test_comfyui_loader_import.py`
 
 Do not load frontend files unless the task mentions UI behavior or serialization
 from the browser.
@@ -139,8 +140,9 @@ privacy display behavior:
 - `web/timeline/validation.js`
 - `web/timeline/schema.js`
 - `web/timeline/migration.js`
-- Tests: `tests/js/phase3_state.test.mjs`,
-  `tests/js/phase4_operations.test.mjs`, `tests/js/phase6_zoom.test.mjs`,
+- Tests: `tests/js/timeline_state.test.mjs`,
+  `tests/js/timeline_operations.test.mjs`,
+  `tests/js/timeline_range_geometry.test.mjs`,
   `tests/js/ui_timeline_preview.test.mjs`
 
 Only open backend files if the UI change affects the serialized
@@ -159,10 +161,10 @@ creation, thumbnail routes, waveform routes, and media cache hydration:
 - `routes/media_cache.py`
 - `shared/media_browser.py`
 - `shared/media_cache.py`
-- Tests: `tests/test_media_browser_phase9.py`,
-  `tests/test_media_cache_phase7.py`, `tests/js/phase5_media.test.mjs`,
-  `tests/js/phase7_media_cache.test.mjs`,
-  `tests/js/phase9_media_picker.test.mjs`
+- Tests: `tests/media/test_browser_routes.py`,
+  `tests/media/test_cache_routes.py`,
+  `tests/js/timeline_media_contract.test.mjs`,
+  `tests/js/media_cache.test.mjs`, `tests/js/media_picker.test.mjs`
 
 Remember: workflow JSON stores file references and metadata only, never media
 payloads, thumbnails, or waveform arrays.
@@ -175,7 +177,7 @@ planning, debug info, and LTX validation:
 - `nodes/ltx_timeline_config/`
 - `nodes/ltx_timeline_planner/`
 - `shared/ltx/`
-- Tests: `tests/test_ltx_phase8.py`
+- Tests: `tests/ltx/test_planner_config_contract.py`
 
 Keep all LTX-specific behavior in these LTX paths. If a change seems to require
 Director changes, keep the Director generic and promote shared behavior through
@@ -192,9 +194,11 @@ output:
 - `nodes/wan_timeline_runtime/`
 - `shared/wan/`
 - `shared/wan/runtime/`
-- Tests: `tests/test_wan_phase11.py`, `tests/test_wan_phase13.py`,
-  `tests/test_wan_phase14.py`, `tests/test_wan_phase15.py`,
-  `tests/test_wan_phase16.py`, `tests/test_wan_bernini.py`
+- Tests: `tests/wan/test_planner_config_contract.py`,
+  `tests/wan/test_media_policy_and_plan_only.py`,
+  `tests/wan/test_runtime_core_and_conditioning.py`,
+  `tests/wan/test_runtime_debug_compatibility.py`,
+  `tests/wan/test_visual_conditioning_modes.py`, `tests/wan/test_bernini.py`
 
 Keep all WAN-specific behavior in these WAN paths. The Director remains generic,
 and timeline media/reference semantics should cross the layer boundary through
@@ -227,7 +231,7 @@ PYTHONPATH=/home/thhel/git/ComfyUI /home/thhel/.pyenv/versions/3.13.2/bin/python
 Run focused Python tests:
 
 ```bash
-PYTHONPATH=/home/thhel/git/ComfyUI python -m pytest tests/test_ltx_phase8.py
+PYTHONPATH=/home/thhel/git/ComfyUI python -m pytest tests/ltx/test_planner_config_contract.py
 ```
 
 Compile changed Python files:

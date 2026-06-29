@@ -20,7 +20,7 @@ from shared.timeline import create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 
 
-def test_phase13_wan_config_defaults_and_legacy_normalization():
+def test_wan_media_policy_config_defaults_and_legacy_normalization():
     config = create_wan_timeline_config()
 
     assert config["model_mode"] == "I2V-A14B"

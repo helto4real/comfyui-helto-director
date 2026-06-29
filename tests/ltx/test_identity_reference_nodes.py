@@ -22,7 +22,7 @@ from shared.timeline import create_default_video_timeline
 
 
 def _load_nodepack():
-    module_path = Path(__file__).resolve().parents[1]
+    module_path = Path(__file__).resolve().parents[2]
     sys_module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(
         sys_module_name,
@@ -147,7 +147,7 @@ def _image_plan(path: Path):
     return plan
 
 
-def test_phase10_nodes_register_with_timeline_names_and_mappings():
+def test_identity_nodes_register_with_timeline_names_and_mappings():
     module, node_classes = _load_nodepack()
     node_ids = [node_class.define_schema().node_id for node_class in node_classes]
 
@@ -165,7 +165,7 @@ def test_phase10_nodes_register_with_timeline_names_and_mappings():
         assert "Timeline" in module.NODE_DISPLAY_NAME_MAPPINGS[node_id]
 
 
-def test_phase10_node_schemas_use_expected_socket_types():
+def test_identity_node_schemas_use_expected_socket_types():
     classes = _registered_classes_by_id()
 
     crop_schema = classes["HeltoLTX23TimelineCropReferenceTail"].define_schema()
@@ -336,7 +336,7 @@ def test_runtime_applies_identity_anchor_and_does_not_mutate_plan(monkeypatch):
     assert calls["identity_anchor"] == {"kind": "face"}
     assert calls["sigmas"] == "sigmas"
     assert isinstance(calls["guide_data"], dict)
-    assert not any("accepted but Phase 9 runtime does not apply" in entry for entry in runtime_debug["diagnostics"])
+    assert not any("accepted but legacy runtime does not apply" in entry for entry in runtime_debug["diagnostics"])
     assert plan == original_plan
 
 

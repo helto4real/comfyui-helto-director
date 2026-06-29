@@ -88,4 +88,4 @@ testFilteredChoicesUseRegexAndFallbackOnInvalidRegex();
 await testFetchTimelineLorasUsesDirectorRoute();
 testPrivacyLockedEditorDoesNotOpen();
 
-console.log("phase19 lora editor tests passed");
+console.log("lora editor tests passed");

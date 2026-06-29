@@ -78,4 +78,4 @@ testRangeClampSnapsWholeSecondsAndMinimumWidth();
 testZoomToFitResetsRange();
 testClientXUsesRenderedScaleToTimelinePixels();
 
-console.log("phase6 timeline range tests passed");
+console.log("timeline range geometry tests passed");

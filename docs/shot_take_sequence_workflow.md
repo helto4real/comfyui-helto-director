@@ -86,8 +86,8 @@ Take metadata can include:
 - resolved LoRA snapshot;
 - runtime/settings metadata.
 
-Runtime and executor debug payloads may produce take-registration metadata. In
-this phase, attaching generated output to the timeline is manual or
+Runtime and executor debug payloads may produce take-registration metadata.
+Attaching generated output to the timeline is currently manual or
 semi-automatic through UI/helper flows rather than automatic hidden mutation of
 the Director node after execution.
 
@@ -149,7 +149,7 @@ or preserved metadata rather than claiming model-specific transition support.
 - Only one sequence is supported for now.
 - Full-timeline generation remains supported and is still useful.
 - Shot-based generation is additive.
-- Take registration may be manual or semi-automatic in this phase.
+- Take registration may be manual or semi-automatic in the current workflow.
 - Automatic mutation of the Director timeline after runtime execution is
   deferred.
 - Advanced transitions are deferred.

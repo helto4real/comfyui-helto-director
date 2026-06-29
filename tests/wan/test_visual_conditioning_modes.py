@@ -16,8 +16,8 @@ from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE, create_default_
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 
 
-def test_phase16_runtime_schema_preserves_existing_contract():
-    module_path = Path(__file__).resolve().parents[1]
+def test_wan_visual_runtime_schema_preserves_existing_contract():
+    module_path = Path(__file__).resolve().parents[2]
     module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(module_name, module_path / "__init__.py")
     module = importlib.util.module_from_spec(spec)
@@ -63,7 +63,7 @@ def test_phase16_runtime_schema_preserves_existing_contract():
     assert "WAN_RUNTIME_PAYLOAD" not in output_names
 
 
-def test_phase16_comfyui_core_i2v_requires_start_image():
+def test_wan_visual_comfyui_core_i2v_requires_start_image():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
@@ -78,7 +78,7 @@ def test_phase16_comfyui_core_i2v_requires_start_image():
         )
 
 
-def test_phase16_comfyui_core_applies_one_start_image_with_real_core_helper(tmp_path):
+def test_wan_visual_comfyui_core_applies_one_start_image_with_real_core_helper(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full", resolution_profile="Quick Draft"),
@@ -100,7 +100,7 @@ def test_phase16_comfyui_core_applies_one_start_image_with_real_core_helper(tmp_
     assert video_latent["samples"].shape[1] == 16
 
 
-def test_phase16_comfyui_core_applies_start_end_and_preserves_timed_unsupported(tmp_path):
+def test_wan_visual_comfyui_core_applies_start_end_and_preserves_timed_unsupported(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=4),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full", resolution_profile="Quick Draft"),
@@ -127,7 +127,7 @@ def test_phase16_comfyui_core_applies_start_end_and_preserves_timed_unsupported(
     assert video_latent["samples"].shape[1] == 16
 
 
-def test_phase16_painter_motion_boost_applies_i2v_variant(tmp_path):
+def test_wan_visual_painter_motion_boost_applies_i2v_variant(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(
@@ -158,7 +158,7 @@ def test_phase16_painter_motion_boost_applies_i2v_variant(tmp_path):
     assert video_latent["samples"].shape[1] == 16
 
 
-def test_phase16_painter_motion_boost_applies_first_last_variant(tmp_path):
+def test_wan_visual_painter_motion_boost_applies_first_last_variant(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=4),
         create_wan_timeline_config(
@@ -188,7 +188,7 @@ def test_phase16_painter_motion_boost_applies_first_last_variant(tmp_path):
     assert positive[0][1]["concat_latent_image"].shape[1] == 16
 
 
-def test_phase16_wan22_latent_helper_is_used_for_48_channel_vae(tmp_path):
+def test_wan_visual_wan22_latent_helper_is_used_for_48_channel_vae(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full", resolution_profile="Quick Draft"),
@@ -207,7 +207,7 @@ def test_phase16_wan22_latent_helper_is_used_for_48_channel_vae(tmp_path):
     assert positive[0][1]["prompt"]
 
 
-def test_phase16_painter_motion_boost_preserves_wan22_latent_shape(tmp_path):
+def test_wan_visual_painter_motion_boost_preserves_wan22_latent_shape(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(
@@ -235,7 +235,7 @@ def test_phase16_painter_motion_boost_preserves_wan22_latent_shape(tmp_path):
     assert "noise_mask" in video_latent
 
 
-def test_phase16_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
+def test_wan_visual_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(
@@ -269,7 +269,7 @@ def test_phase16_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
     assert all("path" not in decision for decision in runtime_debug["fmlf_advanced_i2v"]["media_decisions"])
 
 
-def test_phase16_fmlf_svi_uses_previous_latent(tmp_path):
+def test_wan_visual_fmlf_svi_uses_previous_latent(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(
@@ -305,7 +305,7 @@ def test_phase16_fmlf_svi_uses_previous_latent(tmp_path):
     assert fmlf["anchor_source"] == "segment_previous_tail"
 
 
-def test_phase16_fmlf_auto_continue_uses_motion_frames(tmp_path):
+def test_wan_visual_fmlf_auto_continue_uses_motion_frames(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1),
         create_wan_timeline_config(
@@ -335,7 +335,7 @@ def test_phase16_fmlf_auto_continue_uses_motion_frames(tmp_path):
     assert fmlf["motion_frame_count"] == 4
 
 
-def test_phase16_fmlf_rejects_unsupported_model_mode(tmp_path):
+def test_wan_visual_fmlf_rejects_unsupported_model_mode(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
         create_wan_timeline_config(
@@ -355,7 +355,7 @@ def test_phase16_fmlf_rejects_unsupported_model_mode(tmp_path):
         )
 
 
-def test_phase16_text_capable_core_mode_can_run_without_image_keyframes():
+def test_wan_visual_text_capable_core_mode_can_run_without_image_keyframes():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B", debug_mode="Summary"),
@@ -381,7 +381,7 @@ def test_phase16_text_capable_core_mode_can_run_without_image_keyframes():
     assert runtime_debug["visual_conditioning"]["selected_primary_image"] is None
 
 
-def test_phase16_missing_media_fails_before_silent_prompt_only_fallback(tmp_path):
+def test_wan_visual_missing_media_fails_before_silent_prompt_only_fallback(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=1, write_files=False),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
@@ -396,7 +396,7 @@ def test_phase16_missing_media_fails_before_silent_prompt_only_fallback(tmp_path
         )
 
 
-def test_phase16_audio_stays_final_mix_metadata_only():
+def test_wan_visual_audio_stays_final_mix_metadata_only():
     plan, _validation, _debug = build_wan_timeline_plan(
         _audio_timeline(),
         create_wan_timeline_config(debug_mode="Summary"),

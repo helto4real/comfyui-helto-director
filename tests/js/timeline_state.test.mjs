@@ -914,4 +914,4 @@ await testPrivacyModeWritesEncryptedHiddenWidget();
 await testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget();
 await testEncryptedWorkflowLoadDecryptsBeforeRender();
 
-console.log("phase3 state tests passed");
+console.log("timeline state tests passed");

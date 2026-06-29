@@ -235,7 +235,7 @@ def test_resolve_media_path_supports_enabled_media_browser_folder_paths(tmp_path
 
 
 def test_media_view_route_serves_resolved_files_with_private_cache_header():
-    source = (Path(__file__).resolve().parents[1] / "routes" / "media_cache.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[2] / "routes" / "media_cache.py").read_text(encoding="utf-8")
 
     assert '@routes.get(f"{ROUTE_PREFIX}/view")' in source
     assert 'path = resolve_media_path(' in source

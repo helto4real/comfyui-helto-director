@@ -1,6 +1,6 @@
 {
   "type": "module",
   "scripts": {
-    "test:js": "node tests/js/phase3_state.test.mjs && node tests/js/phase4_operations.test.mjs && node tests/js/phase5_media.test.mjs && node tests/js/phase6_zoom.test.mjs && node tests/js/phase7_media_cache.test.mjs && node tests/js/phase9_media_picker.test.mjs && node tests/js/phase10_prompt_optimizer.test.mjs && node tests/js/phase17_character_references.test.mjs && node tests/js/phase18_director_library.test.mjs && node tests/js/phase19_lora_editor.test.mjs && node tests/js/ui_timeline_preview.test.mjs"
+    "test:js": "node tests/js/timeline_state.test.mjs && node tests/js/timeline_operations.test.mjs && node tests/js/timeline_media_contract.test.mjs && node tests/js/timeline_range_geometry.test.mjs && node tests/js/media_cache.test.mjs && node tests/js/media_picker.test.mjs && node tests/js/prompt_optimizer.test.mjs && node tests/js/character_references.test.mjs && node tests/js/director_library.test.mjs && node tests/js/lora_editor.test.mjs && node tests/js/ui_timeline_preview.test.mjs"
   }
 }

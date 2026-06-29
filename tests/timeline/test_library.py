@@ -467,7 +467,7 @@ def test_route_prefix_and_registration_shape():
     assert timeline_library_routes.ROUTE_PREFIX == "/helto_director/library"
     assert callable(timeline_library_routes.register_timeline_library_routes)
 
-    root_init = Path(__file__).resolve().parents[1] / "__init__.py"
+    root_init = Path(__file__).resolve().parents[2] / "__init__.py"
     source = root_init.read_text(encoding="utf-8")
     assert "routes.timeline_library" in source
     assert "register_timeline_library_routes()" in source

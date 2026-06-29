@@ -1103,4 +1103,4 @@ testFitLastDirectorSectionTrimsOnlyFinalSection();
 testFitLastDirectorSectionNoopsWhenFinalWouldBeInvalid();
 testFitDirectorSectionsEvenlyPreservesRelativeGaps();
 
-console.log("phase4 operation tests passed");
+console.log("timeline operation tests passed");

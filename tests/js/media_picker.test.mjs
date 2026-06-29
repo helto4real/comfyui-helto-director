@@ -324,4 +324,4 @@ testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake();
 testInspectorNoLongerRendersPathEntryClearControls();
 testMediaPickerPrivacyUsesSingleDirectorMode();
 
-console.log("phase9 media picker tests passed");
+console.log("media picker tests passed");

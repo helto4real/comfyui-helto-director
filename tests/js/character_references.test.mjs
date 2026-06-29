@@ -180,4 +180,4 @@ testReferenceValidation();
 testPromptReferenceWarnings();
 testGlobalReferenceToggleWarningsAreDisabled();
 
-console.log("phase17 character reference tests passed");
+console.log("character reference tests passed");

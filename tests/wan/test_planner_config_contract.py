@@ -42,7 +42,7 @@ from shared.wan.runtime.segmented import _apply_wan_segment_continuity
 
 
 def _load_nodepack():
-    module_path = Path(__file__).resolve().parents[1]
+    module_path = Path(__file__).resolve().parents[2]
     sys_module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(
         sys_module_name,

@@ -21,7 +21,7 @@ def isolated_global_settings(tmp_path, monkeypatch):
 
 
 def load_nodepack_like_comfyui():
-    module_path = Path(__file__).resolve().parents[1]
+    module_path = Path(__file__).resolve().parents[2]
     sys_module_name = str(module_path).replace(".", "_x_")
     spec = importlib.util.spec_from_file_location(
         sys_module_name,
@@ -75,7 +75,7 @@ def test_comfyui_style_custom_node_loader_imports_package():
     ]
 
 
-def test_comfyui_style_loader_includes_phase10_timeline_identity_nodes():
+def test_comfyui_style_loader_includes_timeline_identity_nodes():
     node_ids = [node.define_schema().node_id for node in get_node_list()]
 
     assert "HeltoLTX23TimelineCropReferenceTail" in node_ids
@@ -86,7 +86,7 @@ def test_comfyui_style_loader_includes_phase10_timeline_identity_nodes():
     assert "HeltoLTX23TimelineApplyIdentityAnchor" in node_ids
 
 
-def test_comfyui_style_loader_includes_phase11_wan_nodes():
+def test_comfyui_style_loader_includes_wan_nodes():
     node_ids = [node.define_schema().node_id for node in get_node_list()]
 
     assert "HeltoWAN22TimelineConfig" in node_ids

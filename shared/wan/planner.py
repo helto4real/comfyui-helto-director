@@ -614,7 +614,7 @@ def _validate_wan_inputs(
                     SEVERITY_ERROR,
                     "Video Section",
                     media.get("item_id"),
-                    "Video Sections are not supported by WAN Phase 13 runtime.",
+                    "Video Sections are not supported by the current WAN runtime.",
                     "Remove the Video Section or change Unsupported Video Section Policy.",
                 ))
             elif prompt:
@@ -623,7 +623,7 @@ def _validate_wan_inputs(
                     SEVERITY_WARNING,
                     "Video Section",
                     media.get("item_id"),
-                    "Video Section media is unsupported and will be prompt-only for WAN Phase 13.",
+                    "Video Section media is unsupported and will be prompt-only for the current WAN runtime.",
                     "Use Image Sections for WAN visual keyframes.",
                 ))
             else:
@@ -703,8 +703,8 @@ def _validate_wan_inputs(
             SEVERITY_INFO,
             "Audio",
             None,
-            "WAN Phase 13 preserves audio clips as final-mix metadata only.",
-            "Audio is not used as WAN generation conditioning in this phase.",
+            "The WAN runtime preserves audio clips as final-mix metadata only.",
+            "Audio is not used as WAN generation conditioning in the current workflow.",
         ))
 
     if prompt_relay["enabled"] and sum(prompt_relay["segment_lengths"]) != prompt_relay["latent_chunk_count"]:

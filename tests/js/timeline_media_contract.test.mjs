@@ -80,4 +80,4 @@ testMissingAssetReferenceIsInvalid();
 testNewVideoSectionUsesTailGuidanceDefaults();
 testEmbeddedMediaIsRejected();
 
-console.log("phase5 media tests passed");
+console.log("timeline media contract tests passed");
