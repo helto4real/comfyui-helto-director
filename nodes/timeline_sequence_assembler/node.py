@@ -7,9 +7,14 @@ from comfy_execution.graph_utils import ExecutionBlocker
 
 from ...shared.contracts.socket_types import DEBUG_INFO, VIDEO_TIMELINE
 from ...shared.timeline.sequence_assembly import assemble_timeline_sequence
+from ...shared.timeline_status import TimelineStatusReporter
 
 
 MISSING_TAKE_POLICIES = ["warning", "error"]
+
+
+def _hidden_unique_id(cls) -> str | None:
+    return getattr(getattr(cls, "hidden", None), "unique_id", None)
 
 
 class TimelineSequenceAssembler(io.ComfyNode):
@@ -47,6 +52,7 @@ class TimelineSequenceAssembler(io.ComfyNode):
                 DEBUG_INFO.Output("debug_info", display_name="DEBUG_INFO"),
                 io.Boolean.Output("has_assembled_video", display_name="has_assembled_video"),
             ],
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -57,9 +63,15 @@ class TimelineSequenceAssembler(io.ComfyNode):
         bit_depth: int = 8,
     ) -> io.NodeOutput:
         policy = missing_take_policy if missing_take_policy in MISSING_TAKE_POLICIES else "warning"
+        status_reporter = TimelineStatusReporter(
+            model="sequence",
+            node_id=_hidden_unique_id(cls),
+            total=1,
+        )
         frames, audio, frame_rate, debug_info = assemble_timeline_sequence(
             video_timeline,
             missing_take_policy=policy,
+            status_reporter=status_reporter,
         )
         has_assembled_video = _has_assembled_video(debug_info)
         if not has_assembled_video:

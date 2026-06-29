@@ -302,9 +302,10 @@ def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
         "summary": {"status": "assembled", "included_clip_count": 1},
     }
 
-    def fake_assemble(video_timeline, *, missing_take_policy):
+    def fake_assemble(video_timeline, *, missing_take_policy, status_reporter):
         assert video_timeline == {"type": "VIDEO_TIMELINE"}
         assert missing_take_policy == "error"
+        assert status_reporter.model == "sequence"
         return frames, audio, 12.5, debug
 
     monkeypatch.setattr(node_module, "assemble_timeline_sequence", fake_assemble)
@@ -340,8 +341,9 @@ def test_timeline_sequence_assembler_node_blocks_media_when_not_assembled(monkey
         "summary": {"status": "not_built", "included_clip_count": 0},
     }
 
-    def fake_assemble(video_timeline, *, missing_take_policy):
+    def fake_assemble(video_timeline, *, missing_take_policy, status_reporter):
         assert missing_take_policy == "warning"
+        assert status_reporter.model == "sequence"
         return frames, audio, 24.0, debug
 
     monkeypatch.setattr(node_module, "assemble_timeline_sequence", fake_assemble)
@@ -364,9 +366,10 @@ def test_timeline_sequence_assembler_node_preserves_error_policy(monkeypatch):
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineSequenceAssembler"]
     node_module = sys.modules[node.__module__]
 
-    def fake_assemble(video_timeline, *, missing_take_policy):
+    def fake_assemble(video_timeline, *, missing_take_policy, status_reporter):
         assert video_timeline == {"type": "VIDEO_TIMELINE"}
         assert missing_take_policy == "error"
+        assert status_reporter.model == "sequence"
         raise ValueError("SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING")
 
     monkeypatch.setattr(node_module, "assemble_timeline_sequence", fake_assemble)

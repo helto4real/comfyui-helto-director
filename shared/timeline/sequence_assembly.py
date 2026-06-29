@@ -15,6 +15,7 @@ from ..contracts.video_timeline import (
 )
 from .normalize import normalize_video_timeline
 from .time_mapping import time_range_to_frames
+from ..timeline_status import TimelineStatusReporter
 
 
 class SequenceAssemblyError(ValueError):
@@ -33,70 +34,97 @@ def assemble_timeline_sequence(
     video_timeline: Any,
     *,
     missing_take_policy: str = "warning",
+    status_reporter: TimelineStatusReporter | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any], float, dict[str, Any]]:
     """Assemble accepted/generated takes and imported clip instances into frames."""
 
-    timeline = normalize_video_timeline(video_timeline)
-    frame_rate = _safe_float(timeline.get("project", {}).get("frame_rate"), 24.0)
-    frame_rate = frame_rate if frame_rate > 0 else 24.0
-    assets_by_id = _assets_by_id(timeline)
-    debug: dict[str, Any] = {
-        "type": "DEBUG_INFO",
-        "source": "Sequence Assembly",
-        "summary": {
-            "status": "pending",
-            "shot_count": 0,
-            "included_clip_count": 0,
-            "missing_accepted_take_count": 0,
-            "missing_asset_count": 0,
-            "missing_source_media_count": 0,
-            "warning_count": 0,
-            "error_count": 0,
-            "output_frame_count": 0,
-            "placeholder_output_frame_count": 0,
-            "frame_rate": frame_rate,
-        },
-        "shots": [],
-        "clips": [],
-        "boundaries": [],
-        "resolution": {
-            "policy": "first_clip_resolution",
-            "width": None,
-            "height": None,
-            "resized_clip_count": 0,
-        },
-        "audio": {
-            "status": "not_built",
-            "clip_count": 0,
-            "timeline_clip_count": 0,
-            "source_clip_count": 0,
-            "source_mixed_clip_count": 0,
-            "source_skipped_clip_count": 0,
-            "diagnostics": [],
-        },
-        "warnings": [],
-        "errors": [],
-    }
+    try:
+        timeline = normalize_video_timeline(video_timeline)
+        shots = _sequence_shots(timeline)
+        if status_reporter is not None:
+            status_reporter.set_total(len(shots) + 4)
+            status_reporter.report("sequence.prepare", "Sequence Assembly: preparing timeline")
+        frame_rate = _safe_float(timeline.get("project", {}).get("frame_rate"), 24.0)
+        frame_rate = frame_rate if frame_rate > 0 else 24.0
+        assets_by_id = _assets_by_id(timeline)
+        debug: dict[str, Any] = {
+            "type": "DEBUG_INFO",
+            "source": "Sequence Assembly",
+            "summary": {
+                "status": "pending",
+                "shot_count": 0,
+                "included_clip_count": 0,
+                "missing_accepted_take_count": 0,
+                "missing_asset_count": 0,
+                "missing_source_media_count": 0,
+                "warning_count": 0,
+                "error_count": 0,
+                "output_frame_count": 0,
+                "placeholder_output_frame_count": 0,
+                "frame_rate": frame_rate,
+            },
+            "shots": [],
+            "clips": [],
+            "boundaries": [],
+            "resolution": {
+                "policy": "first_clip_resolution",
+                "width": None,
+                "height": None,
+                "resized_clip_count": 0,
+            },
+            "audio": {
+                "status": "not_built",
+                "clip_count": 0,
+                "timeline_clip_count": 0,
+                "source_clip_count": 0,
+                "source_mixed_clip_count": 0,
+                "source_skipped_clip_count": 0,
+                "diagnostics": [],
+            },
+            "warnings": [],
+            "errors": [],
+        }
 
-    clip_entries = _decode_sequence_clips(
-        timeline,
-        assets_by_id,
-        frame_rate,
-        missing_take_policy,
-        debug,
-    )
-    if not clip_entries:
-        return _empty_sequence_result(frame_rate, debug)
+        clip_entries = _decode_sequence_clips(
+            timeline,
+            assets_by_id,
+            frame_rate,
+            missing_take_policy,
+            debug,
+            shots=shots,
+            status_reporter=status_reporter,
+        )
+        if not clip_entries:
+            if status_reporter is not None:
+                status_reporter.report("sequence.placeholder", "Sequence Assembly: no clips available")
+            result = _empty_sequence_result(frame_rate, debug)
+            if status_reporter is not None:
+                status_reporter.done("Sequence Assembly: no clips")
+            return result
 
-    frames = _assemble_clip_frames(clip_entries, timeline, debug)
-    debug["clips"] = [_clip_debug_entry(entry) for entry in clip_entries]
-    audio = _assemble_audio(timeline, clip_entries, frames, frame_rate, debug)
-    debug["summary"]["status"] = "assembled"
-    debug["summary"]["included_clip_count"] = len(clip_entries)
-    debug["summary"]["output_frame_count"] = int(frames.shape[0])
-    debug["summary"]["warning_count"] = len(debug["warnings"])
-    debug["summary"]["error_count"] = len(debug["errors"])
-    return frames, audio, frame_rate, debug
+        if status_reporter is not None:
+            status_reporter.report("sequence.stitch", "Sequence Assembly: stitching clip frames")
+        frames = _assemble_clip_frames(clip_entries, timeline, debug)
+        debug["clips"] = [_clip_debug_entry(entry) for entry in clip_entries]
+        if status_reporter is not None:
+            status_reporter.report(
+                "sequence.audio",
+                "Sequence Assembly: mixing audio",
+                frame_count=int(frames.shape[0]),
+            )
+        audio = _assemble_audio(timeline, clip_entries, frames, frame_rate, debug)
+        debug["summary"]["status"] = "assembled"
+        debug["summary"]["included_clip_count"] = len(clip_entries)
+        debug["summary"]["output_frame_count"] = int(frames.shape[0])
+        debug["summary"]["warning_count"] = len(debug["warnings"])
+        debug["summary"]["error_count"] = len(debug["errors"])
+        if status_reporter is not None:
+            status_reporter.done("Sequence Assembly: done")
+        return frames, audio, frame_rate, debug
+    except Exception:
+        if status_reporter is not None:
+            status_reporter.error("Sequence Assembly: failed", stage="sequence.error")
+        raise
 
 
 def _empty_sequence_result(
@@ -132,13 +160,16 @@ def _decode_sequence_clips(
     frame_rate: float,
     missing_take_policy: str,
     debug: dict[str, Any],
+    *,
+    shots: list[dict[str, Any]] | None = None,
+    status_reporter: TimelineStatusReporter | None = None,
 ) -> list[dict[str, Any]]:
     from ..ltx.runtime.media import decode_video_frames, trim_video_source_frames
 
-    shots = _sequence_shots(timeline)
+    shots = _sequence_shots(timeline) if shots is None else shots
     debug["summary"]["shot_count"] = len(shots)
     clip_entries = []
-    for shot in shots:
+    for shot_index, shot in enumerate(shots, start=1):
         shot_id = str(shot.get("shot_id") or "")
         shot_debug = {
             "shot_id": shot_id,
@@ -156,6 +187,14 @@ def _decode_sequence_clips(
         if source is None:
             shot_debug["status"] = "skipped"
             debug["shots"].append(shot_debug)
+            if status_reporter is not None:
+                status_reporter.report(
+                    "sequence.decode",
+                    f"Sequence Assembly: clip {shot_index}/{len(shots)} - skipped",
+                    segment_index=shot_index,
+                    segment_count=len(shots),
+                    frame_count=0,
+                )
             continue
 
         asset = source["asset"]
@@ -208,6 +247,14 @@ def _decode_sequence_clips(
                 }
             )
             debug["shots"].append(shot_debug)
+            if status_reporter is not None:
+                status_reporter.report(
+                    "sequence.decode",
+                    f"Sequence Assembly: clip {shot_index}/{len(shots)} - missing media",
+                    segment_index=shot_index,
+                    segment_count=len(shots),
+                    frame_count=0,
+                )
             continue
         media = {
             "item_id": shot_id,
@@ -232,6 +279,14 @@ def _decode_sequence_clips(
             "source_range": trim_debug.get("source_range"),
         }
         clip_entries.append(clip_entry)
+        if status_reporter is not None:
+            status_reporter.report(
+                "sequence.decode",
+                f"Sequence Assembly: clip {shot_index}/{len(shots)} - decoded",
+                segment_index=shot_index,
+                segment_count=len(shots),
+                frame_count=int(fitted.shape[0]),
+            )
         shot_debug.update(
             {
                 "status": "included",

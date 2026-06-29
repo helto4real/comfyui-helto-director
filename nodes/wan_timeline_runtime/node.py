@@ -108,22 +108,27 @@ class WANTimelineRuntime(io.ComfyNode):
         negative=None,
         batch_size: int = 1,
     ) -> io.NodeOutput:
-        return io.NodeOutput(
-            *build_wan_runtime_outputs(
-                high_noise_model=high_noise_model,
-                low_noise_model=low_noise_model,
-                clip=clip,
-                vae=vae,
-                wan_timeline_plan=wan_timeline_plan,
-                negative=negative,
-                batch_size=batch_size,
-                status_reporter=TimelineStatusReporter(
-                    model="wan",
-                    node_id=_hidden_unique_id(cls),
-                    total=4,
-                ),
-            )
+        status_reporter = TimelineStatusReporter(
+            model="wan",
+            node_id=_hidden_unique_id(cls),
+            total=4,
         )
+        try:
+            return io.NodeOutput(
+                *build_wan_runtime_outputs(
+                    high_noise_model=high_noise_model,
+                    low_noise_model=low_noise_model,
+                    clip=clip,
+                    vae=vae,
+                    wan_timeline_plan=wan_timeline_plan,
+                    negative=negative,
+                    batch_size=batch_size,
+                    status_reporter=status_reporter,
+                )
+            )
+        except Exception:
+            status_reporter.error("WAN Runtime: failed")
+            raise
 
 
 class WANTimelineSegmentedExecutor(io.ComfyNode):
@@ -182,27 +187,32 @@ class WANTimelineSegmentedExecutor(io.ComfyNode):
         negative=None,
         batch_size: int = 1,
     ) -> io.NodeOutput:
-        return io.NodeOutput(
-            *build_wan_segmented_executor_outputs(
-                high_noise_model=high_noise_model,
-                low_noise_model=low_noise_model,
-                clip=clip,
-                vae=vae,
-                wan_timeline_plan=wan_timeline_plan,
-                seed=seed,
-                steps=steps,
-                cfg=cfg,
-                sampler_name=sampler_name,
-                scheduler=scheduler,
-                denoise=denoise,
-                phase_split_step=phase_split_step,
-                seed_mode=seed_mode,
-                negative=negative,
-                batch_size=batch_size,
-                status_reporter=TimelineStatusReporter(
-                    model="wan",
-                    node_id=_hidden_unique_id(cls),
-                    total=1,
-                ),
-            )
+        status_reporter = TimelineStatusReporter(
+            model="wan",
+            node_id=_hidden_unique_id(cls),
+            total=1,
         )
+        try:
+            return io.NodeOutput(
+                *build_wan_segmented_executor_outputs(
+                    high_noise_model=high_noise_model,
+                    low_noise_model=low_noise_model,
+                    clip=clip,
+                    vae=vae,
+                    wan_timeline_plan=wan_timeline_plan,
+                    seed=seed,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    denoise=denoise,
+                    phase_split_step=phase_split_step,
+                    seed_mode=seed_mode,
+                    negative=negative,
+                    batch_size=batch_size,
+                    status_reporter=status_reporter,
+                )
+            )
+        except Exception:
+            status_reporter.error("WAN Executor: failed")
+            raise

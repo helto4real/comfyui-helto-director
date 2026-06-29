@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from typing import Any, Callable
 
 
@@ -8,6 +9,16 @@ STATUS_OPTIONAL_KEYS = (
     "segment_count",
     "frame_count",
     "encrypted_spill",
+)
+HELTO_PROGRESS_DETAIL_KEYS = (
+    "stage",
+    "model",
+    "segment_index",
+    "segment_count",
+    "frame_count",
+    "encrypted_spill",
+    "current",
+    "total",
 )
 
 
@@ -22,6 +33,7 @@ class TimelineStatusReporter:
         progress_bar_factory: Callable[..., Any] | None = None,
         text_sender: Callable[[str, str], Any] | None = None,
         event_sender: Callable[[dict[str, Any]], Any] | None = None,
+        helto_progress_sender: Any | None = None,
     ) -> None:
         self.model = str(model or "timeline")
         self.node_id = str(node_id) if node_id is not None else None
@@ -33,6 +45,8 @@ class TimelineStatusReporter:
         self._text_sender = text_sender
         self._event_sender = event_sender
         self._progress_bar = None
+        self._helto_progress_sender = helto_progress_sender
+        self._emit_helto_progress = bool(self.node_id) if helto_progress_sender is None else True
 
     def set_total(self, total: int) -> None:
         self.total = max(1, int(total or 1))
@@ -40,7 +54,46 @@ class TimelineStatusReporter:
             self._safe_progress(self.current)
 
     def report(self, stage: str, label: str, **details: Any) -> dict[str, Any]:
-        self.current = min(self.current + 1, self.total)
+        return self._record(
+            stage,
+            label,
+            "start" if self.current <= 0 else "update",
+            increment=True,
+            **details,
+        )
+
+    def done(self, label: str | None = None) -> dict[str, Any]:
+        self.current = max(self.current, self.total - 1)
+        return self._record(
+            "timeline.done",
+            label or "Timeline Executor: done",
+            "done",
+            increment=True,
+        )
+
+    def error(self, label: str | None = None, stage: str = "timeline.error", **details: Any) -> dict[str, Any]:
+        return self._record(
+            stage,
+            label or "Timeline Executor: failed",
+            "error",
+            increment=False,
+            **details,
+        )
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [dict(event) for event in self.events]
+
+    def _record(
+        self,
+        stage: str,
+        label: str,
+        progress_event: str,
+        *,
+        increment: bool,
+        **details: Any,
+    ) -> dict[str, Any]:
+        if increment:
+            self.current = min(self.current + 1, self.total)
         event = {
             "stage": str(stage),
             "label": str(label),
@@ -55,14 +108,8 @@ class TimelineStatusReporter:
         self._safe_event(event)
         self._safe_text(event["label"])
         self._safe_progress(self.current)
+        self._safe_helto_progress(progress_event, event)
         return event
-
-    def done(self, label: str | None = None) -> dict[str, Any]:
-        self.current = max(self.current, self.total - 1)
-        return self.report("timeline.done", label or "Timeline Executor: done")
-
-    def snapshot(self) -> list[dict[str, Any]]:
-        return [dict(event) for event in self.events]
 
     def _safe_progress(self, value: int) -> None:
         if not self._emit_ui:
@@ -92,6 +139,24 @@ class TimelineStatusReporter:
             if sender is not None:
                 payload = {"node_id": self.node_id, **event}
                 sender(payload)
+        except Exception:
+            return
+
+    def _safe_helto_progress(self, progress_event: str, event: dict[str, Any]) -> None:
+        if not self._emit_helto_progress:
+            return
+        try:
+            sender = self._helto_progress_sender or _default_helto_progress_sender()
+            reporter = getattr(sender, str(progress_event), None) if sender is not None else None
+            if callable(reporter):
+                reporter(
+                    event["label"],
+                    phase=event["stage"],
+                    value=event["current"],
+                    total=event["total"],
+                    node_id=self.node_id,
+                    detail=_helto_progress_detail(event),
+                )
         except Exception:
             return
 
@@ -156,6 +221,13 @@ def _default_event_sender():
         return None
 
 
+def _default_helto_progress_sender():
+    try:
+        return importlib.import_module("helto_progress")
+    except Exception:
+        return None
+
+
 def _safe_status_value(value: Any) -> Any:
     if isinstance(value, bool):
         return value
@@ -166,3 +238,11 @@ def _safe_status_value(value: Any) -> Any:
     if value is None:
         return None
     return str(value)
+
+
+def _helto_progress_detail(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: _safe_status_value(event[key])
+        for key in HELTO_PROGRESS_DETAIL_KEYS
+        if key in event and event[key] is not None
+    }

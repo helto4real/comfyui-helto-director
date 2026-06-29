@@ -172,6 +172,95 @@ def test_timeline_status_reporter_records_progress_text_and_safe_events():
     assert "prompt" not in events[0]
 
 
+def test_timeline_status_reporter_emits_helto_progress_with_safe_details():
+    progress = _CaptureHeltoProgress()
+    reporter = TimelineStatusReporter(
+        model="wan",
+        node_id="123",
+        total=2,
+        emit_ui=False,
+        helto_progress_sender=progress,
+    )
+
+    reporter.report(
+        "timeline.spill",
+        "WAN Executor: segment 1/2 - saving encrypted segment frames",
+        segment_index=1,
+        segment_count=2,
+        frame_count=79,
+        encrypted_spill=True,
+        path="/tmp/private-frame-cache.pt",
+        prompt="secret prompt",
+    )
+    reporter.done("WAN Executor: done")
+
+    assert [call["event"] for call in progress.calls] == ["start", "done"]
+    first = progress.calls[0]
+    assert first["message"] == "WAN Executor: segment 1/2 - saving encrypted segment frames"
+    assert first["kwargs"]["phase"] == "timeline.spill"
+    assert first["kwargs"]["value"] == 1
+    assert first["kwargs"]["total"] == 2
+    assert first["kwargs"]["node_id"] == "123"
+    assert first["kwargs"]["detail"]["model"] == "wan"
+    assert first["kwargs"]["detail"]["segment_index"] == 1
+    assert first["kwargs"]["detail"]["encrypted_spill"] is True
+    assert "path" not in first["kwargs"]["detail"]
+    assert "prompt" not in first["kwargs"]["detail"]
+    assert progress.calls[-1]["kwargs"]["phase"] == "timeline.done"
+    assert progress.calls[-1]["kwargs"]["value"] == 2
+
+
+def test_timeline_status_reporter_noops_when_helto_progress_is_unavailable():
+    reporter = TimelineStatusReporter(model="wan", node_id="123", total=1, emit_ui=False)
+
+    reporter.report("timeline.prepare", "WAN Runtime: resolving backend")
+    reporter.done("WAN Runtime: ready")
+
+    assert [event["stage"] for event in reporter.snapshot()] == ["timeline.prepare", "timeline.done"]
+
+
+def test_timeline_status_reporter_emits_error_without_swallowing_original_exception():
+    progress = _CaptureHeltoProgress()
+    reporter = TimelineStatusReporter(
+        model="wan",
+        node_id="123",
+        total=2,
+        emit_ui=False,
+        helto_progress_sender=progress,
+    )
+
+    caught = None
+    try:
+        try:
+            raise RuntimeError("original failure")
+        except RuntimeError:
+            reporter.error("WAN Runtime: failed")
+            raise
+    except RuntimeError as exc:
+        caught = exc
+    assert str(caught) == "original failure"
+    assert progress.calls[0]["event"] == "error"
+    assert progress.calls[0]["message"] == "WAN Runtime: failed"
+    assert progress.calls[0]["kwargs"]["phase"] == "timeline.error"
+
+
+class _CaptureHeltoProgress:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, message, **kwargs):
+        self.calls.append({"event": "start", "message": message, "kwargs": kwargs})
+
+    def update(self, message, **kwargs):
+        self.calls.append({"event": "update", "message": message, "kwargs": kwargs})
+
+    def done(self, message, **kwargs):
+        self.calls.append({"event": "done", "message": message, "kwargs": kwargs})
+
+    def error(self, message, **kwargs):
+        self.calls.append({"event": "error", "message": message, "kwargs": kwargs})
+
+
 def _wan_frame_rule(requested):
     requested = max(1, int(requested))
     return ((requested - 1 + 3) // 4) * 4 + 1

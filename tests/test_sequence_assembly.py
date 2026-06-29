@@ -27,6 +27,7 @@ from shared.timeline import (
     assemble_timeline_sequence,
     create_default_video_timeline,
 )
+from shared.timeline_status import TimelineStatusReporter
 
 
 def test_assemble_two_accepted_generated_takes_with_hard_cut(tmp_path):
@@ -56,6 +57,53 @@ def test_assemble_two_accepted_generated_takes_with_hard_cut(tmp_path):
     assert debug["boundaries"][0]["status"] == "concatenated"
     assert [clip["asset_id"] for clip in debug["clips"]] == ["asset_first", "asset_second"]
     assert str(first) not in json.dumps(debug)
+
+
+def test_sequence_assembly_reports_progress_without_media_details(tmp_path):
+    first = _write_test_video(tmp_path / "first.mp4", color=(255, 0, 0))
+    second = _write_test_video(tmp_path / "second.mp4", color=(0, 0, 255))
+    timeline = _timeline_with_assets(
+        [
+            _video_asset("asset_first", first, ASSET_SOURCE_GENERATED),
+            _video_asset("asset_second", second, ASSET_SOURCE_GENERATED),
+        ],
+        [
+            _generated_shot("shot_first", "asset_first", 0.0, 1.0),
+            _generated_shot("shot_second", "asset_second", 1.0, 2.0),
+        ],
+        boundaries=[
+            _boundary("boundary_first_second", "shot_first", "shot_second", BOUNDARY_MODE_HARD_CUT)
+        ],
+    )
+    progress = _CaptureHeltoProgress()
+    reporter = TimelineStatusReporter(
+        model="sequence",
+        node_id="sequence-node",
+        total=1,
+        emit_ui=False,
+        helto_progress_sender=progress,
+    )
+
+    frames, _audio, _frame_rate, debug = assemble_timeline_sequence(timeline, status_reporter=reporter)
+
+    assert tuple(frames.shape) == (8, 16, 16, 3)
+    assert debug["summary"]["status"] == "assembled"
+    stages = [event["stage"] for event in reporter.snapshot()]
+    assert stages == [
+        "sequence.prepare",
+        "sequence.decode",
+        "sequence.decode",
+        "sequence.stitch",
+        "sequence.audio",
+        "timeline.done",
+    ]
+    assert [call["event"] for call in progress.calls] == ["start", "update", "update", "update", "update", "done"]
+    assert progress.calls[1]["kwargs"]["value"] == 2
+    assert progress.calls[1]["kwargs"]["total"] == 6
+    payload_json = json.dumps([call["kwargs"] for call in progress.calls])
+    assert str(first) not in payload_json
+    assert str(second) not in payload_json
+    assert "waveform" not in payload_json
 
 
 def test_assemble_imported_clip_plus_generated_take(tmp_path):
@@ -171,6 +219,38 @@ def test_sequence_assembly_without_ready_clips_returns_placeholder():
     assert debug["summary"]["placeholder_output_frame_count"] == 1
     assert debug["errors"] == []
     assert "SEQUENCE_ASSEMBLY_NO_CLIPS" in _warning_codes(debug)
+
+
+def test_sequence_assembly_reports_placeholder_progress_without_clips():
+    timeline = _timeline_with_assets(
+        [],
+        [
+            {
+                "shot_id": "shot_missing",
+                "type": SHOT_TYPE_GENERATED,
+                "start_time": 0.0,
+                "end_time": 1.0,
+            },
+        ],
+    )
+    progress = _CaptureHeltoProgress()
+    reporter = TimelineStatusReporter(
+        model="sequence",
+        node_id="sequence-node",
+        total=1,
+        emit_ui=False,
+        helto_progress_sender=progress,
+    )
+
+    _frames, _audio, _frame_rate, debug = assemble_timeline_sequence(timeline, status_reporter=reporter)
+
+    assert debug["summary"]["status"] == "not_built"
+    stages = [event["stage"] for event in reporter.snapshot()]
+    assert stages == ["sequence.prepare", "sequence.decode", "sequence.placeholder", "timeline.done"]
+    assert progress.calls[-1]["event"] == "done"
+    payload_json = json.dumps([call["kwargs"] for call in progress.calls])
+    assert "data:" not in payload_json
+    assert "waveform" not in payload_json
 
 
 def test_missing_accepted_take_errors_when_policy_requires_it(tmp_path):
@@ -646,6 +726,23 @@ def _write_test_wav(path: Path, *, duration: float = 1.0, frequency: float = 440
             value = int(math.sin(2.0 * math.pi * frequency * index / sample_rate) * 16000)
             output.writeframes(struct.pack("<h", value))
     return path
+
+
+class _CaptureHeltoProgress:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, message, **kwargs):
+        self.calls.append({"event": "start", "message": message, "kwargs": kwargs})
+
+    def update(self, message, **kwargs):
+        self.calls.append({"event": "update", "message": message, "kwargs": kwargs})
+
+    def done(self, message, **kwargs):
+        self.calls.append({"event": "done", "message": message, "kwargs": kwargs})
+
+    def error(self, message, **kwargs):
+        self.calls.append({"event": "error", "message": message, "kwargs": kwargs})
 
 
 def _warning_codes(debug: dict) -> list[str]:

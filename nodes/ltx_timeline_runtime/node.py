@@ -117,25 +117,30 @@ class LTXTimelineRuntime(io.ComfyNode):
         sigmas=None,
         iclora_parameters=None,
     ) -> io.NodeOutput:
-        return io.NodeOutput(
-            *build_ltx_runtime_outputs(
-                model=model,
-                clip=clip,
-                vae=vae,
-                ltx_timeline_plan=ltx_timeline_plan,
-                negative=negative,
-                optional_latent=optional_latent,
-                audio_vae=audio_vae,
-                identity_anchor=identity_anchor,
-                sigmas=sigmas,
-                iclora_parameters=iclora_parameters,
-                status_reporter=TimelineStatusReporter(
-                    model="ltx",
-                    node_id=_hidden_unique_id(cls),
-                    total=6,
-                ),
-            )
+        status_reporter = TimelineStatusReporter(
+            model="ltx",
+            node_id=_hidden_unique_id(cls),
+            total=6,
         )
+        try:
+            return io.NodeOutput(
+                *build_ltx_runtime_outputs(
+                    model=model,
+                    clip=clip,
+                    vae=vae,
+                    ltx_timeline_plan=ltx_timeline_plan,
+                    negative=negative,
+                    optional_latent=optional_latent,
+                    audio_vae=audio_vae,
+                    identity_anchor=identity_anchor,
+                    sigmas=sigmas,
+                    iclora_parameters=iclora_parameters,
+                    status_reporter=status_reporter,
+                )
+            )
+        except Exception:
+            status_reporter.error("LTX Runtime: failed")
+            raise
 
 
 class LTXTimelineSegmentedExecutor(io.ComfyNode):
@@ -198,29 +203,34 @@ class LTXTimelineSegmentedExecutor(io.ComfyNode):
         sigmas=None,
         iclora_parameters=None,
     ) -> io.NodeOutput:
-        return io.NodeOutput(
-            *build_ltx_segmented_executor_outputs(
-                model=model,
-                clip=clip,
-                vae=vae,
-                ltx_timeline_plan=ltx_timeline_plan,
-                seed=seed,
-                steps=steps,
-                cfg=cfg,
-                sampler_name=sampler_name,
-                scheduler=scheduler,
-                denoise=denoise,
-                seed_mode=seed_mode,
-                negative=negative,
-                optional_latent=optional_latent,
-                audio_vae=audio_vae,
-                identity_anchor=identity_anchor,
-                sigmas=sigmas,
-                iclora_parameters=iclora_parameters,
-                status_reporter=TimelineStatusReporter(
-                    model="ltx",
-                    node_id=_hidden_unique_id(cls),
-                    total=1,
-                ),
-            )
+        status_reporter = TimelineStatusReporter(
+            model="ltx",
+            node_id=_hidden_unique_id(cls),
+            total=1,
         )
+        try:
+            return io.NodeOutput(
+                *build_ltx_segmented_executor_outputs(
+                    model=model,
+                    clip=clip,
+                    vae=vae,
+                    ltx_timeline_plan=ltx_timeline_plan,
+                    seed=seed,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    denoise=denoise,
+                    seed_mode=seed_mode,
+                    negative=negative,
+                    optional_latent=optional_latent,
+                    audio_vae=audio_vae,
+                    identity_anchor=identity_anchor,
+                    sigmas=sigmas,
+                    iclora_parameters=iclora_parameters,
+                    status_reporter=status_reporter,
+                )
+            )
+        except Exception:
+            status_reporter.error("LTX Executor: failed")
+            raise
