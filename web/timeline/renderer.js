@@ -2686,12 +2686,19 @@ export class TimelineRenderer {
     const privacyRevealed = this.isPrivacyRevealed(timeline);
     const label = privacyRevealed ? (options.label || "this take") : "this private take";
     const confirmFn = this.container.ownerDocument.defaultView?.confirm ?? globalThis.confirm;
-    if (!confirmFn?.(`Delete ${label} from the timeline and permanently remove its project take files?`)) return false;
+    if (!path && !options.takeId) {
+      const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
+      alertFn?.("Could not delete project take files.");
+      return false;
+    }
+    if (!confirmFn?.(`Remove ${label} from the timeline and delete any remaining project take files?`)) return false;
     try {
-      await deleteProjectTakeCapture(timeline, shotId, path, {
-        takeId: options.takeId,
-        privacyMode: Boolean(this.isGlobalPrivacyMode() && !privacyRevealed),
-      });
+      if (path) {
+        await deleteProjectTakeCapture(timeline, shotId, path, {
+          takeId: options.takeId,
+          privacyMode: Boolean(this.isGlobalPrivacyMode() && !privacyRevealed),
+        });
+      }
       if (path || options.takeId) {
         this.commitMutation((currentTimeline) => {
           deleteTakesByAssetPath(currentTimeline, shotId, path, options.takeId);

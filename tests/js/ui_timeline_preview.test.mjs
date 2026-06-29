@@ -293,7 +293,9 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("const existing = findAttachedTakeForCapture(timeline, shot, item)"), true);
   assert.equal(rendererSource.includes("const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item)"), true);
   assert.equal(rendererSource.includes("async deleteProjectTakePath(shotId, path, options = {})"), true);
-  assert.equal(rendererSource.includes("confirmFn?.(`Delete ${label} from the timeline and permanently remove its project take files?`)"), true);
+  assert.equal(rendererSource.includes("if (!path && !options.takeId)"), true);
+  assert.equal(rendererSource.includes("confirmFn?.(`Remove ${label} from the timeline and delete any remaining project take files?`)"), true);
+  assert.equal(rendererSource.includes("if (path) {"), true);
   assert.equal(rendererSource.includes("await deleteProjectTakeCapture(timeline, shotId, path"), true);
   assert.equal(rendererSource.includes("deleteTakesByAssetPath(currentTimeline, shotId, path, options.takeId)"), true);
   assert.equal(rendererSource.includes("export function findAttachedTakeForCapture(timeline, shot, item)"), true);

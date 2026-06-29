@@ -216,6 +216,26 @@ def test_project_take_capture_discovery_filters_by_shot_and_ignores_malformed_si
     assert payload["captures"][0]["take_capture"]["registration"]["take"]["take_id"] == "take_match"
 
 
+def test_project_take_capture_discovery_recreates_deleted_project_storage(tmp_path):
+    timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(tmp_path)}, "privacy": {"mode": False}})
+    project = {
+        "identity": {"project_id": "proj_deleted", "name": "Deleted Project"},
+        "storage": {
+            "schema_version": 2,
+            "project_directory_name": "deleted_project_proj_deleted",
+        },
+    }
+    take_dir = tmp_path / "deleted_project_proj_deleted" / "takes" / "shot_001"
+
+    payload = media_browser.list_project_take_captures(project, "shot_001")
+
+    assert payload["shot_id"] == "shot_001"
+    assert payload["take_directory"] == str(take_dir)
+    assert payload["storage"]["project_directory"] == str(tmp_path / "deleted_project_proj_deleted")
+    assert payload["captures"] == []
+    assert take_dir.is_dir()
+
+
 def test_delete_project_take_capture_removes_media_sidecar_and_discovery_entry(tmp_path):
     project = project_storage_payload(tmp_path)
     take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
@@ -245,6 +265,68 @@ def test_delete_project_take_capture_removes_media_sidecar_and_discovery_entry(t
     assert not media_path.exists()
     assert not media_path.with_suffix(".helto_take.json").exists()
     assert media_browser.list_project_take_captures(project, "shot_001")["captures"] == []
+
+
+def test_delete_project_take_capture_allows_missing_media_with_valid_take_id(tmp_path):
+    project = project_storage_payload(tmp_path)
+    take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
+    take_dir.mkdir(parents=True)
+    media_path = take_dir / "deleted.mp4"
+    sidecar_path = media_path.with_suffix(".helto_take.json")
+    sidecar_path.write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {"shot_id": "shot_001", "shot_ids": ["shot_001"], "take": {"take_id": "take_deleted"}},
+                media={"type": ASSET_TYPE_VIDEO, "filename": media_path.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = media_browser.delete_project_take_capture(project, "shot_001", str(media_path), take_id="take_deleted")
+
+    assert result["ok"] is True
+    assert result["media_missing"] is True
+    assert result["deleted"] is True
+    assert result["files_deleted"] == 1
+    assert result["take_id"] == "take_deleted"
+    assert not sidecar_path.exists()
+
+
+def test_delete_project_take_capture_allows_missing_media_without_sidecar_when_take_id_is_known(tmp_path):
+    project = project_storage_payload(tmp_path)
+    media_path = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001" / "deleted.mp4"
+
+    result = media_browser.delete_project_take_capture(project, "shot_001", str(media_path), take_id="take_deleted")
+
+    assert result["ok"] is True
+    assert result["media_missing"] is True
+    assert result["deleted"] is False
+    assert result["files_deleted"] == 0
+    assert result["take_id"] == "take_deleted"
+
+
+def test_delete_project_take_capture_missing_media_still_requires_take_id_and_matching_sidecar(tmp_path):
+    project = project_storage_payload(tmp_path)
+    take_dir = tmp_path / "capture_test_proj_capturetest" / "takes" / "shot_001"
+    take_dir.mkdir(parents=True)
+    media_path = take_dir / "deleted.mp4"
+    sidecar_path = media_path.with_suffix(".helto_take.json")
+    sidecar_path.write_text(
+        json.dumps(
+            build_generated_take_capture_sidecar(
+                {"shot_id": "shot_001", "take": {"take_id": "take_other"}},
+                media={"type": ASSET_TYPE_VIDEO, "filename": media_path.name},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError, match="TAKE_DELETE_MEDIA_NOT_FOUND"):
+        media_browser.delete_project_take_capture(project, "shot_001", str(media_path))
+    with pytest.raises(ValueError, match="TAKE_DELETE_TAKE_MISMATCH"):
+        media_browser.delete_project_take_capture(project, "shot_001", str(media_path), take_id="take_deleted")
+    assert sidecar_path.exists()
 
 
 def test_delete_project_take_capture_rejects_outside_paths_and_mismatched_sidecars(tmp_path):

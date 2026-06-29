@@ -49,6 +49,7 @@ def assemble_timeline_sequence(
             "included_clip_count": 0,
             "missing_accepted_take_count": 0,
             "missing_asset_count": 0,
+            "missing_source_media_count": 0,
             "warning_count": 0,
             "error_count": 0,
             "output_frame_count": 0,
@@ -170,7 +171,44 @@ def _decode_sequence_clips(
             shot_debug["status"] = "error"
             debug["shots"].append(shot_debug)
             raise SequenceAssemblyError(f"SEQUENCE_ASSEMBLY_ASSET_PATH_MISSING: Shot {shot_id} asset {asset_id} has no path.")
-        decoded, source_fps, decoded_count = decode_video_frames(str(path))
+        try:
+            decoded, source_fps, decoded_count = decode_video_frames(str(path))
+        except FileNotFoundError:
+            details = {
+                "shot_id": shot_id,
+                "asset_id": asset_id,
+                "take_id": source.get("take_id"),
+                "source_kind": source["source_kind"],
+            }
+            debug["summary"]["missing_source_media_count"] += 1
+            if missing_take_policy == "error":
+                _add_error(
+                    debug,
+                    "SEQUENCE_ASSEMBLY_SOURCE_MEDIA_MISSING",
+                    f"Shot {shot_id} source media is missing on disk.",
+                    details,
+                )
+                shot_debug["status"] = "error"
+                debug["shots"].append(shot_debug)
+                raise SequenceAssemblyError(
+                    f"SEQUENCE_ASSEMBLY_SOURCE_MEDIA_MISSING: Shot {shot_id} source media is missing on disk."
+                ) from None
+            _add_warning(
+                debug,
+                "SEQUENCE_ASSEMBLY_SOURCE_MEDIA_MISSING",
+                f"Shot {shot_id} source media is missing on disk; skipping.",
+                details,
+            )
+            shot_debug.update(
+                {
+                    "status": "skipped",
+                    "asset_id": asset_id,
+                    "take_id": source.get("take_id"),
+                    "source_kind": source["source_kind"],
+                }
+            )
+            debug["shots"].append(shot_debug)
+            continue
         media = {
             "item_id": shot_id,
             "source_in": source["clip_instance"].get("source_in"),

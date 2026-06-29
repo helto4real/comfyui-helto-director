@@ -635,6 +635,24 @@ function testDeleteTakesByAssetPathPrefersPathBeforeFallbackTakeId() {
   assert.equal(timeline.assets.some((asset) => asset.asset_id === "asset_capture_002"), true);
 }
 
+function testDeleteTakesByAssetPathRemovesAcceptedStaleTakeByFallbackTakeId() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Text", 0);
+  const shot = timeline.sequence.shots.find((candidate) => candidate.section_ids.includes(section.item_id));
+  const take = addTakeMetadata(timeline, shot.shot_id, {
+    take_id: "take_deleted",
+    asset_id: "asset_deleted",
+  });
+  take.status = "Accepted";
+  shot.accepted_take_id = take.take_id;
+  shot.clip_instance = { asset_id: take.asset_id, source_in: 0, source_out: null, speed: 1, enabled: true };
+
+  assert.equal(deleteTakesByAssetPath(timeline, shot.shot_id, "", take.take_id), true);
+  assert.equal(shot.takes.some((candidate) => candidate.take_id === take.take_id), false);
+  assert.equal(shot.accepted_take_id, null);
+  assert.equal(shot.clip_instance, null);
+}
+
 function testAttachGeneratedAssetAsTakePreservesGeneratedShotType() {
   const timeline = createDefaultVideoTimeline();
   const section = addValidTextSection(timeline, 0);
@@ -1068,6 +1086,7 @@ testStandaloneSectionCreationStillCreatesWrapperShot();
 testTakeAndClipInstanceOperations();
 testDeleteTakeClearsAcceptedClipAndPrunesOnlyUnreferencedGeneratedAsset();
 testDeleteTakesByAssetPathPrefersPathBeforeFallbackTakeId();
+testDeleteTakesByAssetPathRemovesAcceptedStaleTakeByFallbackTakeId();
 testAttachGeneratedAssetAsTakePreservesGeneratedShotType();
 testProjectAndShotLoraOperations();
 testValidationReportsGenericShotStructureIssues();

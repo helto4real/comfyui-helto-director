@@ -110,6 +110,42 @@ def test_missing_accepted_take_warns_and_skips_when_policy_allows(tmp_path):
     assert "SEQUENCE_ASSEMBLY_ACCEPTED_TAKE_MISSING" in _warning_codes(debug)
 
 
+def test_missing_accepted_take_media_warns_and_skips_when_policy_allows(tmp_path):
+    valid = _write_test_video(tmp_path / "valid.mp4", color=(128, 128, 255))
+    missing = tmp_path / "deleted.mp4"
+    timeline = _timeline_with_assets(
+        [
+            _video_asset("asset_missing", missing, ASSET_SOURCE_GENERATED),
+            _video_asset("asset_valid", valid, ASSET_SOURCE_GENERATED),
+        ],
+        [
+            _generated_shot("shot_missing", "asset_missing", 0.0, 1.0),
+            _generated_shot("shot_valid", "asset_valid", 1.0, 2.0),
+        ],
+    )
+
+    frames, _audio, _frame_rate, debug = assemble_timeline_sequence(timeline)
+
+    assert tuple(frames.shape) == (4, 16, 16, 3)
+    assert debug["summary"]["included_clip_count"] == 1
+    assert debug["summary"]["missing_source_media_count"] == 1
+    assert "SEQUENCE_ASSEMBLY_SOURCE_MEDIA_MISSING" in _warning_codes(debug)
+    assert debug["shots"][0]["status"] == "skipped"
+    assert debug["shots"][1]["status"] == "included"
+    assert str(missing) not in json.dumps(debug)
+
+
+def test_missing_accepted_take_media_errors_when_policy_requires_it(tmp_path):
+    missing = tmp_path / "deleted.mp4"
+    timeline = _timeline_with_assets(
+        [_video_asset("asset_missing", missing, ASSET_SOURCE_GENERATED)],
+        [_generated_shot("shot_missing", "asset_missing", 0.0, 1.0)],
+    )
+
+    with pytest.raises(SequenceAssemblyError, match="SEQUENCE_ASSEMBLY_SOURCE_MEDIA_MISSING"):
+        assemble_timeline_sequence(timeline, missing_take_policy="error")
+
+
 def test_sequence_assembly_without_ready_clips_returns_placeholder():
     timeline = _timeline_with_assets(
         [],

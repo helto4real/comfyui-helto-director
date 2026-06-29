@@ -269,7 +269,7 @@ def list_project_take_captures(
     shot_id = str(shot_id or "").strip()
     if not shot_id:
         raise ValueError("shot_id is required.")
-    take_directory = resolve_project_take_directory(project, shot_id, create=False)
+    take_directory = resolve_project_take_directory(project, shot_id, create=True)
     captures = [
         item
         for item in list_media("video", take_directory, recursive=True, privacy_mode=privacy_mode)
@@ -298,25 +298,28 @@ def delete_project_take_capture(
     path_value = str(path or "").strip()
     if not path_value:
         raise ValueError("TAKE_DELETE_PATH_REQUIRED: Take media path is required.")
+    requested_take_id = str(take_id or "").strip()
 
     take_directory = resolve_project_take_directory(project, shot_id, create=False).resolve()
     candidate = Path(path_value).expanduser().resolve(strict=False)
     _ensure_project_take_path(take_directory, candidate)
     if candidate.suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError(f"TAKE_DELETE_UNSUPPORTED_EXTENSION: Unsupported take media extension: {candidate.suffix}")
-    if not candidate.is_file():
+    media_missing = not candidate.is_file()
+    if media_missing and not requested_take_id:
         raise FileNotFoundError(f"TAKE_DELETE_MEDIA_NOT_FOUND: Take media was not found: {candidate}")
 
     sidecar_path = generated_take_sidecar_path(candidate)
-    if sidecar_path is None:
+    if sidecar_path is None and not media_missing:
         raise ValueError("TAKE_DELETE_SIDECAR_REQUIRED: Take media must have a Helto take sidecar.")
-    sidecar = _load_take_sidecar_for_delete(sidecar_path)
-    if not _capture_registration_matches_shot(sidecar.get("registration"), shot_id):
-        raise ValueError("TAKE_DELETE_SHOT_MISMATCH: Take sidecar does not match the selected shot.")
-    sidecar_take_id = _sidecar_take_id(sidecar)
-    requested_take_id = str(take_id or "").strip()
-    if requested_take_id and requested_take_id != sidecar_take_id:
-        raise ValueError("TAKE_DELETE_TAKE_MISMATCH: Take sidecar does not match the selected take.")
+    sidecar_take_id = ""
+    if sidecar_path is not None:
+        sidecar = _load_take_sidecar_for_delete(sidecar_path)
+        if not _capture_registration_matches_shot(sidecar.get("registration"), shot_id):
+            raise ValueError("TAKE_DELETE_SHOT_MISMATCH: Take sidecar does not match the selected shot.")
+        sidecar_take_id = _sidecar_take_id(sidecar)
+        if requested_take_id and requested_take_id != sidecar_take_id:
+            raise ValueError("TAKE_DELETE_TAKE_MISMATCH: Take sidecar does not match the selected take.")
 
     sidecar_candidates = _take_sidecar_candidates(candidate)
     files_deleted = 0
@@ -335,6 +338,7 @@ def delete_project_take_capture(
         "files_deleted": files_deleted,
         "shot_id": shot_id,
         "take_id": requested_take_id or sidecar_take_id,
+        "media_missing": media_missing,
         "path": "Private path" if privacy_mode else str(candidate),
         "deleted_paths": ["Private path"] * len(deleted_paths) if privacy_mode else deleted_paths,
     }
