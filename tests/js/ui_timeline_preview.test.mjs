@@ -890,6 +890,13 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes("viewport?.innerHeight"), true);
   assert.equal(rendererSource.includes("root.getBoundingClientRect"), false);
   assert.equal(rendererSource.includes(".htd-context-menu { position: fixed;"), true);
+  assert.equal(rendererSource.includes("width: 150px;"), true);
+  assert.equal(rendererSource.includes("max-width: calc(100vw - 8px);"), true);
+  assert.equal(rendererSource.includes("background: linear-gradient(180deg, var(--htd-surface-2, #1b2333), var(--htd-surface, #151c2a));"), true);
+  assert.equal(rendererSource.includes("border: 1px solid var(--htd-border-strong, #3a465c);"), true);
+  assert.equal(rendererSource.includes("color: var(--htd-text, #e7ebf3);"), true);
+  assert.equal(rendererSource.includes("text-overflow: ellipsis;"), true);
+  assert.equal(rendererSource.includes(".htd-context-menu-item:hover { background: var(--htd-surface-hover, #2c3850);"), true);
 }
 
 function testToolbarUsesGroupedIconControls() {

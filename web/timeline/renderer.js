@@ -3832,9 +3832,9 @@ function installStyles(documentRef) {
     .htd-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: var(--htd-radius-sm); background: transparent; color: var(--htd-text); text-align: left; cursor: pointer; white-space: nowrap; font: inherit; }
     .htd-menu-item:hover, .htd-menu-item.is-active { background: var(--htd-surface-hover); color: #fff; }
     .htd-menu-item.is-active { box-shadow: inset 2px 0 0 var(--htd-accent); }
-    .htd-context-menu { position: fixed; z-index: 35; min-width: 132px; padding: 5px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius); background: var(--htd-surface); box-shadow: var(--htd-shadow-pop); }
-    .htd-context-menu-item { width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: var(--htd-radius-sm); background: transparent; color: var(--htd-text); text-align: left; cursor: pointer; white-space: nowrap; font: inherit; }
-    .htd-context-menu-item:hover { background: var(--htd-surface-hover); color: #fff; }
+    .htd-context-menu { position: fixed; z-index: 35; box-sizing: border-box; width: 150px; max-width: calc(100vw - 8px); padding: 5px; border: 1px solid var(--htd-border-strong, #3a465c); border-radius: var(--htd-radius, 6px); background: linear-gradient(180deg, var(--htd-surface-2, #1b2333), var(--htd-surface, #151c2a)); color: var(--htd-text, #e7ebf3); box-shadow: var(--htd-shadow-pop, 0 14px 36px rgba(0,0,0,0.55)); }
+    .htd-context-menu-item { width: 100%; height: 24px; padding: 0 8px; overflow: hidden; border: 0; border-radius: var(--htd-radius-sm, 5px); background: transparent; color: var(--htd-text, #e7ebf3); text-align: left; text-overflow: ellipsis; cursor: pointer; white-space: nowrap; font: inherit; }
+    .htd-context-menu-item:hover { background: var(--htd-surface-hover, #2c3850); color: #fff; }
     .htd-select { min-width: 72px; max-width: 130px; height: 24px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: var(--htd-text); }
     .htd-range-control { width: 100%; height: ${RANGE_CONTROL_HEIGHT}px; display: flex; align-items: center; gap: 0; box-sizing: border-box; }
     .htd-range-gutter { width: ${TIMELINE_RIGHT_PADDING}px; flex: 0 0 ${TIMELINE_RIGHT_PADDING}px; }
