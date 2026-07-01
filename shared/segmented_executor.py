@@ -438,9 +438,11 @@ def _safe_segment_id(value: Any) -> str:
 
 
 def _torch_load_bytes(data: bytes):
+    # Spill payloads are plain {str: tensor} dicts, so the restricted
+    # weights-only unpickler is enough; only very old torch lacks the kwarg.
     buffer = io.BytesIO(data)
     try:
-        return torch.load(buffer, map_location="cpu", weights_only=False)
+        return torch.load(buffer, map_location="cpu", weights_only=True)
     except TypeError:
         buffer.seek(0)
         return torch.load(buffer, map_location="cpu")

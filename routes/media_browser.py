@@ -75,7 +75,8 @@ def register_media_browser_routes() -> bool:
     async def get_folders(request):
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
-            return web.json_response({"folders": folder_payload(media_type)})
+            payload = await asyncio.to_thread(folder_payload, media_type)
+            return web.json_response({"folders": payload})
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -85,7 +86,8 @@ def register_media_browser_routes() -> bool:
             media_type = normalize_media_type(request.match_info["media_type"])
             data = await request.json()
             add_folder(media_type, data.get("alias"), data.get("path"))
-            return web.json_response({"status": "ok", "folders": folder_payload(media_type)})
+            payload = await asyncio.to_thread(folder_payload, media_type)
+            return web.json_response({"status": "ok", "folders": payload})
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -94,7 +96,8 @@ def register_media_browser_routes() -> bool:
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
             remove_folder(media_type, request.rel_url.query.get("alias", ""))
-            return web.json_response({"status": "ok", "folders": folder_payload(media_type)})
+            payload = await asyncio.to_thread(folder_payload, media_type)
+            return web.json_response({"status": "ok", "folders": payload})
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -109,7 +112,9 @@ def register_media_browser_routes() -> bool:
             if not folder.enabled:
                 return web.json_response({"error": f"Folder alias is disabled: {alias}"}, status=400)
             items_key = media_definition(media_type)["items_key"]
-            items = list_media(media_type, folder.path, recursive=recursive, privacy_mode=privacy_mode)
+            items = await asyncio.to_thread(
+                list_media, media_type, folder.path, recursive=recursive, privacy_mode=privacy_mode
+            )
             for item in items:
                 params = {
                     "alias": alias,
@@ -133,7 +138,8 @@ def register_media_browser_routes() -> bool:
             data = await request.json()
             privacy_value = data.get("privacy")
             privacy_mode = privacy_value if isinstance(privacy_value, bool) else query_bool(str(privacy_value or ""))
-            payload = list_project_take_captures(
+            payload = await asyncio.to_thread(
+                list_project_take_captures,
                 data.get("project") if isinstance(data.get("project"), dict) else {},
                 data.get("shot_id", ""),
                 privacy_mode=privacy_mode,
@@ -164,7 +170,8 @@ def register_media_browser_routes() -> bool:
             data = await request.json()
             privacy_value = data.get("privacy")
             privacy_mode = privacy_value if isinstance(privacy_value, bool) else query_bool(str(privacy_value or ""))
-            payload = delete_project_take_capture(
+            payload = await asyncio.to_thread(
+                delete_project_take_capture,
                 data.get("project") if isinstance(data.get("project"), dict) else {},
                 data.get("shot_id", ""),
                 data.get("path", ""),

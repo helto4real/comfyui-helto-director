@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 try:
     from aiohttp import web
     import server
@@ -96,7 +98,8 @@ def register_prompt_optimizer_routes() -> bool:
     async def post_prompt_optimizer_optimize(request):
         try:
             payload = await request.json()
-            return web.json_response(optimize_segments(payload))
+            result = await asyncio.to_thread(optimize_segments, payload)
+            return web.json_response(result)
         except PromptOptimizerError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
         except Exception as exc:  # noqa: BLE001

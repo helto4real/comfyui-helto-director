@@ -187,6 +187,8 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
 _LOADED_MODELS: dict[str, dict[str, Any]] = {}
 _OPTIMIZER_JOBS: dict[str, dict[str, Any]] = {}
 _OPTIMIZER_JOBS_LOCK = threading.Lock()
+_FINISHED_JOB_TTL_SECONDS = 30 * 60
+_MAX_FINISHED_JOBS = 50
 _TIMING_LOCK = threading.Lock()
 CUT_SCENE_RE = re.compile(r"\b(cut scene|hard cut|scene cut|new scene|transition)\b", re.I)
 
@@ -1974,10 +1976,31 @@ def _set_job_status(
         job["updated_at"] = now
 
 
+def _prune_finished_jobs_locked(now: float) -> None:
+    finished = [
+        (job_id, job)
+        for job_id, job in _OPTIMIZER_JOBS.items()
+        if job.get("state") in {"completed", "failed"}
+    ]
+    for job_id, job in finished:
+        if now - float(job.get("updated_at") or 0) > _FINISHED_JOB_TTL_SECONDS:
+            _OPTIMIZER_JOBS.pop(job_id, None)
+    finished = [
+        (job_id, job)
+        for job_id, job in _OPTIMIZER_JOBS.items()
+        if job.get("state") in {"completed", "failed"}
+    ]
+    if len(finished) > _MAX_FINISHED_JOBS:
+        finished.sort(key=lambda entry: float(entry[1].get("updated_at") or 0))
+        for job_id, _job in finished[: len(finished) - _MAX_FINISHED_JOBS]:
+            _OPTIMIZER_JOBS.pop(job_id, None)
+
+
 def start_optimizer_job(payload: dict[str, Any]) -> str:
     job_id = uuid.uuid4().hex
     now = time.time()
     with _OPTIMIZER_JOBS_LOCK:
+        _prune_finished_jobs_locked(now)
         _OPTIMIZER_JOBS[job_id] = {
             "job_id": job_id,
             "state": "queued",

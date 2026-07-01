@@ -8,6 +8,9 @@ from aiohttp import web
 
 try:
     from ..shared.media_cache import (
+        AUDIO_EXTENSIONS,
+        IMAGE_EXTENSIONS,
+        VIDEO_EXTENSIONS,
         clear_media_cache,
         make_thumbnail,
         make_waveform,
@@ -15,6 +18,9 @@ try:
     )
 except Exception:
     from shared.media_cache import (
+        AUDIO_EXTENSIONS,
+        IMAGE_EXTENSIONS,
+        VIDEO_EXTENSIONS,
         clear_media_cache,
         make_thumbnail,
         make_waveform,
@@ -23,6 +29,7 @@ except Exception:
 
 
 ROUTE_PREFIX = "/helto_director/media"
+SERVABLE_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 PREVIEW_JOB_CONCURRENCY = 2
 _PREVIEW_JOB_SEMAPHORE = asyncio.Semaphore(PREVIEW_JOB_CONCURRENCY)
 _ROUTES_REGISTERED = False
@@ -113,6 +120,8 @@ def register_media_cache_routes() -> bool:
                 request.rel_url.query.get("path", ""),
                 request.rel_url.query.get("type"),
             )
+            if path.suffix.lower() not in SERVABLE_MEDIA_EXTENSIONS:
+                raise ValueError(f"Unsupported media extension: {path.suffix}")
             return web.FileResponse(
                 path,
                 headers={

@@ -260,6 +260,17 @@ def list_media(
     return sorted(results, key=lambda item: item["filename"].lower())
 
 
+def count_media(media_type: str, root: str | Path) -> int:
+    extensions = media_definition(media_type)["extensions"]
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return 0
+    count = 0
+    for _dirpath, _dirnames, filenames in os.walk(root_path):
+        count += sum(1 for filename in filenames if Path(filename).suffix.lower() in extensions)
+    return count
+
+
 def list_project_take_captures(
     project: dict[str, Any],
     shot_id: str,
@@ -356,7 +367,7 @@ def folder_payload(media_type: str) -> list[dict[str, Any]]:
                 "display_name": folder_display_name(folder.path),
                 "enabled": folder.enabled,
                 "exists": exists,
-                count_key: len(list_media(media_type, folder.path, recursive=True)) if exists else 0,
+                count_key: count_media(media_type, folder.path) if exists else 0,
             }
         )
     return folders

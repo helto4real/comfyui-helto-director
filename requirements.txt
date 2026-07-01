@@ -1,0 +1,3 @@
+# Privacy mode (default-on for new Director projects) needs AES-GCM support;
+# ComfyUI core does not ship the cryptography package.
+cryptography>=42.0

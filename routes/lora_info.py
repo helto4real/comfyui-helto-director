@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -42,14 +43,31 @@ def _is_truthy(value: str | None) -> bool:
     return value not in (None, "", "0", "false", "False", "no", "No")
 
 
+def _lora_roots() -> list[Path]:
+    import folder_paths  # type: ignore
+
+    roots = []
+    for root in folder_paths.get_folder_paths("loras") or []:
+        try:
+            roots.append(Path(root).expanduser().resolve(strict=False))
+        except OSError:
+            continue
+    return roots
+
+
 def _lora_path(file: str) -> Path | None:
     import folder_paths  # type: ignore
 
     path = folder_paths.get_full_path("loras", file)
     if path and Path(path).exists():
         return Path(path)
-    absolute = Path(file).expanduser()
-    if absolute.exists():
+    # Absolute paths are only honored inside configured loras folders; the
+    # routes accept client-supplied names, so anything else on disk is off
+    # limits.
+    absolute = Path(file).expanduser().resolve(strict=False)
+    if absolute.exists() and any(
+        root == absolute or root in absolute.parents for root in _lora_roots()
+    ):
         return absolute
     return None
 
@@ -246,7 +264,9 @@ def get_lora_info(
     info.setdefault("raw", {})
     if fetch_metadata or "metadata" not in info["raw"]:
         _merge_metadata(info, _read_safetensors_metadata(path))
-    if fetch_civitai or "civitai" not in info["raw"]:
+    # Civitai lookups send the file hash to a third party, so they only run
+    # when explicitly requested (the refresh endpoint), never implicitly.
+    if fetch_civitai:
         _merge_civitai(info, _fetch_civitai(file_hash))
 
     _write_json(_sidecar_path(path), info)
@@ -288,20 +308,28 @@ def register_lora_info_routes() -> bool:
     async def list_loras(request):
         files = folder_paths.get_filename_list("loras")
         if _get_param(request, "format") == "details":
-            return web.json_response([info for file in files if (info := _file_info(file)) is not None])
+            details = await asyncio.to_thread(
+                lambda: [info for file in files if (info := _file_info(file)) is not None]
+            )
+            return web.json_response(details)
         return web.json_response(list(files))
 
     @routes.get(f"{ROUTE_PREFIX}/info")
     async def lora_info(request):
         files = (_get_param(request, "files") or "").split(",")
-        if not files or files == [""]:
-            files = folder_paths.get_filename_list("loras")
         light = _is_truthy(_get_param(request, "light"))
-        data = [
-            info
-            for file in files
-            if (info := get_lora_info(file, light=light, fetch_metadata=not light)) is not None
-        ]
+        if not files or files == [""]:
+            # Full info hashes each file and rewrites sidecars; without an
+            # explicit file list only the cheap light form is allowed.
+            files = folder_paths.get_filename_list("loras")
+            light = True
+        data = await asyncio.to_thread(
+            lambda: [
+                info
+                for file in files
+                if (info := get_lora_info(file, light=light, fetch_metadata=not light)) is not None
+            ]
+        )
         return web.json_response({"status": 200, "data": data})
 
     @routes.get(f"{ROUTE_PREFIX}/info/refresh")
@@ -309,11 +337,13 @@ def register_lora_info_routes() -> bool:
         files = (_get_param(request, "files") or "").split(",")
         if not files or files == [""]:
             return _json_response({"status": 404, "error": "No LoRA file provided."})
-        data = [
-            info
-            for file in files
-            if (info := get_lora_info(file, fetch_metadata=True, fetch_civitai=True)) is not None
-        ]
+        data = await asyncio.to_thread(
+            lambda: [
+                info
+                for file in files
+                if (info := get_lora_info(file, fetch_metadata=True, fetch_civitai=True)) is not None
+            ]
+        )
         return web.json_response({"status": 200, "data": data})
 
     @routes.post(f"{ROUTE_PREFIX}/info")
@@ -323,7 +353,7 @@ def register_lora_info_routes() -> bool:
             return _json_response({"status": 404, "error": "No LoRA file provided."})
         post = await request.post()
         partial = json.loads(post.get("json") or "{}")
-        info = save_lora_info_partial(file, partial)
+        info = await asyncio.to_thread(save_lora_info_partial, file, partial)
         if info is None:
             return _json_response({"status": 404, "error": "LoRA file not found."})
         return web.json_response({"status": 200, "data": info})
