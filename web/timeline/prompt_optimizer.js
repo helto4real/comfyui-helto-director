@@ -9,6 +9,8 @@ import {
   closeMediaPreview,
   showMediaPreview,
 } from "./media_preview.js";
+import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
+import { setupOverlayDialog } from "./dialog.js";
 
 const ROUTE_PREFIX = "/helto_director/prompt_optimizer";
 
@@ -110,7 +112,15 @@ export function showPromptOptimizer(options) {
     }
     generateBtn.disabled = busy || !timelineRows.length;
   };
-  const close = () => closePromptOptimizer(documentRef);
+  const close = () => {
+    closePromptOptimizer(documentRef);
+    dialog.restoreFocus();
+  };
+  const dialog = setupOverlayDialog(overlay, {
+    documentRef,
+    label: "Prompt optimizer",
+    onRequestClose: () => close(),
+  });
   overlay._htdPromptOptimizerCleanup = () => {
     if (closed) return;
     closed = true;
@@ -313,8 +323,15 @@ export function showPromptOptimizer(options) {
   });
   panel.addEventListener("pointerdown", (event) => event.stopPropagation());
   panel.addEventListener("click", (event) => event.stopPropagation());
-  panel.addEventListener("keydown", (event) => event.stopPropagation());
+  panel.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+    event.stopPropagation();
+  });
   documentRef.body.append(overlay);
+  dialog.focusInitial(".model");
   renderRows();
   setBusy(false);
   refreshOptimizerStatus().catch((error) => setStatus(error.message));
@@ -528,13 +545,7 @@ function installPromptOptimizerStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-director-prompt-optimizer-styles";
   style.textContent = `
-    /* Helto design tokens (keep in sync with helto-designsystem/reference/tokens.css). Scoped to the optimizer overlay appended to <body>. */
-    .htd-prompt-optimizer-dialog {
-      --htd-bg:#0d1320; --htd-surface:#151c2a; --htd-surface-2:#1b2333; --htd-surface-3:#232d3f; --htd-surface-hover:#2c3850;
-      --htd-border:#2a3346; --htd-border-strong:#3a465c; --htd-border-hover:#4c5970; --htd-text:#e7ebf3; --htd-text-dim:#9aa6bd; --htd-text-faint:#6f7c95;
-      --htd-accent:#f1c75c; --htd-accent-strong:#ffd873; --htd-accent-bg:rgba(241,199,92,0.16); --htd-accent-border:rgba(241,199,92,0.55);
-      --htd-focus:#5e9bff; --htd-ring:0 0 0 2px rgba(94,155,255,0.5);
-      --htd-radius:6px; --htd-radius-sm:5px; --htd-radius-lg:10px; --htd-shadow:0 1px 2px rgba(0,0,0,0.35); --htd-shadow-pop:0 14px 36px rgba(0,0,0,0.55); }
+    ${htdTokenBlock(".htd-prompt-optimizer-dialog")}
     .htd-prompt-optimizer-dialog { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(6,9,15,0.72); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: 12px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
     .htd-prompt-optimizer-panel { width: min(980px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 28px)); display: flex; flex-direction: column; gap: 8px; background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); padding: 10px; box-shadow: var(--htd-shadow-pop); box-sizing: border-box; }
     .htd-prompt-optimizer-panel h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--htd-text); }
@@ -563,6 +574,7 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-panel .progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: var(--htd-bg); }
     .htd-prompt-optimizer-panel .progress-bar { width: 0%; height: 100%; background: var(--htd-accent); transition: width .18s ease; }
     .htd-prompt-optimizer-panel .grid { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
+    ${htdScrollbarBlock(".htd-prompt-optimizer-panel .grid")}
     .htd-prompt-optimizer-panel .row { display: grid; grid-template-columns: 28px 96px minmax(210px, 1fr) minmax(260px, 1.25fr); gap: 8px; align-items: start; padding: 8px; background: var(--htd-surface-2); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); }
     .htd-prompt-optimizer-panel .thumb { width: 96px; height: 96px; min-width: 96px; align-self: center; display: flex; align-items: center; justify-content: center; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); color: var(--htd-text-dim); background: #0a0e16; overflow: hidden; }
     .htd-prompt-optimizer-panel .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }

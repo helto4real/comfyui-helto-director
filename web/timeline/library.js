@@ -21,6 +21,7 @@ import {
   thumbnailUrl,
 } from "./media_cache.js";
 import { showMediaPreview } from "./media_preview.js";
+import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 
 export const ROUTE_PREFIX = "/helto_director/library";
 export const PROJECT_REPLACE_CONFIRMATION = "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.";
@@ -1816,13 +1817,7 @@ function installDirectorLibraryStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-director-library-style";
   style.textContent = `
-    /* Helto design tokens (keep in sync with helto-designsystem/reference/tokens.css). Scoped to the library overlay appended to <body>. */
-    .htd-library-dialog {
-      --htd-bg:#0d1320; --htd-surface:#151c2a; --htd-surface-2:#1b2333; --htd-surface-3:#232d3f; --htd-surface-hover:#2c3850;
-      --htd-border:#2a3346; --htd-border-strong:#3a465c; --htd-border-hover:#4c5970; --htd-text:#e7ebf3; --htd-text-dim:#9aa6bd; --htd-text-faint:#6f7c95;
-      --htd-accent:#f1c75c; --htd-accent-strong:#ffd873; --htd-accent-bg:rgba(241,199,92,0.16); --htd-accent-border:rgba(241,199,92,0.55);
-      --htd-focus:#5e9bff; --htd-ring:0 0 0 2px rgba(94,155,255,0.5); --htd-danger:#ec5a6b; --htd-danger-border:#8f3a44;
-      --htd-radius:6px; --htd-radius-sm:5px; --htd-radius-lg:10px; --htd-shadow:0 1px 2px rgba(0,0,0,0.35); --htd-shadow-pop:0 14px 36px rgba(0,0,0,0.55); --htd-shadow-glow:0 0 10px rgba(241,199,92,0.35); }
+    ${htdTokenBlock(".htd-library-dialog")}
     .htd-library-dialog { position: fixed; inset: 0; z-index: 10020; display: flex; align-items: center; justify-content: center; padding: 28px; box-sizing: border-box; background: rgba(6,9,15,0.72); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
     .htd-library-panel { width: min(1120px, calc(100vw - 72px)); height: min(760px, calc(100vh - 72px)); min-height: 560px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto auto; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96)); box-shadow: var(--htd-shadow-pop), inset 0 1px rgba(255,255,255,0.04); overflow: hidden; }
     .htd-library-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 24px 8px; }
@@ -1840,6 +1835,7 @@ function installDirectorLibraryStyles(documentRef) {
     .htd-library-tab.is-active { border-color: var(--htd-accent); background: transparent; color: var(--htd-accent-strong); }
     .htd-library-body { min-height: 0; display: grid; grid-template-columns: 190px minmax(360px, 1fr) 348px; overflow: hidden; }
     .htd-library-sidebar, .htd-library-grid, .htd-library-details { min-height: 0; overflow: auto; }
+    ${htdScrollbarBlock(".htd-library-sidebar, .htd-library-grid, .htd-library-details")}
     .htd-library-sidebar { display: flex; flex-direction: column; gap: 8px; padding: 18px 14px 18px 20px; border-right: 1px solid var(--htd-border); }
     .htd-library-sidebar-title, .htd-library-details-title { color: var(--htd-text); font-weight: 700; }
     .htd-library-sidebar-section { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }

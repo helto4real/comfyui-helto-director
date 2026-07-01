@@ -43,6 +43,7 @@ import {
 import { showMediaPicker } from "./media_picker.js";
 import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
+import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
   addCharacterReference,
@@ -3787,12 +3788,8 @@ function installStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-timeline-director-style";
   style.textContent = `
-    .helto-timeline-director { width: 100%; box-sizing: border-box; overflow: hidden; color: var(--htd-text); font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
-      --htd-bg: #0d1320; --htd-surface: #151c2a; --htd-surface-2: #1b2333; --htd-surface-3: #232d3f; --htd-surface-hover: #2c3850;
-      --htd-border: #2a3346; --htd-border-strong: #3a465c; --htd-text: #e7ebf3; --htd-text-dim: #9aa6bd; --htd-text-faint: #6f7c95;
-      --htd-accent: #f1c75c; --htd-accent-strong: #ffd873; --htd-accent-bg: rgba(241,199,92,0.16); --htd-accent-border: rgba(241,199,92,0.55);
-      --htd-focus: #5e9bff; --htd-ring: 0 0 0 2px rgba(94,155,255,0.5); --htd-danger: #ec5a6b; --htd-danger-bg: #3a1a22; --htd-danger-border: #8f3a44;
-      --htd-radius: 6px; --htd-radius-sm: 5px; --htd-radius-lg: 10px; --htd-shadow: 0 1px 2px rgba(0,0,0,0.35); --htd-shadow-pop: 0 14px 36px rgba(0,0,0,0.55); }
+    ${htdTokenBlock(".helto-timeline-director")}
+    .helto-timeline-director { width: 100%; box-sizing: border-box; overflow: hidden; color: var(--htd-text); font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
     .htd-root { position: relative; width: 100%; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 7px; }
     .htd-root.is-private:not(.is-privacy-revealed) .htd-range-control,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-viewport,
@@ -3807,7 +3804,7 @@ function installStyles(documentRef) {
     .htd-privacy-status { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 40; padding: 7px 10px; border: 1px solid #7a4f32; border-radius: var(--htd-radius); background: #2b1d18; color: #ffd8c2; box-shadow: var(--htd-shadow-pop); }
     .htd-toolbar { position: relative; z-index: 15; box-sizing: border-box; display: flex; gap: 4px; align-items: center; min-height: 34px; padding: 5px; overflow: visible; border-radius: var(--htd-radius); background: linear-gradient(180deg, var(--htd-surface-2), var(--htd-surface)); box-shadow: inset 0 0 0 1px var(--htd-border); }
     .htd-button { min-width: 28px; height: 24px; padding: 0 8px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); cursor: pointer; white-space: nowrap; font: inherit; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .03s ease; }
-    .htd-button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: #4c5970; color: #fff; }
+    .htd-button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: #fff; }
     .htd-button:active:not(:disabled) { transform: translateY(1px); }
     .htd-button:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
     .htd-icon-button { width: 28px; min-width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -4013,6 +4010,7 @@ function installStyles(documentRef) {
     .htd-reference-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--htd-text); }
     .htd-reference-header-actions { display: inline-flex; align-items: center; gap: 4px; }
     .htd-reference-body { min-height: 0; overflow: auto; padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+    ${htdScrollbarBlock(".htd-captures-body, .htd-settings-body, .htd-reference-body, .htd-reference-completions")}
     .htd-reference-empty { grid-column: 1 / -1; padding: 28px 8px; text-align: center; color: var(--htd-text-dim); }
     .htd-reference-card { min-width: 0; display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; padding: 10px; border: 1px solid var(--htd-border); border-radius: var(--htd-radius); background: var(--htd-surface-2); transition: border-color .12s ease; }
     .htd-reference-card:hover { border-color: var(--htd-border-strong); }

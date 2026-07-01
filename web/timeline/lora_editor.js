@@ -6,6 +6,8 @@ import {
   MODEL_LORA_TARGET_MAIN,
   createDefaultLoraStack,
 } from "./schema.js";
+import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
+import { setupOverlayDialog } from "./dialog.js";
 
 const STYLE_ID = "helto-director-lora-editor-style";
 const EDITOR_CLASS = "htd-lora-editor-dialog";
@@ -160,9 +162,16 @@ export function showTimelineLoraStackEditor(options = {}) {
 
   const overlay = documentRef.createElement("div");
   overlay.className = EDITOR_CLASS;
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute("aria-modal", "true");
   overlay.setAttribute("aria-label", options.title || profile.label || "LoRA Stack");
+  const closeEditor = () => {
+    overlay.remove();
+    editorDialog.restoreFocus();
+  };
+  const editorDialog = setupOverlayDialog(overlay, {
+    documentRef,
+    label: options.title || profile.label || "LoRA Stack",
+    onRequestClose: closeEditor,
+  });
 
   const panel = documentRef.createElement("div");
   panel.className = "htd-lora-editor-panel";
@@ -171,7 +180,7 @@ export function showTimelineLoraStackEditor(options = {}) {
     const header = div(documentRef, "htd-lora-editor-header");
     const title = div(documentRef, "htd-lora-editor-title");
     title.textContent = options.title || profile.label || "LoRA Stack";
-    const close = editorButton(documentRef, "x", "Close LoRA editor", () => overlay.remove());
+    const close = editorButton(documentRef, "x", "Close LoRA editor", closeEditor);
     header.append(title, close);
 
     const toolbar = div(documentRef, "htd-lora-editor-toolbar");
@@ -268,14 +277,14 @@ export function showTimelineLoraStackEditor(options = {}) {
         state.rows = [];
         render();
       }),
-      editorButton(documentRef, "Cancel", "Cancel LoRA changes", () => overlay.remove()),
+      editorButton(documentRef, "Cancel", "Cancel LoRA changes", closeEditor),
       editorButton(documentRef, "Save", "Save LoRA stack", () => {
         const nextStack = normalizeLoraEditorStack({
           ...state.stack,
           loras: state.rows,
         }, profile);
         options.onSave?.(nextStack);
-        overlay.remove();
+        closeEditor();
       }, "is-primary"),
     );
     panel.append(header, toolbar, body, footer);
@@ -297,11 +306,12 @@ export function showTimelineLoraStackEditor(options = {}) {
   }
 
   overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) overlay.remove();
+    if (event.target === overlay) closeEditor();
   });
   overlay.append(panel);
   documentRef.body.append(overlay);
   render();
+  editorDialog.focusInitial(".htd-lora-editor-filter");
   if (!state.loras.length) loadLoras(false);
   return overlay;
 }
@@ -367,18 +377,28 @@ export function showTimelineLoraInfoDialog(documentRef = globalThis.document, fi
   for (const dialog of documentRef.querySelectorAll?.(`.${INFO_CLASS}`) ?? []) dialog.remove();
   const overlay = documentRef.createElement("div");
   overlay.className = INFO_CLASS;
+  const closeInfo = () => {
+    overlay.remove();
+    infoDialog.restoreFocus();
+  };
+  const infoDialog = setupOverlayDialog(overlay, {
+    documentRef,
+    label: `LoRA info: ${file}`,
+    onRequestClose: closeInfo,
+  });
   const panel = div(documentRef, "htd-lora-info-panel");
   const title = div(documentRef, "htd-lora-info-title");
   title.textContent = file;
   const body = div(documentRef, "htd-lora-info-body");
   body.textContent = "Loading...";
-  const close = editorButton(documentRef, "Close", "Close LoRA info", () => overlay.remove());
+  const close = editorButton(documentRef, "Close", "Close LoRA info", closeInfo);
   panel.append(title, body, close);
   overlay.append(panel);
   overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) overlay.remove();
+    if (event.target === overlay) closeInfo();
   });
   documentRef.body.append(overlay);
+  infoDialog.focusInitial();
   fetchTimelineLoraInfo(file, { light: false, fetcher })
     .then((info) => {
       body.replaceChildren(...loraInfoElements(documentRef, info));
@@ -471,11 +491,9 @@ function installLoraEditorStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-    .htd-lora-editor-dialog, .htd-lora-info-dialog { position: fixed; inset: 0; z-index: 10080; display: flex; align-items: center; justify-content: center; padding: 18px; box-sizing: border-box; background: rgba(6, 9, 15, 0.74); backdrop-filter: blur(3px); color: #e7ebf3; font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
-      --htd-bg: #0d1320; --htd-surface: #151c2a; --htd-surface-2: #1b2333; --htd-surface-3: #232d3f; --htd-surface-hover: #2c3850;
-      --htd-border: #2a3346; --htd-border-strong: #3a465c; --htd-text: #e7ebf3; --htd-text-dim: #9aa6bd;
-      --htd-accent: #f1c75c; --htd-accent-strong: #ffd873; --htd-accent-border: rgba(241,199,92,0.55); --htd-focus: #5e9bff; --htd-ring: 0 0 0 2px rgba(94,155,255,0.5);
-      --htd-radius: 6px; --htd-radius-sm: 5px; --htd-radius-lg: 10px; --htd-shadow-pop: 0 18px 48px rgba(0,0,0,0.55); }
+    ${htdTokenBlock(".htd-lora-editor-dialog, .htd-lora-info-dialog")}
+    .htd-lora-editor-dialog, .htd-lora-info-dialog { position: fixed; inset: 0; z-index: 10080; display: flex; align-items: center; justify-content: center; padding: 18px; box-sizing: border-box; background: rgba(6, 9, 15, 0.74); backdrop-filter: blur(3px); color: var(--htd-text); font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
+      --htd-shadow-pop: 0 18px 48px rgba(0,0,0,0.55); }
     .htd-lora-editor-panel, .htd-lora-info-panel { width: min(920px, 100%); max-height: min(760px, 96vh); min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); background: var(--htd-surface); box-shadow: var(--htd-shadow-pop); overflow: hidden; }
     .htd-lora-info-panel { width: min(560px, 100%); padding: 12px; gap: 8px; }
     .htd-lora-editor-header, .htd-lora-editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--htd-border); }
@@ -486,17 +504,18 @@ function installLoraEditorStyles(documentRef) {
     .htd-lora-editor-field input, .htd-lora-editor-field select, .htd-lora-editor-name, .htd-lora-editor-strength { height: 26px; box-sizing: border-box; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: var(--htd-text); padding: 0 7px; transition: border-color .12s ease, box-shadow .12s ease; }
     .htd-lora-editor-field input:focus, .htd-lora-editor-field select:focus, .htd-lora-editor-name:focus, .htd-lora-editor-strength:focus { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
     .htd-lora-editor-body { min-height: 120px; overflow: auto; padding: 12px; display: grid; gap: 6px; }
+    ${htdScrollbarBlock(".htd-lora-editor-body")}
     .htd-lora-editor-row { min-width: 0; display: grid; grid-template-columns: 22px minmax(180px, 1fr) 74px auto auto auto auto; align-items: center; gap: 5px; }
     .htd-lora-editor-row.has-clip-strength { grid-template-columns: 22px minmax(180px, 1fr) 74px 74px auto auto auto auto; }
     .htd-lora-editor-name { width: 100%; min-width: 0; }
     .htd-lora-editor-strength { width: 74px; }
     .htd-lora-editor-button { min-width: 26px; height: 24px; padding: 0 8px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); cursor: pointer; white-space: nowrap; font: inherit; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .03s ease; }
-    .htd-lora-editor-button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: #4c5970; color: #fff; }
+    .htd-lora-editor-button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: #fff; }
     .htd-lora-editor-button:active:not(:disabled) { transform: translateY(1px); }
     .htd-lora-editor-button:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
     .htd-lora-editor-button.is-primary { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); }
     .htd-lora-editor-button.is-primary:hover:not(:disabled) { background: linear-gradient(180deg, #5b4d27, #46391b); color: #fff3cf; }
-    .htd-lora-editor-button.is-danger { border-color: #8f3a44; background: linear-gradient(180deg, #5a2330, #471b25); color: #ffd6dc; }
+    .htd-lora-editor-button.is-danger { border-color: var(--htd-danger-border); background: linear-gradient(180deg, #5a2330, #471b25); color: #ffd6dc; }
     .htd-lora-editor-button.is-danger:hover:not(:disabled) { border-color: #d0505f; background: linear-gradient(180deg, #6e2937, #57212c); color: #fff3f5; }
     .htd-lora-editor-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .htd-lora-editor-empty, .htd-lora-editor-error, .htd-lora-info-empty { color: var(--htd-text-dim); padding: 10px 2px; }

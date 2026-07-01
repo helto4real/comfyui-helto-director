@@ -7,6 +7,8 @@ import {
   closeMediaPreview,
   showMediaPreview,
 } from "./media_preview.js";
+import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
+import { setupOverlayDialog } from "./dialog.js";
 
 
 const ROUTE_PREFIX = "/helto_director/media_browser";
@@ -108,8 +110,14 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     const finish = (value) => {
       overlay.remove();
       closeMediaPreview(documentRef);
+      dialog.restoreFocus();
       resolve(value);
     };
+    const dialog = setupOverlayDialog(overlay, {
+      documentRef,
+      label: `${mode === "reference" ? "Select" : "Add"} timeline ${assetType}`,
+      onRequestClose: () => finish(null),
+    });
 
     const syncScopeButton = () => {
       scopeButton.title = recursive ? `Show ${noun} recursively from subfolders` : `Show only ${noun} directly in this folder`;
@@ -278,6 +286,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     });
 
     documentRef.body.append(overlay);
+    dialog.focusInitial("input[type=\"search\"], input[type=\"text\"], select");
     syncColumns();
     syncScopeButton();
     syncSortMenu();
@@ -326,8 +335,14 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
     const finish = (value) => {
       previewAudio.pause();
       overlay.remove();
+      dialog.restoreFocus();
       resolve(value);
     };
+    const dialog = setupOverlayDialog(overlay, {
+      documentRef,
+      label: "Add timeline audio",
+      onRequestClose: () => finish(null),
+    });
 
     const syncScopeButton = () => {
       scopeButton.title = recursive ? "Show audio recursively from subfolders" : "Show only audio directly in this folder";
@@ -562,8 +577,14 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "input" }) {
 
     const close = () => {
       overlay.remove();
+      dialog.restoreFocus();
       resolve(changed ? preferredAlias : null);
     };
+    const dialog = setupOverlayDialog(overlay, {
+      documentRef,
+      label: "Manage media folders",
+      onRequestClose: () => close(),
+    });
 
     const setStatus = (message, isError = false) => {
       status.textContent = message || "";
@@ -765,13 +786,7 @@ function installMediaPickerStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = "helto-media-picker-style";
   style.textContent = `
-    /* Helto design tokens (keep in sync with helto-designsystem/reference/tokens.css). Scoped to the picker overlays appended to <body>. */
-    .pr-image-browser-dialog, .pr-image-large-preview, .pr-folder-manager-dialog {
-      --htd-bg:#0d1320; --htd-surface:#151c2a; --htd-surface-2:#1b2333; --htd-surface-3:#232d3f; --htd-surface-hover:#2c3850;
-      --htd-border:#2a3346; --htd-border-strong:#3a465c; --htd-border-hover:#4c5970; --htd-text:#e7ebf3; --htd-text-dim:#9aa6bd; --htd-text-faint:#6f7c95;
-      --htd-accent:#f1c75c; --htd-accent-strong:#ffd873; --htd-accent-bg:rgba(241,199,92,0.16); --htd-accent-border:rgba(241,199,92,0.55);
-      --htd-focus:#5e9bff; --htd-ring:0 0 0 2px rgba(94,155,255,0.5); --htd-danger:#ec5a6b; --htd-danger-border:#8f3a44;
-      --htd-radius:6px; --htd-radius-sm:5px; --htd-radius-lg:10px; --htd-shadow:0 1px 2px rgba(0,0,0,0.35); --htd-shadow-pop:0 14px 36px rgba(0,0,0,0.55); --htd-shadow-glow:0 0 10px rgba(241,199,92,0.35); }
+    ${htdTokenBlock(".pr-image-browser-dialog, .pr-image-large-preview, .pr-folder-manager-dialog")}
     .pr-image-browser-dialog { position: fixed; inset: 0; z-index: 10001; background: rgba(6,9,15,0.72); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; color: var(--htd-text-dim); font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
     .pr-image-browser-panel { width: 30vw; max-width: 30vw; max-height: 50vh; min-width: 360px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); box-shadow: var(--htd-shadow-pop); padding: 14px; box-sizing: border-box; }
     .pr-image-browser-panel h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--htd-text); flex: 0 0 auto; }
@@ -804,11 +819,7 @@ function installMediaPickerStyles(documentRef) {
     .pr-image-tile.selected { border-color: var(--htd-accent); box-shadow: var(--htd-shadow-glow); }
     .pr-image-tile img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #0a0e16; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); transition: opacity .12s ease; box-sizing: border-box; }
     .pr-audio-browser-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--htd-border); border-radius: var(--htd-radius); padding: 6px; background: var(--htd-bg); }
-    .pr-image-browser-grid, .pr-audio-browser-list { scrollbar-width: thin; scrollbar-color: rgba(94,155,255,0.45) transparent; }
-    .pr-image-browser-grid::-webkit-scrollbar, .pr-audio-browser-list::-webkit-scrollbar { width: 8px; height: 8px; }
-    .pr-image-browser-grid::-webkit-scrollbar-track, .pr-audio-browser-list::-webkit-scrollbar-track { background: transparent; }
-    .pr-image-browser-grid::-webkit-scrollbar-thumb, .pr-audio-browser-list::-webkit-scrollbar-thumb { background: rgba(94,155,255,0.45); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
-    .pr-image-browser-grid::-webkit-scrollbar-thumb:hover, .pr-audio-browser-list::-webkit-scrollbar-thumb:hover { background: rgba(94,155,255,0.7); background-clip: padding-box; }
+    ${htdScrollbarBlock(".pr-image-browser-grid, .pr-audio-browser-list")}
     .pr-audio-row { display: grid; grid-template-columns: 34px 1fr; gap: 8px; align-items: center; background: var(--htd-surface-2); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius); padding: 7px; cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease; }
     .pr-audio-row:hover { border-color: var(--htd-border-hover); }
     .pr-audio-row.selected { border-color: var(--htd-accent); background: var(--htd-accent-bg); box-shadow: var(--htd-shadow-glow); }

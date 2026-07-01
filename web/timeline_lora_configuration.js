@@ -1,5 +1,7 @@
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
+import { htdScrollbarBlock, htdTokenBlock } from "./timeline/design_tokens.js";
+import { setupOverlayDialog } from "./timeline/dialog.js";
 
 const NODE_NAME = "HeltoTimelineLoraConfiguration";
 const NODE_DISPLAY_NAME = "Timeline LoRA Configuration";
@@ -446,14 +448,7 @@ function ensureDialogStyles() {
   const style = document.createElement("style");
   style.id = "helto-lora-info-styles";
   style.textContent = `
-    /* Helto design tokens (keep in sync with helto-designsystem/reference/tokens.css). Scoped to the LoRA info overlay appended to <body>. */
-    .helto-lora-info-overlay {
-      --htd-bg:#0d1320; --htd-surface:#151c2a; --htd-surface-2:#1b2333; --htd-surface-3:#232d3f; --htd-surface-hover:#2c3850;
-      --htd-border:#2a3346; --htd-border-strong:#3a465c; --htd-border-hover:#4c5970; --htd-text:#e7ebf3; --htd-text-dim:#9aa6bd; --htd-text-faint:#6f7c95;
-      --htd-accent:#f1c75c; --htd-accent-strong:#ffd873; --htd-accent-bg:rgba(241,199,92,0.16); --htd-accent-border:rgba(241,199,92,0.55);
-      --htd-focus:#5e9bff; --htd-ring:0 0 0 2px rgba(94,155,255,0.5);
-      --htd-radius:6px; --htd-radius-sm:5px; --htd-radius-lg:10px; --htd-shadow-pop:0 14px 36px rgba(0,0,0,0.55);
-    }
+    ${htdTokenBlock(".helto-lora-info-overlay")}
     .helto-lora-info-overlay {
       position: fixed;
       inset: 0;
@@ -513,6 +508,7 @@ function ensureDialogStyles() {
       max-height: calc(100vh - 96px);
       overflow: auto;
     }
+    ${htdScrollbarBlock(".aio-rgthree-dialog-content, .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list, .rgthree-info-dialog .rgthree-info-images")}
     .helto-lora-loading {
       padding: 8px 10px;
       margin-bottom: 10px;
@@ -936,9 +932,18 @@ async function showLoraInfoDialog(file, row = null) {
   ensureDialogStyles();
   const overlay = document.createElement("div");
   overlay.className = "helto-lora-info-overlay";
+
+  const close = () => {
+    overlay.remove();
+    dialog.restoreFocus();
+  };
+  const dialog = setupOverlayDialog(overlay, {
+    documentRef: document,
+    label: `LoRA info: ${file}`,
+    onRequestClose: close,
+  });
   document.body.appendChild(overlay);
 
-  const close = () => overlay.remove();
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay || event.target.closest(".helto-lora-close")) {
       close();
@@ -948,6 +953,7 @@ async function showLoraInfoDialog(file, row = null) {
   let info = null;
   try {
     renderInfoDialogContent(overlay, null, file, true);
+    dialog.focusInitial(".helto-lora-close");
     info = await fetchLoraInfo(file);
     renderInfoDialogContent(overlay, info, file, false);
     row?.setLoraInfo?.(info);
