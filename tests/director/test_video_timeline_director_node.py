@@ -163,7 +163,6 @@ def test_director_outputs_validation_for_invalid_timeline():
 def test_director_decrypts_private_timeline_json():
     VideoTimelineDirector = get_video_timeline_director()
     timeline = create_default_video_timeline()
-    timeline["project"]["privacy"]["mode"] = True
     timeline["director_track"]["sections"].append(
         {
             "item_id": "section_001",
@@ -180,7 +179,9 @@ def test_director_decrypts_private_timeline_json():
     ).result
 
     assert validation["is_valid"] is True
-    assert output_timeline["project"]["privacy"] == {"mode": True}
+    # Privacy lives in global settings now; normalization strips it from the
+    # per-project payload.
+    assert "privacy" not in output_timeline["project"]
     assert output_timeline["director_track"]["sections"][0]["prompt"] == "private prompt"
 
 

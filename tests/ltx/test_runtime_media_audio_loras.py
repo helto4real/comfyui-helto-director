@@ -53,6 +53,7 @@ from shared.timeline import (
     validate_video_timeline,
 )
 from shared.timeline.take_capture import TAKE_CAPTURE_TYPE, build_take_capture_metadata
+import shared.timeline.global_settings as timeline_global_settings
 
 
 def _registered_node(node_id):
@@ -240,8 +241,10 @@ def _text_plan(duration=1.0, prompt="wide shot"):
 
 
 def _shot_text_plan(duration=1.0, prompt="wide shot", *, privacy_mode: bool = False):
+    # Privacy is a global setting now (not per-project); the suite fixture
+    # points CONFIG_DIR at a tmp dir, so this only affects the current test.
+    timeline_global_settings.save_global_settings({"privacy": {"mode": privacy_mode}})
     timeline = _timeline_for_section("section_001", duration=duration, prompt=prompt)
-    timeline["project"]["privacy"]["mode"] = privacy_mode
     timeline["ui_state"]["selected_item_id"] = "shot_section_001"
     plan, validation, _ = build_ltx_timeline_plan(
         timeline,

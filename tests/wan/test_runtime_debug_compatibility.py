@@ -15,7 +15,7 @@ from shared.contracts.video_timeline import (
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
 )
-from shared.timeline import create_default_video_timeline
+from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE, create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 
 
@@ -81,6 +81,7 @@ def test_four_plus_keyframes_survive_to_runtime_debug_with_reasons(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=5),
         create_wan_timeline_config(runtime_backend_profile="Plan Only", debug_mode="Full"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     plan_before = copy.deepcopy(plan)
 

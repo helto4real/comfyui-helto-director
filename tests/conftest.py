@@ -1,9 +1,24 @@
 import folder_paths
 import pytest
 
+import shared.timeline.global_settings as timeline_global_settings
+
 
 @pytest.fixture(autouse=True)
 def register_tmp_path_for_media_resolver(tmp_path, monkeypatch):
     registry = folder_paths.folder_names_and_paths.copy()
     monkeypatch.setattr(folder_paths, "folder_names_and_paths", registry)
     folder_paths.add_model_folder_path("helto_pytest_tmp", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def suite_isolated_global_settings(tmp_path_factory, monkeypatch):
+    """Keep tests hermetic: never read or write the developer's real
+    config/timeline_director_global_settings.json. Privacy defaults to off so
+    take-registration and spill assertions see unredacted values; tests that
+    exercise privacy behavior save {"privacy": {"mode": True}} explicitly.
+    Lives outside tmp_path because some tests assert tmp_path stays empty."""
+    config_dir = tmp_path_factory.mktemp("suite_global_settings_config")
+    monkeypatch.setattr(timeline_global_settings, "CONFIG_DIR", config_dir)
+    timeline_global_settings.save_global_settings({"privacy": {"mode": False}})
+    return timeline_global_settings

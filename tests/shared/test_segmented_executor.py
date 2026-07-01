@@ -24,6 +24,7 @@ from shared.timeline_status import TimelineStatusReporter
 import shared.wan.runtime.segmented as wan_segmented
 import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
+from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE
 from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
 import shared.ltx.runtime.audio as ltx_audio
 import shared.ltx.runtime.segmented as ltx_segmented
@@ -1998,6 +1999,7 @@ def test_wan_fmlf_svi_three_segment_plan_and_handoff_exclude_padded_tail(monkeyp
             segment_seam_blend_frames=0,
             fmlf_continuation_mode="SVI",
         ),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     segments = plan["model_specific"]["wan"]["segmented_generation"]["segments"]
 
@@ -2101,6 +2103,7 @@ def test_wan_fmlf_svi_10s_debug_shows_two_text_sections_in_second_generation(mon
             segment_seam_blend_frames=0,
             fmlf_continuation_mode="SVI",
         ),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
     segments = plan["model_specific"]["wan"]["segmented_generation"]["segments"]
 

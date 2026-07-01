@@ -16,7 +16,7 @@ from shared.contracts.video_timeline import (
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
 )
-from shared.timeline import create_default_video_timeline
+from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE, create_default_video_timeline
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 
 
@@ -86,10 +86,18 @@ def test_gap_policy_warning_no_guidance_and_merge():
     timeline["project"]["duration_seconds"] = 2.0
     timeline["director_track"]["sections"].append(_text_section("text_a", 0.0, 1.0, "opening"))
 
-    _plan, warning_validation, _debug = build_wan_timeline_plan(timeline, create_wan_timeline_config(gap_policy="Warning"))
+    _plan, warning_validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(gap_policy="Warning"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert "WAN_GAP_HAS_NO_CONDITIONING" in [entry["code"] for entry in warning_validation["warnings"]]
 
-    merge_plan, merge_validation, _debug = build_wan_timeline_plan(timeline, create_wan_timeline_config(gap_policy="Merge With Previous Prompt"))
+    merge_plan, merge_validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(gap_policy="Merge With Previous Prompt"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     assert all(entry["type"] != "Gap" for entry in merge_plan["section_plan"])
     assert "WAN_GAP_MERGED_WITH_PREVIOUS_PROMPT" in [entry["code"] for entry in merge_validation["info"]]
 
@@ -114,7 +122,11 @@ def test_visual_keyframes_preserve_start_timed_and_end_roles(tmp_path):
             }
         )
 
-    plan, validation, debug = build_wan_timeline_plan(timeline, create_wan_timeline_config(debug_mode="Summary"))
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Summary"),
+        generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
+    )
     visual = plan["model_specific"]["wan"]["visual_conditioning"]
 
     assert validation["is_valid"] is True
@@ -202,7 +214,9 @@ def test_comfyui_core_runtime_applies_start_end_and_marks_timed_unsupported(tmp_
             }
         )
     config = create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full")
-    plan, _validation, _debug = build_wan_timeline_plan(timeline, config)
+    plan, _validation, _debug = build_wan_timeline_plan(
+        timeline, config, generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE
+    )
     plan_before = copy.deepcopy(plan)
     input_negative = [[torch.ones(1, 2), {"tag": "negative"}]]
 
