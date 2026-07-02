@@ -29,6 +29,7 @@ def get_video_timeline_director():
             if Path(path or ".").resolve() != module_path
         ]
         spec.loader.exec_module(module)
+        _sync_runtime_privacy_paths()
         extension = asyncio.run(module.comfy_entrypoint())
         return asyncio.run(extension.get_node_list())[0]
     finally:
@@ -37,6 +38,17 @@ def get_video_timeline_director():
             sys.modules.pop(sys_module_name, None)
         else:
             sys.modules[sys_module_name] = previous
+
+
+def _sync_runtime_privacy_paths():
+    """The loader imports the pack under its runtime package name; mirror the
+    conftest privacy-path isolation onto that module copy so node execution
+    and the test encrypt with the same key location."""
+    import shared.privacy as shared_privacy
+
+    runtime_privacy = sys.modules.get("comfyui_helto_director_runtime.shared.privacy")
+    if runtime_privacy is not None:
+        runtime_privacy.config_dir = shared_privacy.config_dir
 
 
 def test_director_schema_has_project_widgets_and_no_media_inputs():

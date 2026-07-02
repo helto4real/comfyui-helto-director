@@ -1,6 +1,7 @@
 import folder_paths
 import pytest
 
+import shared.privacy as shared_privacy
 import shared.privacy_keystore as privacy_keystore
 import shared.timeline.global_settings as timeline_global_settings
 
@@ -32,3 +33,6 @@ def suite_isolated_privacy_keystore(tmp_path_factory, monkeypatch):
     root = tmp_path_factory.mktemp("suite_privacy_keystore")
     monkeypatch.setenv(privacy_keystore.KEYSTORE_ENV, str(root / "privacy_keystore.json"))
     monkeypatch.setenv(privacy_keystore.SESSION_DIR_ENV, str(root / "session"))
+    # Also isolate the legacy plaintext key path, or tests that fall back to
+    # legacy mode would mint real key files in the repo's config directory.
+    monkeypatch.setattr(shared_privacy, "config_dir", lambda: root / "legacy_config")
