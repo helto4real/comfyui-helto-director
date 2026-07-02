@@ -20,3 +20,5 @@ dist/
 config/*.json
 
 .DS_Store
+
+config/*.json.migrated

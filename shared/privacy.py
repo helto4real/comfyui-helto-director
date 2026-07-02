@@ -21,6 +21,9 @@ except Exception as exc:  # noqa: BLE001 - dependency may be absent in ComfyUI i
     CRYPTO_AVAILABLE = False
     CRYPTO_IMPORT_ERROR = str(exc)
 
+from . import privacy_keystore
+from .privacy_keystore import PrivacyKeystoreError
+
 
 ENVELOPE_SCHEMA = "helto.timeline-director"
 BYTE_ENVELOPE_SCHEMA = "helto.timeline-director.bytes"
@@ -51,6 +54,7 @@ def crypto_status(base_dir: str | os.PathLike[str] | None = None) -> dict[str, A
         "keyExists": path.exists(),
         "keyPath": str(path),
         "error": "" if CRYPTO_AVAILABLE else f"Python package 'cryptography' is required: {CRYPTO_IMPORT_ERROR}",
+        **privacy_keystore.keystore_status(),
     }
 
 
@@ -102,9 +106,12 @@ def decrypt_bytes(payload: Any, purpose: str, base_dir: str | os.PathLike[str] |
     schema = payload.get("schema")
     if str(payload.get("purpose", "")) != purpose:
         raise PrivacyError("Encrypted byte payload was created for a different purpose.")
-    key, key_id = _load_or_create_key(base_dir, create=False)
-    if str(payload.get("keyId", "")) != key_id:
-        raise PrivacyError("Encrypted byte payload was created with a different local privacy key.")
+    key_id = str(payload.get("keyId", ""))
+    key = _key_for_payload(
+        key_id,
+        base_dir,
+        "Encrypted byte payload was created with a different local privacy key.",
+    )
     if schema == BYTE_CHUNKED_ENVELOPE_SCHEMA:
         return _decrypt_bytes_chunked(payload, purpose, key, key_id)
     if schema != BYTE_ENVELOPE_SCHEMA:
@@ -141,9 +148,12 @@ def decrypt_state(payload: Any, base_dir: str | os.PathLike[str] | None = None) 
             raise PrivacyError(f"Encrypted Timeline Director data is not valid JSON: {exc}") from exc
     if not is_encrypted_payload(payload):
         raise PrivacyError("Timeline Director data is not an encrypted privacy payload.")
-    key, key_id = _load_or_create_key(base_dir, create=False)
-    if str(payload.get("keyId", "")) != key_id:
-        raise PrivacyError("Encrypted Timeline Director data was created with a different local privacy key.")
+    key_id = str(payload.get("keyId", ""))
+    key = _key_for_payload(
+        key_id,
+        base_dir,
+        "Encrypted Timeline Director data was created with a different local privacy key.",
+    )
     try:
         nonce = _b64url_decode(str(payload.get("nonce", "")))
         ciphertext = _b64url_decode(str(payload.get("ciphertext", "")))
@@ -161,6 +171,15 @@ def decrypt_state(payload: Any, base_dir: str | os.PathLike[str] | None = None) 
 def _load_or_create_key(base_dir: str | os.PathLike[str] | None = None, create: bool = True) -> tuple[bytes, str]:
     if not CRYPTO_AVAILABLE:
         raise PrivacyError(f"Python package 'cryptography' is required for privacy mode: {CRYPTO_IMPORT_ERROR}")
+
+    # Explicit base_dir callers (tests, tools) keep the legacy per-directory
+    # key file. Otherwise the password-protected keystore wins once it has
+    # been initialized; installs that never opted in keep the legacy file.
+    if base_dir is None and privacy_keystore.keystore_exists():
+        try:
+            return privacy_keystore.primary_session_key()
+        except PrivacyKeystoreError as exc:
+            raise PrivacyError(str(exc)) from exc
 
     path = key_path(base_dir)
     if path.exists():
@@ -189,6 +208,54 @@ def _load_or_create_key(base_dir: str | os.PathLike[str] | None = None, create: 
         },
     )
     return key, key_id
+
+
+def _key_for_payload(payload_key_id: str, base_dir: str | os.PathLike[str] | None, mismatch_error: str) -> bytes:
+    key, key_id = _load_or_create_key(base_dir, create=False)
+    if payload_key_id == key_id:
+        return key
+    if base_dir is None and privacy_keystore.keystore_exists():
+        # Imported legacy keys (and rotated-out primaries) stay decryptable
+        # while the keystore is unlocked.
+        alt = privacy_keystore.session_key_for(payload_key_id)
+        if alt is not None:
+            return alt
+    raise PrivacyError(mismatch_error)
+
+
+def initialize_privacy_keystore(password: str) -> dict[str, Any]:
+    """Create the password-protected keystore, importing the legacy plaintext
+    key file so existing envelopes stay readable, then retire that file."""
+    if privacy_keystore.keystore_exists():
+        raise PrivacyError(
+            f"{privacy_keystore.ERROR_ALREADY_INITIALIZED}: Privacy keystore already exists: "
+            f"{privacy_keystore.keystore_path()}"
+        )
+    legacy_keys: list[tuple[str, bytes]] = []
+    path = key_path()
+    if path.exists():
+        try:
+            legacy_key, legacy_key_id = _load_or_create_key(create=False)
+            legacy_keys.append((legacy_key_id, legacy_key))
+        except PrivacyError as exc:
+            raise PrivacyError(
+                f"Cannot migrate existing privacy key file '{path}': {exc}"
+            ) from exc
+
+    try:
+        result = privacy_keystore.initialize_keystore(password, legacy_keys=legacy_keys)
+    except PrivacyKeystoreError as exc:
+        raise PrivacyError(str(exc)) from exc
+
+    if legacy_keys:
+        # Keep a recoverable copy but stop treating it as the active key.
+        migrated = path.with_name(path.name + ".migrated")
+        try:
+            path.replace(migrated)
+            os.chmod(migrated, 0o600)
+        except OSError:
+            pass
+    return result
 
 
 def _write_private_json(path: Path, payload: Mapping[str, Any]) -> None:

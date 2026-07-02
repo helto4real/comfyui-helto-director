@@ -1,5 +1,41 @@
 export const PRIVACY_SCHEMA = "helto.timeline-director";
 const ROUTE_PREFIX = "/helto_director/privacy";
+const PRIVACY_TOKEN_HEADER = "X-Helto-Privacy-Token";
+const PRIVACY_TOKEN_STORAGE_KEY = "helto_privacy_token";
+const PRIVACY_LOCKED_CODES = ["PRIVACY_LOCKED", "PRIVACY_TOKEN_REQUIRED"];
+
+export function getStoredPrivacyToken() {
+  try {
+    return globalThis.localStorage?.getItem(PRIVACY_TOKEN_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function storePrivacyToken(token) {
+  try {
+    if (token) globalThis.localStorage?.setItem(PRIVACY_TOKEN_STORAGE_KEY, String(token));
+    else globalThis.localStorage?.removeItem(PRIVACY_TOKEN_STORAGE_KEY);
+  } catch {
+    /* localStorage unavailable (tests, embedded webviews) — token stays per-request. */
+  }
+  // Image/media elements cannot send custom headers, so privacy-mode
+  // thumbnails and waveforms authenticate with this cookie instead.
+  try {
+    const documentRef = globalThis.document;
+    if (!documentRef) return;
+    documentRef.cookie = token
+      ? `${PRIVACY_TOKEN_STORAGE_KEY}=${encodeURIComponent(String(token))}; path=/; SameSite=Lax`
+      : `${PRIVACY_TOKEN_STORAGE_KEY}=; path=/; SameSite=Lax; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  } catch {
+    /* cookies unavailable — header-based callers still work. */
+  }
+}
+
+export function isPrivacyLockedError(error) {
+  const message = String(error?.message ?? error ?? "");
+  return PRIVACY_LOCKED_CODES.some((code) => message.includes(code));
+}
 
 export function isEncryptedPrivacyPayload(value) {
   const parsed = parsePrivacyPayload(value);
@@ -18,8 +54,11 @@ export function parsePrivacyPayload(value) {
 }
 
 export async function fetchPrivacyJson(endpoint, payload = null) {
+  const headers = { "Content-Type": "application/json" };
+  const token = getStoredPrivacyToken();
+  if (token) headers[PRIVACY_TOKEN_HEADER] = token;
   const options = payload
-    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+    ? { method: "POST", headers, body: JSON.stringify(payload) }
     : undefined;
   const response = await fetch(`${ROUTE_PREFIX}/${endpoint}`, options);
   const text = await response.text();
@@ -40,6 +79,8 @@ export function encryptTimelineSync(timeline) {
   const xhr = new XMLHttpRequest();
   xhr.open("POST", `${ROUTE_PREFIX}/encrypt`, false);
   xhr.setRequestHeader("Content-Type", "application/json");
+  const token = getStoredPrivacyToken();
+  if (token) xhr.setRequestHeader(PRIVACY_TOKEN_HEADER, token);
   xhr.send(JSON.stringify({ state: { timeline } }));
   let data = {};
   try {
@@ -51,4 +92,35 @@ export function encryptTimelineSync(timeline) {
     throw new Error(data.error || xhr.statusText || `HTTP ${xhr.status}`);
   }
   return data.envelope;
+}
+
+export async function fetchPrivacyStatus() {
+  return fetchPrivacyJson("status");
+}
+
+export async function initializePrivacyKeystore(password) {
+  const result = await fetchPrivacyJson("keystore/init", { password });
+  storePrivacyToken(result.token || "");
+  return result;
+}
+
+export async function unlockPrivacyKeystore(password) {
+  const result = await fetchPrivacyJson("unlock", { password });
+  storePrivacyToken(result.token || "");
+  return result;
+}
+
+export async function lockPrivacyKeystore() {
+  const result = await fetchPrivacyJson("lock", {});
+  storePrivacyToken("");
+  return result;
+}
+
+export async function changePrivacyKeystorePassword(currentPassword, newPassword) {
+  const result = await fetchPrivacyJson("keystore/change_password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+  storePrivacyToken(result.token || "");
+  return result;
 }

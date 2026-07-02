@@ -36,6 +36,11 @@ except Exception:
     )
     from shared.media_cache import make_thumbnail
 
+try:
+    from .privacy import check_privacy_token
+except Exception:
+    from routes.privacy import check_privacy_token
+
 
 ROUTE_PREFIX = "/helto_director/media_browser"
 MEDIA_ROUTE_PREFIX = "/helto_director/media"
@@ -188,6 +193,10 @@ def register_media_browser_routes() -> bool:
             media_type = normalize_media_type(request.match_info["media_type"])
             filename = urllib.parse.unquote(request.rel_url.query.get("filename", ""))
             privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             path = resolve_browser_media_path(
                 media_type,
                 request.rel_url.query.get("alias", ""),

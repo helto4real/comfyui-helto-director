@@ -44,6 +44,8 @@ import { showMediaPicker } from "./media_picker.js";
 import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
+import { fetchPrivacyStatus, lockPrivacyKeystore } from "./privacy.js";
+import { showPrivacyKeystoreDialog } from "./privacy_unlock.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
   addCharacterReference,
@@ -1786,6 +1788,7 @@ export class TimelineRenderer {
       this.renderGlobalSettingCheckbox("Show Effective Prompt", draft, ["global_prompt", "show_effective_prompt"]),
       this.renderGlobalSettingCheckbox("Always Normalize Audio", draft, ["audio", "always_normalize"]),
       this.renderGlobalSettingCheckbox("Privacy Mode", draft, ["privacy", "mode"]),
+      this.renderGlobalPrivacyKeystoreSetting(),
       this.renderGlobalSettingCheckbox("Show Section Labels", draft, ["display", "show_section_labels"]),
       this.renderGlobalSettingCheckbox("Show Thumbnails", draft, ["display", "show_thumbnails"]),
       this.renderGlobalSettingCheckbox("Show Audio Waveforms", draft, ["display", "show_audio_waveforms"]),
@@ -2174,6 +2177,49 @@ export class TimelineRenderer {
       this.controller.globalSettingsError = "";
     });
     row.append(input);
+    return row;
+  }
+
+  renderGlobalPrivacyKeystoreSetting() {
+    const row = settingRow("Privacy Keystore");
+    const wrap = el("div", "htd-privacy-keystore-setting");
+    const status = el("span", "htd-privacy-keystore-setting-status");
+    status.textContent = "Checking...";
+    wrap.append(status);
+    row.append(wrap);
+
+    const documentRef = this.container.ownerDocument ?? globalThis.document;
+    const refresh = () => this.render();
+    fetchPrivacyStatus()
+      .then((info) => {
+        status.textContent = !info.keystoreInitialized
+          ? "Not password protected"
+          : info.keystoreLocked
+            ? "Locked"
+            : "Unlocked";
+        const actions = [];
+        if (!info.keystoreInitialized) {
+          actions.push(button("Set Password", "Protect the privacy key with a password", async () => {
+            if (await showPrivacyKeystoreDialog("setup", { documentRef })) refresh();
+          }));
+        } else if (info.keystoreLocked) {
+          actions.push(button("Unlock", "Unlock the privacy keystore", async () => {
+            if (await showPrivacyKeystoreDialog("unlock", { documentRef })) refresh();
+          }));
+        } else {
+          actions.push(button("Lock", "Lock the privacy keystore now", async () => {
+            await lockPrivacyKeystore();
+            refresh();
+          }));
+          actions.push(button("Change Password", "Change the privacy keystore password", async () => {
+            if (await showPrivacyKeystoreDialog("change", { documentRef })) refresh();
+          }));
+        }
+        wrap.append(...actions);
+      })
+      .catch((error) => {
+        status.textContent = `Status unavailable: ${error.message}`;
+      });
     return row;
   }
 
@@ -4004,6 +4050,8 @@ function installStyles(documentRef) {
     .htd-setting-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .htd-setting-number, .htd-setting-text { width: 120px; min-width: 0; height: 26px; box-sizing: border-box; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface); color: var(--htd-text); padding: 0 8px; }
     textarea.htd-setting-text { height: 52px; padding: 6px 8px; resize: vertical; }
+    .htd-privacy-keystore-setting { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .htd-privacy-keystore-setting-status { color: var(--htd-text-dim); }
     .htd-reference-overlay { position: absolute; inset: 0; z-index: 21; display: flex; align-items: stretch; justify-content: center; background: rgba(6, 9, 15, 0.74); backdrop-filter: blur(3px); padding: 12px; box-sizing: border-box; }
     .htd-reference-modal { width: min(820px, 100%); min-height: 0; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); background: var(--htd-surface); box-shadow: var(--htd-shadow-pop); display: flex; flex-direction: column; }
     .htd-reference-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--htd-border); }

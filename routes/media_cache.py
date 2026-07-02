@@ -27,6 +27,11 @@ except Exception:
         resolve_media_path,
     )
 
+try:
+    from .privacy import check_privacy_token
+except Exception:
+    from routes.privacy import check_privacy_token
+
 
 ROUTE_PREFIX = "/helto_director/media"
 SERVABLE_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
@@ -66,6 +71,10 @@ def register_media_cache_routes() -> bool:
     async def get_thumbnail(request):
         try:
             privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             path = resolve_media_path(
                 request.rel_url.query.get("path", ""),
                 request.rel_url.query.get("type"),
@@ -98,6 +107,10 @@ def register_media_cache_routes() -> bool:
     async def get_waveform(request):
         try:
             privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             path = resolve_media_path(
                 request.rel_url.query.get("path", ""),
                 request.rel_url.query.get("type"),

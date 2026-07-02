@@ -16,7 +16,7 @@ Privacy Mode is enabled by default for new Director projects. It is a local work
 - Other ComfyUI nodes and their widget values are not encrypted by this nodepack.
 - Public Director widgets such as duration, frame rate, aspect ratio, orientation, and quality preset remain clear text.
 - Runtime tensors and normal ComfyUI execution artifacts are outside this feature's scope.
-- Anyone who can reach the ComfyUI HTTP port can call `POST /helto_director/privacy/decrypt` and recover the plaintext of any envelope, because ComfyUI has no authentication and the key lives on the server. Privacy Mode protects data at rest (saved workflows, shared JSON, preview caches) — it assumes the ComfyUI server itself is trusted and reachable only by you (localhost, or a network you control). Do not expose the server with `--listen` on untrusted networks and expect Privacy Mode to hold.
+- Without a privacy keystore (see `docs/privacy_keystore.md`), anyone who can reach the ComfyUI HTTP port can call `POST /helto_director/privacy/decrypt` and recover the plaintext of any envelope, because ComfyUI has no authentication and the key lives on the server. With a keystore, those routes additionally require the session token issued at unlock. Privacy Mode protects data at rest (saved workflows, shared JSON, preview caches) — it assumes the ComfyUI server itself is trusted and reachable only by you (localhost, or a network you control). Do not expose the server with `--listen` on untrusted networks and expect Privacy Mode to hold; passwords and tokens travel over the plain HTTP connection.
 
 If privacy encryption or decryption fails, the Director should fail clearly rather than silently saving private timeline content as clear text.
 
