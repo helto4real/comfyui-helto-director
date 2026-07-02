@@ -92,6 +92,15 @@ register_prompt_optimizer_routes()
 register_timeline_library_routes()
 register_lora_info_routes()
 
+try:
+    from helto_privacy import register_helto_privacy_ui
+
+    register_helto_privacy_ui(legacy_key_dir=_PACKAGE_ROOT / "config")
+except Exception as _helto_privacy_exc:  # noqa: BLE001 - shared UI is optional; local routes still work.
+    import logging
+
+    logging.debug("Helto shared privacy UI unavailable: %s", _helto_privacy_exc)
+
 
 WEB_DIRECTORY = "./web"
 

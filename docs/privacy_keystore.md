@@ -37,6 +37,13 @@ Endpoints for scripting: `POST /helto_director/privacy/keystore/init`,
 `/unlock`, `/lock`, `/keystore/change_password` (JSON bodies with
 `password` / `current_password` + `new_password`).
 
+When the `helto-privacy` package is installed, the Director also registers
+the pack-neutral canonical endpoints (`/helto_privacy/status`, `/unlock`,
+`/lock`, `/keystore/init`, `/keystore/change_password`) and serves the shared
+unlock dialog at `/helto_privacy/ui/privacy.js` for every Helto pack on this
+server. The `/helto_director/privacy/*` endpoints above remain as
+backward-compatible aliases used by the Director's own UI.
+
 ## Sharing with other Helto packs
 
 The shared implementation lives in
