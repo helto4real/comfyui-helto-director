@@ -1016,6 +1016,10 @@ function testRendererUsesRealWaveformsOnly() {
   assert.equal(rendererSource.includes(".htd-waveform { position: absolute; z-index: 1; inset: 4px 9px;"), true);
   assert.equal(rendererSource.includes('this.renderGlobalSettingCheckbox("Privacy Mode", draft, ["privacy", "mode"])'), true);
   assert.equal(rendererSource.includes('this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"])'), false);
+  assert.equal(rendererSource.includes("hasPrivacyTokenCookie(documentRef)"), true);
+  assert.equal(rendererSource.includes("hasStoredPrivacyToken()"), true);
+  assert.equal(rendererSource.includes("ensureStoredPrivacyTokenCookie(documentRef)"), true);
+  assert.equal(rendererSource.includes("Unlocked on server; unlock here to refresh media previews"), true);
   assert.equal(rendererSource.includes("renderGlobalSettings(timeline)"), true);
   assert.equal(rendererSource.includes("renderProjectSettings(timeline)"), true);
   assert.equal(rendererSource.includes("Hide Media Previews"), false);

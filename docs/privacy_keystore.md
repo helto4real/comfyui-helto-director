@@ -39,9 +39,18 @@ Endpoints for scripting: `POST /helto_director/privacy/keystore/init`,
 
 ## Sharing with other Helto packs
 
-`shared/privacy_keystore.py` is standalone (no imports from this repo) so
-other node packs can vendor or depend on it; they resolve the same keystore
-and session paths, so one unlock covers every pack.
+The shared implementation lives in
+[`helto-privacy`](https://github.com/helto4real/helto-privacy). Other Helto
+node packs can depend on the tagged package and use its
+`PrivacyEnvelopeCodec("<pack schema>")` with their own envelope schema while
+resolving the same keystore and session paths. One unlock covers every pack on
+the same ComfyUI origin.
+
+This repo keeps `shared/privacy_keystore.py` as a compatibility shim with a
+vendored fallback for offline/manual installs. The fallback preserves existing
+Timeline Director behavior; new cross-pack migrations should use the package
+APIs (`initialize_keystore_with_legacy_migration`, `add_keys_to_keystore`, and
+`rotate_primary_key`).
 
 ## Threat model
 

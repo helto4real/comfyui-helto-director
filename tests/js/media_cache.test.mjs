@@ -8,6 +8,30 @@ import {
   thumbnailUrl,
   waveformUrl,
 } from "../../web/timeline/media_cache.js";
+import {
+  hasPrivacyTokenCookie,
+  storePrivacyToken,
+} from "../../web/timeline/privacy.js";
+
+function installBrowserTokenStubs() {
+  const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, "document");
+  const hadLocalStorage = Object.prototype.hasOwnProperty.call(globalThis, "localStorage");
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  const storage = new Map();
+  globalThis.document = { cookie: "" };
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  return () => {
+    if (hadDocument) globalThis.document = previousDocument;
+    else delete globalThis.document;
+    if (hadLocalStorage) globalThis.localStorage = previousLocalStorage;
+    else delete globalThis.localStorage;
+  };
+}
 
 function testThumbnailUrlUsesBackendRoute() {
   const url = thumbnailUrl({
@@ -48,6 +72,37 @@ function testUploadedFileWaveformUsesInputType() {
   }, 64, true);
 
   assert.ok(privateUrl.includes("privacy=1"));
+}
+
+function testPrivateMediaUrlsRestoreCookieFromStoredToken() {
+  const restore = installBrowserTokenStubs();
+  try {
+    storePrivacyToken("token 123");
+    globalThis.document.cookie = "";
+
+    assert.equal(hasPrivacyTokenCookie(), false);
+    const thumbUrl = thumbnailUrl({
+      type: "Image",
+      source_kind: "FilePath",
+      path: "/mnt/media/reference image.png",
+    }, 256, true);
+
+    assert.ok(thumbUrl.includes("privacy=1"));
+    assert.equal(hasPrivacyTokenCookie(), true);
+    assert.ok(globalThis.document.cookie.includes("helto_privacy_token=token%20123"));
+
+    globalThis.document.cookie = "";
+    const privateWaveformUrl = waveformUrl({
+      type: "Audio",
+      source_kind: "FilePath",
+      path: "/mnt/media/voice.wav",
+    }, 64, true);
+
+    assert.ok(privateWaveformUrl.includes("privacy=1"));
+    assert.equal(hasPrivacyTokenCookie(), true);
+  } finally {
+    restore();
+  }
 }
 
 function testMediaViewUrlUsesBackendViewRoute() {
@@ -117,6 +172,7 @@ function testRefreshDoesNotPreloadAudioWaveforms() {
 
 testThumbnailUrlUsesBackendRoute();
 testUploadedFileWaveformUsesInputType();
+testPrivateMediaUrlsRestoreCookieFromStoredToken();
 testMediaViewUrlUsesBackendViewRoute();
 testWaveformUrlClampsPeakCount();
 testWaveformCacheUsesAssetAndPeakCountKeys();

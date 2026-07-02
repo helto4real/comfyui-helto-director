@@ -29,7 +29,10 @@ def isolated_keystore(tmp_path, monkeypatch):
     monkeypatch.setenv(keystore.KEYSTORE_ENV, str(tmp_path / "keystore" / "privacy_keystore.json"))
     monkeypatch.setenv(keystore.SESSION_DIR_ENV, str(tmp_path / "session"))
     # Interactive scrypt cost is deliberately high; keep unit tests fast.
-    monkeypatch.setattr(keystore, "SCRYPT_N", 2**12)
+    monkeypatch.setattr(keystore, "SCRYPT_N", 2**12, raising=False)
+    backend = getattr(keystore, "_privacy_keystore_backend", None)
+    if backend is not None:
+        monkeypatch.setattr(backend, "SCRYPT_N", 2**12, raising=False)
     # Keep the legacy key file away from the repo's real config directory.
     monkeypatch.setattr(privacy, "config_dir", lambda: tmp_path / "legacy_config")
 

@@ -11,10 +11,35 @@ import {
 import {
   addPickedMediaItem,
   attachPickedGeneratedVideoAsTake,
+  fetchProjectTakeCaptures,
   registerGeneratedTakePayload,
   replacePickedSectionMedia,
 } from "../../web/timeline/media_actions.js";
 import { addSection } from "../../web/timeline/operations.js";
+import {
+  hasPrivacyTokenCookie,
+  storePrivacyToken,
+} from "../../web/timeline/privacy.js";
+
+function installBrowserTokenStubs() {
+  const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, "document");
+  const hadLocalStorage = Object.prototype.hasOwnProperty.call(globalThis, "localStorage");
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  const storage = new Map();
+  globalThis.document = { cookie: "" };
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  return () => {
+    if (hadDocument) globalThis.document = previousDocument;
+    else delete globalThis.document;
+    if (hadLocalStorage) globalThis.localStorage = previousLocalStorage;
+    else delete globalThis.localStorage;
+  };
+}
 
 function pickedItem(path, filename, extras = {}) {
   return {
@@ -240,6 +265,40 @@ function testGeneratedVideoPickerFallbackStillCreatesCandidateTake() {
   assert.equal(result.take.asset_id, result.asset.asset_id);
 }
 
+async function testProjectTakeCapturesRefreshesPrivateThumbnailCookie() {
+  const restoreBrowser = installBrowserTokenStubs();
+  const hadFetch = Object.prototype.hasOwnProperty.call(globalThis, "fetch");
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  try {
+    storePrivacyToken("project token");
+    globalThis.document.cookie = "";
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({ captures: [] }),
+      };
+    };
+
+    assert.equal(hasPrivacyTokenCookie(), false);
+    const payload = await fetchProjectTakeCaptures({
+      project: { name: "Timeline Project" },
+    }, "shot_001", true);
+
+    assert.deepEqual(payload, { captures: [] });
+    assert.equal(hasPrivacyTokenCookie(), true);
+    assert.ok(globalThis.document.cookie.includes("helto_privacy_token=project%20token"));
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].url.endsWith("/project_takes"));
+    assert.equal(JSON.parse(calls[0].options.body).privacy, true);
+  } finally {
+    if (hadFetch) globalThis.fetch = previousFetch;
+    else delete globalThis.fetch;
+    restoreBrowser();
+  }
+}
+
 function testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake() {
   const timeline = createDefaultVideoTimeline();
   const section = addSection(timeline, "Text", 0);
@@ -287,9 +346,11 @@ function testInspectorNoLongerRendersPathEntryClearControls() {
 
 function testMediaPickerPrivacyUsesSingleDirectorMode() {
   const pickerSource = readFileSync(new URL("../../web/timeline/media_picker.js", import.meta.url), "utf8");
+  const mediaActionsSource = readFileSync(new URL("../../web/timeline/media_actions.js", import.meta.url), "utf8");
 
   assert.equal(pickerSource.includes("hover-hide"), false);
   assert.equal(pickerSource.includes("privacyMode = false"), true);
+  assert.equal(pickerSource.includes("if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);"), true);
   assert.equal(pickerSource.includes("pr-image-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("pr-audio-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("showMediaPreview(documentRef"), true);
@@ -310,6 +371,7 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
   assert.equal(pickerSource.includes("<strong title="), false);
   assert.equal((pickerSource.match(/showFolderManager\(/g) ?? []).length, 3);
   assert.equal((pickerSource.match(/folder-manage/g) ?? []).length >= 4, true);
+  assert.equal(mediaActionsSource.includes("if (privacyMode) ensureStoredPrivacyTokenCookie();"), true);
 }
 
 testImagePickerSelectionCreatesSectionAndAsset();
@@ -320,6 +382,7 @@ testReplaceModePreservesTiming();
 testGeneratedVideoPickerSidecarCreatesMetadataRichTake();
 testGeneratedVideoPickerKeepsRepeatedCaptureAssetIdsPathUnique();
 testGeneratedVideoPickerFallbackStillCreatesCandidateTake();
+await testProjectTakeCapturesRefreshesPrivateThumbnailCookie();
 testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake();
 testInspectorNoLongerRendersPathEntryClearControls();
 testMediaPickerPrivacyUsesSingleDirectorMode();

@@ -44,7 +44,13 @@ import { showMediaPicker } from "./media_picker.js";
 import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
-import { fetchPrivacyStatus, lockPrivacyKeystore } from "./privacy.js";
+import {
+  ensureStoredPrivacyTokenCookie,
+  fetchPrivacyStatus,
+  hasPrivacyTokenCookie,
+  hasStoredPrivacyToken,
+  lockPrivacyKeystore,
+} from "./privacy.js";
 import { showPrivacyKeystoreDialog } from "./privacy_unlock.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
@@ -2207,6 +2213,16 @@ export class TimelineRenderer {
             if (await showPrivacyKeystoreDialog("unlock", { documentRef })) refresh();
           }));
         } else {
+          if (!hasPrivacyTokenCookie(documentRef)) {
+            if (hasStoredPrivacyToken()) {
+              ensureStoredPrivacyTokenCookie(documentRef);
+            } else {
+              status.textContent = "Unlocked on server; unlock here to refresh media previews";
+              actions.push(button("Unlock", "Refresh this browser's privacy token", async () => {
+                if (await showPrivacyKeystoreDialog("unlock", { documentRef })) refresh();
+              }));
+            }
+          }
           actions.push(button("Lock", "Lock the privacy keystore now", async () => {
             await lockPrivacyKeystore();
             refresh();

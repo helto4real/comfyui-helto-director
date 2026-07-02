@@ -33,6 +33,10 @@ def suite_isolated_privacy_keystore(tmp_path_factory, monkeypatch):
     root = tmp_path_factory.mktemp("suite_privacy_keystore")
     monkeypatch.setenv(privacy_keystore.KEYSTORE_ENV, str(root / "privacy_keystore.json"))
     monkeypatch.setenv(privacy_keystore.SESSION_DIR_ENV, str(root / "session"))
+    monkeypatch.setattr(privacy_keystore, "SCRYPT_N", 2**12, raising=False)
+    backend = getattr(privacy_keystore, "_privacy_keystore_backend", None)
+    if backend is not None:
+        monkeypatch.setattr(backend, "SCRYPT_N", 2**12, raising=False)
     # Also isolate the legacy plaintext key path, or tests that fall back to
     # legacy mode would mint real key files in the repo's config directory.
     monkeypatch.setattr(shared_privacy, "config_dir", lambda: root / "legacy_config")

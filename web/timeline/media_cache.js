@@ -4,6 +4,7 @@ import {
   ASSET_TYPE_VIDEO,
 } from "./schema.js";
 import { isGlobalPrivacyMode, normalizeGlobalSettings } from "./global_settings.js";
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
 
 const ROUTE_PREFIX = "/helto_director/media";
 export const MIN_WAVEFORM_PEAKS = 16;
@@ -104,10 +105,12 @@ export function unmountTimelineMediaCache(node) {
 }
 
 export function thumbnailUrl(asset, maxSize = 320, privacyMode = false) {
+  if (privacyMode) ensureStoredPrivacyTokenCookie();
   return `${ROUTE_PREFIX}/thumbnail?${paramsFor(asset, { max_size: maxSize, ...(privacyMode ? { privacy: 1 } : {}) })}`;
 }
 
 export function waveformUrl(asset, peaks = 96, privacyMode = false) {
+  if (privacyMode) ensureStoredPrivacyTokenCookie();
   return `${ROUTE_PREFIX}/waveform?${paramsFor(asset, { peaks: clampWaveformPeaks(peaks), ...(privacyMode ? { privacy: 1 } : {}) })}`;
 }
 

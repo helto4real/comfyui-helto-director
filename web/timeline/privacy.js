@@ -19,10 +19,36 @@ export function storePrivacyToken(token) {
   } catch {
     /* localStorage unavailable (tests, embedded webviews) — token stays per-request. */
   }
+  writePrivacyTokenCookie(token);
+}
+
+export function hasStoredPrivacyToken() {
+  return Boolean(getStoredPrivacyToken());
+}
+
+export function hasPrivacyTokenCookie(documentRef = globalThis.document) {
+  try {
+    const prefix = `${PRIVACY_TOKEN_STORAGE_KEY}=`;
+    return String(documentRef?.cookie || "")
+      .split(";")
+      .map((part) => part.trim())
+      .some((part) => part.startsWith(prefix) && part.length > prefix.length);
+  } catch {
+    return false;
+  }
+}
+
+export function ensureStoredPrivacyTokenCookie(documentRef = globalThis.document) {
+  const token = getStoredPrivacyToken();
+  if (!token) return false;
+  writePrivacyTokenCookie(token, documentRef);
+  return true;
+}
+
+function writePrivacyTokenCookie(token, documentRef = globalThis.document) {
   // Image/media elements cannot send custom headers, so privacy-mode
   // thumbnails and waveforms authenticate with this cookie instead.
   try {
-    const documentRef = globalThis.document;
     if (!documentRef) return;
     documentRef.cookie = token
       ? `${PRIVACY_TOKEN_STORAGE_KEY}=${encodeURIComponent(String(token))}; path=/; SameSite=Lax`

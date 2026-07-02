@@ -9,6 +9,7 @@ import {
 } from "./media_preview.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 import { setupOverlayDialog } from "./dialog.js";
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
 
 
 const ROUTE_PREFIX = "/helto_director/media_browser";
@@ -40,6 +41,7 @@ export function closeMediaPicker(documentRef = globalThis.document) {
 
 async function showVisualPicker({ assetType, node, documentRef, mode = "add", privacyMode = false }) {
   closeMediaPicker(documentRef);
+  if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);
   const mediaType = mediaTypeForAsset(assetType);
   const isReference = mode === "reference";
   const isGeneratedTake = mode === "attach-generated-take";

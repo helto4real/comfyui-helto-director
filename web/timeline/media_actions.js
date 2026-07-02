@@ -14,6 +14,7 @@ import {
   findSection,
 } from "./operations.js";
 import { attachMediaAsset, createFilePathAsset } from "./media.js";
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
 
 const MEDIA_BROWSER_ROUTE_PREFIX = "/helto_director/media_browser";
 
@@ -89,6 +90,7 @@ export function attachPickedGeneratedVideoAsTake(timeline, shotId, item, takeDat
 }
 
 export async function fetchProjectTakeCaptures(timeline, shotId, privacyMode = false) {
+  if (privacyMode) ensureStoredPrivacyTokenCookie();
   const response = await fetch(`${MEDIA_BROWSER_ROUTE_PREFIX}/project_takes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
