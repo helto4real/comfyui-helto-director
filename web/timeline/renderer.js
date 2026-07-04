@@ -240,6 +240,7 @@ export class TimelineRenderer {
     this.privacyRevealActive = false;
     this.privacyExternalModalOpen = false;
     this.captureModalShotId = "";
+    this.shotDetailsOpen = {};
     this.availableCaptures = {
       key: "",
       loading: false,
@@ -616,7 +617,19 @@ export class TimelineRenderer {
     item.style.width = `${Math.max(18, durationToPixels(shot.end_time - shot.start_time, timeline, this.viewportWidth))}px`;
     const label = shotDisplayLabel(timeline, shot);
     item.textContent = label;
-    item.title = `${label} (${shot.type})`;
+    const takes = shot.takes ?? [];
+    const latestTake = latestAttachedTake(shot);
+    let title = `${label} (${shot.type})`;
+    if (latestTake) {
+      const badge = el("span", "htd-shot-take-badge");
+      badge.classList.toggle("is-accepted", Boolean(shot.accepted_take_id));
+      badge.textContent = `T${takes.length}`;
+      badge.setAttribute("aria-hidden", "true");
+      item.append(badge);
+      const latestStatus = latestTake.status ?? "Candidate";
+      title += ` - ${takes.length} ${takes.length === 1 ? "take" : "takes"}, latest ${latestStatus}`;
+    }
+    item.title = title;
     item.setAttribute("aria-label", item.title);
     const movableShot = canMoveBareShot(timeline, shot.shot_id);
     item.classList.toggle("is-bare-shot", movableShot);
@@ -886,17 +899,41 @@ export class TimelineRenderer {
     this.requestAvailableCaptures(timeline, shot);
     const wrapper = el("div", `htd-shot-inspector${options.standalone ? " is-standalone" : ""}`);
     wrapper.append(
-      this.renderShotHeader(timeline, shot, options),
-      this.renderLatestCapture(timeline, shot),
-      this.renderShotLoraTargets(timeline, shot),
+      this.renderShotCardHeader(timeline, shot, options),
+      this.renderCurrentTakeCard(timeline, shot),
+      this.renderShotDetails(timeline, shot),
     );
     return wrapper;
   }
 
-  renderShotHeader(timeline, shot, options = {}) {
+  renderShotCardHeader(timeline, shot, options = {}) {
     const shotLabel = shotDisplayLabel(timeline, shot);
-    const header = el("div", "htd-shot-header");
+    const header = el("div", "htd-shot-card-header");
     const title = inspectorTitle(options.standalone ? shotLabel : `${shotLabel} Details`);
+    const tools = el("div", "htd-shot-header-tools");
+    tools.append(
+      this.renderAssemblyReadinessPill(timeline, shot),
+      this.renderShotTypeField(shot),
+      iconButton("take", "Open Captures", () => this.openCaptureManagementModal(shot.shot_id)),
+    );
+    header.append(title, tools);
+    return header;
+  }
+
+  renderShotDetails(timeline, shot) {
+    const details = el("details", "htd-shot-advanced htd-shot-details");
+    details.open = Boolean(this.shotDetailsOpen[shot.shot_id]);
+    details.addEventListener("toggle", () => {
+      const open = Boolean(details.open);
+      if (Boolean(this.shotDetailsOpen[shot.shot_id]) === open) return;
+      this.shotDetailsOpen[shot.shot_id] = open;
+      this.render();
+    });
+    const summary = el("summary", "htd-shot-advanced-summary");
+    summary.textContent = "Details";
+    summary.title = "Shot Settings";
+
+    const shotLabel = shotDisplayLabel(timeline, shot);
     const nameInput = el("input", "htd-field htd-shot-name");
     nameInput.value = shot.name ?? "";
     nameInput.placeholder = shotLabel;
@@ -905,19 +942,21 @@ export class TimelineRenderer {
       this.commitMutation((currentTimeline) => renameShot(currentTimeline, shot.shot_id, nameInput.value), "shot change");
     });
 
-    const mainRow = el("div", "htd-shot-header-main");
-    const nameField = this.renderInspectorCompactField("Name:", nameInput, "is-shot-name");
-    const tools = el("div", "htd-shot-header-tools");
-    tools.append(
-      this.renderAssemblyReadinessPill(timeline, shot),
-      this.renderInspectorCompactField("Type:", this.renderShotTypeField(shot), "is-shot-type"),
+    const settingsRow = el("div", "htd-shot-details-row");
+    settingsRow.append(
+      this.renderInspectorCompactField("Name:", nameInput, "is-shot-name"),
       this.renderInspectorCompactField("LoRAs:", this.renderShotLoraModeField(shot), "is-shot-lora-mode"),
       this.renderInspectorCompactField("Clip:", this.renderShotClipControl(timeline, shot), "is-shot-clip"),
-      iconButton("take", "Open Captures", () => this.openCaptureManagementModal(shot.shot_id)),
     );
-    mainRow.append(nameField, tools);
-    header.append(title, mainRow, this.renderShotBoundaryContext(timeline, shot));
-    return header;
+
+    const body = el("div", "htd-shot-details-body");
+    body.append(
+      settingsRow,
+      this.renderShotBoundaryContext(timeline, shot),
+      this.renderShotLoraTargets(timeline, shot),
+    );
+    details.append(summary, body);
+    return details;
   }
 
   renderSectionInspectorHeader(timeline, section, activeShot, titleText) {
@@ -990,14 +1029,6 @@ export class TimelineRenderer {
         this.commitMutation((timeline) => setShotLoraMergeMode(timeline, shot.shot_id, nextValue), "shot lora change");
       },
     });
-  }
-
-  renderShotClipField(timeline, shot) {
-    const row = el("div", "htd-shot-row");
-    const label = el("span", "htd-shot-row-label");
-    label.textContent = "Clip";
-    row.append(label, this.renderShotClipControl(timeline, shot));
-    return row;
   }
 
   renderShotClipControl(timeline, shot) {
@@ -1120,46 +1151,128 @@ export class TimelineRenderer {
     return this.availableCaptures.key === key ? this.availableCaptures : { loading: true, error: "", items: [] };
   }
 
-  renderLatestCapture(timeline, shot) {
-    const block = el("div", "htd-latest-capture");
+  renderCurrentTakeCard(timeline, shot) {
+    const card = el("div", "htd-current-take-card");
     const header = el("div", "htd-shot-subheader");
     const title = el("span");
-    title.textContent = "Latest Capture";
-    const open = iconButton("take", "Open Captures", () => this.openCaptureManagementModal(shot.shot_id));
-    header.append(title, open);
-    block.append(header);
+    title.textContent = "Current Take";
+    const takes = shot.takes ?? [];
+    const count = button(
+      `${takes.length} ${takes.length === 1 ? "take" : "takes"}`,
+      "Open Captures",
+      () => this.openCaptureManagementModal(shot.shot_id),
+    );
+    header.append(title, count);
+    card.append(header);
 
+    const latestTake = latestAttachedTake(shot);
+    if (!latestTake) {
+      card.append(this.renderCurrentTakeEmptyState(timeline, shot));
+      return card;
+    }
+
+    const privacyRevealed = this.isPrivacyRevealed(timeline);
+    const asset = latestTake.asset_id ? timeline.assets?.find((candidate) => candidate.asset_id === latestTake.asset_id) : null;
+    const previewData = this.takeVideoPreviewData(timeline, latestTake, asset, privacyRevealed);
+
+    const body = el("div", "htd-current-take-body");
+    body.append(this.renderCurrentTakeThumbnail(previewData));
+
+    const info = el("div", "htd-current-take-info");
+    const titleRow = el("div", "htd-current-take-title-row");
+    const takeIndex = takes.findIndex((candidate) => candidate.take_id === latestTake.take_id);
+    const label = el("span", "htd-take-label");
+    label.textContent = takeOrderLabel(takeIndex, takes.length);
+    label.title = privacyRevealed ? takeSummaryLabel(timeline, latestTake, true) : "Private take";
+    const status = el("span", "htd-take-status-pill");
+    status.textContent = latestTake.status ?? "Candidate";
+    status.title = `Take Status: ${latestTake.status ?? "Candidate"}`;
+    titleRow.append(label, status);
+    const summary = el("div", "htd-take-asset-summary");
+    summary.textContent = assetSummaryLabel(asset, privacyRevealed);
+    summary.title = privacyRevealed ? (asset?.path || asset?.name || asset?.asset_id || summary.textContent) : summary.textContent;
+    info.append(titleRow, summary, this.renderTakeActions(timeline, shot, latestTake, asset, previewData, { menuIdPrefix: "current-take-status" }));
+    body.append(info);
+    card.append(body, this.renderTakeHistoryDots(shot, takes, latestTake));
+
+    if (shot.accepted_take_id && shot.accepted_take_id !== latestTake.take_id) {
+      const acceptedIndex = takes.findIndex((candidate) => candidate.take_id === shot.accepted_take_id);
+      if (acceptedIndex >= 0) {
+        const note = el("div", "htd-current-take-note");
+        note.textContent = `Accepted: ${takeOrderLabel(acceptedIndex, takes.length)}`;
+        note.title = "An earlier take is accepted for assembly. Open Captures to review.";
+        card.append(note);
+      }
+    }
+    return card;
+  }
+
+  renderCurrentTakeThumbnail(previewData) {
+    const thumb = el("div", "htd-current-take-thumb");
+    if (!previewData?.url) {
+      thumb.classList.add("is-empty");
+      const empty = el("span", "htd-shot-empty");
+      empty.textContent = "No preview";
+      thumb.append(empty);
+      return thumb;
+    }
+    const video = el("video", "htd-current-take-video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.controls = false;
+    video.src = previewData.url;
+    video.setAttribute("aria-label", previewData.privacyMode ? "Private current take preview" : "Current take preview");
+    thumb.append(video);
+    thumb.title = "Hover to play, click to enlarge";
+    thumb.addEventListener("mouseenter", () => {
+      video.muted = true;
+      const playResult = video.play?.();
+      playResult?.catch?.(() => {});
+    });
+    thumb.addEventListener("mouseleave", () => {
+      video.pause?.();
+      video.currentTime = 0;
+    });
+    thumb.addEventListener("click", () => this.openTakeVideoPreviewData(previewData));
+    return thumb;
+  }
+
+  renderTakeHistoryDots(shot, takes, latestTake) {
+    const history = el("div", "htd-take-history");
+    if (takes.length < 2) return history;
+    const visibleTakes = takes.slice(-12);
+    visibleTakes.forEach((take, index) => {
+      const dot = el("span", "htd-take-history-dot");
+      const takeIndex = takes.length - visibleTakes.length + index;
+      dot.classList.toggle("is-current", take.take_id === latestTake.take_id);
+      dot.classList.toggle("is-accepted", take.take_id === shot.accepted_take_id);
+      dot.classList.toggle("is-rejected", take.status === "Rejected");
+      dot.title = `${takeOrderLabel(takeIndex, takes.length)} - ${take.status ?? "Candidate"}`;
+      history.append(dot);
+    });
+    return history;
+  }
+
+  renderCurrentTakeEmptyState(timeline, shot) {
     const state = this.availableCaptureState(timeline, shot);
     if (state.loading) {
       const loading = el("div", "htd-shot-empty");
       loading.textContent = "Loading captures...";
-      block.append(loading);
-      return block;
+      return loading;
     }
     if (state.error) {
       const error = el("div", "htd-shot-empty htd-capture-error");
       error.textContent = state.error;
-      block.append(error);
-      return block;
+      return error;
     }
-
     if (state.items.length) {
-      block.append(this.renderProjectCaptureRow(timeline, shot, state.items[0], 0, state.items.length, { compact: true }));
-      return block;
+      return this.renderProjectCaptureRow(timeline, shot, state.items[0], 0, state.items.length, { compact: true });
     }
-
-    const latestTake = latestAttachedTake(shot);
-    if (latestTake) {
-      const takes = shot.takes ?? [];
-      const takeIndex = takes.findIndex((candidate) => candidate.take_id === latestTake.take_id);
-      block.append(this.renderAttachedTakeRow(timeline, shot, latestTake, takeIndex, takes.length, { compact: true }));
-      return block;
-    }
-
     const empty = el("div", "htd-shot-empty");
-    empty.textContent = "No captures yet.";
-    block.append(empty);
-    return block;
+    empty.textContent = "No takes yet. Run a generation with Take Capture to see it here.";
+    return empty;
   }
 
   renderCaptureManagementModal(timeline, shot) {
@@ -1291,27 +1404,33 @@ export class TimelineRenderer {
     const status = el("span", "htd-take-status-pill");
     status.textContent = take.status ?? "Candidate";
     status.title = `Take Status: ${take.status ?? "Candidate"}`;
-    const actions = el("span", "htd-take-actions");
     const previewData = this.takeVideoPreviewData(timeline, take, asset, privacyRevealed);
+    const actions = this.renderTakeActions(timeline, shot, take, asset, previewData, { deleteLabel: label.textContent });
+    row.append(label, assetSummary, status, actions);
+    return row;
+  }
+
+  renderTakeActions(timeline, shot, take, asset, previewData, options = {}) {
+    const actions = el("span", "htd-take-actions");
     actions.append(iconButton("preview-video", previewData ? "Preview Take Video" : "No preview available", () => {
       if (previewData) this.openTakeVideoPreviewData(previewData);
     }, { disabled: !previewData }));
     const remove = iconButton("delete", "Delete Take Files", () => {
-      this.deleteProjectTakeFromTimelineTake(shot, take, asset, { label: label.textContent });
+      this.deleteProjectTakeFromTimelineTake(shot, take, asset, { label: options.deleteLabel ?? takeStatusLabel(take) });
     });
     remove.classList.add("is-danger");
+    const menuId = `${options.menuIdPrefix ?? "take-status"}-${take.take_id}`;
     const statusMenu = iconMenuControl({
-      id: `take-status-${take.take_id}`,
+      id: menuId,
       title: "Take Status",
       iconName: "take",
       value: take.status ?? "Candidate",
       options: TAKE_STATUSES,
       placement: "above-end",
       showValue: false,
-      open: this.openMenu === `take-status-${take.take_id}`,
+      open: this.openMenu === menuId,
       onToggle: () => {
-        const id = `take-status-${take.take_id}`;
-        this.openMenu = this.openMenu === id ? null : id;
+        this.openMenu = this.openMenu === menuId ? null : menuId;
         this.render();
       },
       onChange: (nextValue) => {
@@ -1329,8 +1448,7 @@ export class TimelineRenderer {
       this.commitMutation((currentTimeline) => setTakeStatus(currentTimeline, shot.shot_id, take.take_id, "Candidate"), "take change");
     }, { disabled: take.status === "Candidate" });
     actions.append(remove, statusMenu, accept, reject, restore);
-    row.append(label, assetSummary, status, actions);
-    return row;
+    return actions;
   }
 
   renderAssemblyReadiness(timeline, shot) {
@@ -3862,6 +3980,7 @@ function installStyles(documentRef) {
     .htd-root.is-private:not(.is-privacy-revealed) .htd-prompt,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-media-value,
     .htd-root.is-private:not(.is-privacy-revealed) .htd-lora-count { color: transparent !important; text-shadow: none !important; }
+    .htd-root.is-private:not(.is-privacy-revealed) .htd-shot-take-badge { visibility: hidden; }
     .htd-root.is-private:not(.is-privacy-revealed) .htd-prompt::placeholder { color: transparent !important; }
     .htd-privacy-status { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 40; padding: 7px 10px; border: 1px solid #7a4f32; border-radius: var(--htd-radius); background: #2b1d18; color: #ffd8c2; box-shadow: var(--htd-shadow-pop); }
     .htd-toolbar { position: relative; z-index: 15; box-sizing: border-box; display: flex; gap: 4px; align-items: center; min-height: 34px; padding: 5px; overflow: visible; border-radius: var(--htd-radius); background: linear-gradient(180deg, var(--htd-surface-2), var(--htd-surface)); box-shadow: inset 0 0 0 1px var(--htd-border); }
@@ -3919,6 +4038,8 @@ function installStyles(documentRef) {
     .htd-director-track .htd-section, .htd-director-track .htd-gap { top: 31px; height: calc(100% - 40px); }
     .htd-section-label { position: absolute; z-index: 3; top: 8px; left: 10px; right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.82); pointer-events: none; }
     .htd-shot-band { position: absolute; top: 5px; height: 20px; padding: 0 8px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: var(--htd-surface-2); color: #dbe6f5; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; font: inherit; text-align: left; transition: border-color .12s ease, color .12s ease; }
+    .htd-shot-band .htd-shot-take-badge { position: absolute; top: 2px; right: 3px; height: 14px; padding: 0 4px; border-radius: 7px; font-size: 10px; line-height: 14px; background: rgba(90,106,130,0.45); color: #dbe6f5; pointer-events: none; }
+    .htd-shot-band .htd-shot-take-badge.is-accepted { background: rgba(241,199,92,0.28); color: var(--htd-accent-strong); }
     .htd-shot-band.is-bare-shot { cursor: grab; }
     .htd-shot-band:hover { border-color: #5a6a82; }
     .htd-shot-band.is-selected { border-color: var(--htd-accent); color: var(--htd-accent-strong); }
@@ -3994,10 +4115,7 @@ function installStyles(documentRef) {
     .htd-media-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-text); }
     .htd-shot-inspector { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding-top: 7px; border-top: 1px solid var(--htd-border); }
     .htd-shot-inspector.is-standalone { padding-top: 0; border-top: 0; }
-    .htd-shot-header { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-    .htd-shot-header-main { min-width: 0; display: flex; align-items: center; gap: 10px; }
-    .htd-shot-header-main .is-shot-name { flex: 1 1 320px; }
-    .htd-shot-header-tools { min-width: 0; display: flex; flex: 2 1 auto; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+    .htd-shot-header-tools { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
     .htd-shot-header-tools .htd-inspector-compact-field { min-height: 24px; align-items: center; }
     .htd-shot-header-tools .htd-inspector-compact-label { max-width: 52px; }
     .htd-shot-name { width: min(100%, 520px); min-width: 220px; max-width: none; }
@@ -4020,12 +4138,33 @@ function installStyles(documentRef) {
     .htd-assembly-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-text); }
     .htd-shot-subheader { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--htd-text); font-weight: 700; }
     .htd-shot-subheader .htd-button { height: 22px; padding: 0 6px; font-size: 11px; }
-    .htd-latest-capture { min-width: 0; display: grid; gap: 4px; }
+    .htd-shot-card-header { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .htd-shot-card-header .htd-shot-header-tools { flex: 0 1 auto; }
+    .htd-current-take-card { min-width: 0; display: grid; gap: 6px; padding: 8px; border: 1px solid var(--htd-border); border-radius: var(--htd-radius); background: var(--htd-surface-2); }
+    .htd-current-take-body { min-width: 0; display: flex; align-items: stretch; gap: 10px; }
+    /* Near-black covers (#060a10 / #050505) are intentional privacy concealment — keep them opaque and dark. */
+    .htd-current-take-thumb { position: relative; flex: 0 0 170px; height: 96px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); background: #060a10; overflow: hidden; cursor: pointer; }
+    .htd-current-take-thumb.is-empty { cursor: default; }
+    .htd-current-take-thumb video { width: 100%; height: 100%; object-fit: contain; background: #050505; opacity: 1; transition: opacity 120ms ease; }
+    .htd-root.is-private .htd-current-take-thumb video { opacity: 0; }
+    .htd-root.is-private .htd-current-take-thumb:hover video { opacity: 1; }
+    .htd-current-take-info { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+    .htd-current-take-title-row { min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .htd-current-take-info .htd-take-actions { justify-content: flex-start; }
+    .htd-current-take-info .htd-icon-button { width: 24px; min-width: 24px; height: 22px; padding: 0; }
+    .htd-current-take-note { color: var(--htd-text-dim); font-size: 11px; }
+    .htd-take-history { min-width: 0; min-height: 8px; display: flex; align-items: center; gap: 4px; }
+    .htd-take-history-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--htd-border-strong); }
+    .htd-take-history-dot.is-current { background: #dbe6f5; }
+    .htd-take-history-dot.is-accepted { background: var(--htd-accent-strong); }
+    .htd-take-history-dot.is-rejected { opacity: 0.35; }
+    .htd-shot-details-body { min-width: 0; display: grid; gap: 6px; padding-top: 4px; }
+    .htd-shot-details-row { min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .htd-shot-takes, .htd-shot-loras { min-width: 0; display: grid; gap: 4px; }
     .htd-shot-empty { color: var(--htd-text-faint); font-size: 11px; font-style: italic; }
     .htd-take-row, .htd-capture-row { min-width: 0; display: grid; grid-template-columns: minmax(92px, 0.28fr) minmax(140px, 1fr) auto auto; align-items: center; gap: 6px; }
     .htd-capture-row { grid-template-columns: minmax(92px, 0.28fr) minmax(160px, 1fr) auto; }
-    .htd-take-row.is-compact, .htd-capture-row.is-compact { grid-template-columns: minmax(92px, 0.28fr) minmax(160px, 1fr) auto; }
+    .htd-take-row.is-compact, .htd-capture-row.is-compact { grid-template-columns: minmax(92px, 0.28fr) minmax(100px, 1fr) auto auto; }
     .htd-take-actions { min-width: 0; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
     .htd-captures-modal .htd-take-row, .htd-captures-modal .htd-capture-row { grid-template-columns: minmax(92px, 0.28fr) minmax(180px, 1fr) 96px 164px; }
     .htd-captures-modal .htd-take-actions { width: 164px; display: grid; grid-template-columns: repeat(6, 24px); justify-content: end; gap: 4px; }

@@ -116,7 +116,7 @@ def test_comfyui_style_loader_includes_timeline_take_capture_node():
     ]
     assert [input.id for input in schema.inputs] == [
         "video_timeline",
-        "runtime_debug",
+        "runtime_context",
         "video",
         "images",
         "audio",
@@ -163,7 +163,7 @@ def test_timeline_take_capture_skips_media_when_runtime_reports_no_generation(tm
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
-    runtime_debug = {
+    runtime_context = {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
         "summary": {
@@ -179,12 +179,12 @@ def test_timeline_take_capture_skips_media_when_runtime_reports_no_generation(tm
         },
     }
 
-    assert node.check_lazy_status(timeline_input, runtime_debug=None, video=None, images=None) == ["runtime_debug"]
-    assert node.check_lazy_status(timeline_input, runtime_debug=runtime_debug, video=None, images=None) == []
+    assert node.check_lazy_status(timeline_input, runtime_context=None, video=None, images=None) == ["runtime_context"]
+    assert node.check_lazy_status(timeline_input, runtime_context=runtime_context, video=None, images=None) == []
 
     output = node.execute(
         timeline_input,
-        runtime_debug=runtime_debug,
+        runtime_context=runtime_context,
         video=FakeVideo(),
         filename_prefix="should_not_write/%shot_id%/%take_id%",
     )
@@ -204,7 +204,7 @@ def test_timeline_take_capture_skips_non_ready_runtime_registration_without_writ
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
-    runtime_debug = {
+    runtime_context = {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
         "summary": {
@@ -224,11 +224,11 @@ def test_timeline_take_capture_skips_non_ready_runtime_registration_without_writ
         },
     }
 
-    assert node.check_lazy_status(timeline_input, runtime_debug=runtime_debug, video=None, images=None) == []
+    assert node.check_lazy_status(timeline_input, runtime_context=runtime_context, video=None, images=None) == []
 
     output = node.execute(
         timeline_input,
-        runtime_debug=runtime_debug,
+        runtime_context=runtime_context,
         video=FakeVideo(),
         filename_prefix="should_not_write/%shot_id%/%take_id%",
     )
@@ -251,7 +251,7 @@ def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     timeline_input = _timeline_with_shot()
     timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(tmp_path / "takes")}, "privacy": {"mode": False}})
-    runtime_debug = {
+    runtime_context = {
         "type": "DEBUG_INFO",
         "source": "WAN Runtime",
         "summary": {"take_registration_ready": False},
@@ -267,7 +267,7 @@ def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_
 
     assert node.check_lazy_status(
         timeline_input,
-        runtime_debug=runtime_debug,
+        runtime_context=runtime_context,
         shot_id_override="shot_001",
         video=None,
         images=None,
@@ -275,7 +275,7 @@ def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_
 
     output = node.execute(
         timeline_input,
-        runtime_debug=runtime_debug,
+        runtime_context=runtime_context,
         shot_id_override="shot_001",
         video=FakeVideo(),
         filename_prefix="manual/%shot_id%/%take_id%",
@@ -472,6 +472,19 @@ def test_timeline_take_capture_node_saves_video_and_registers_sidecar(tmp_path, 
     assert output.ui["helto_take_capture_preview"] == [True]
     assert output.ui["helto_privacy_mode"] == [False]
     assert output.ui["animated"] == (True,)
+    capture_result = output.ui["helto_take_capture_result"][0]
+    assert capture_result["type"] == "HELTO_TAKE_CAPTURE_RESULT"
+    assert capture_result["schema_version"] == 1
+    assert capture_result["shot_id"] == "shot_001"
+    assert capture_result["asset_id"] == "asset_capture_video"
+    assert capture_result["take_id"] == "take_capture_video"
+    assert capture_result["summary"]["path"] == str(saved_path)
+    assert capture_result["media"]["path"] == str(saved_path)
+    assert capture_result["media"]["frame_count"] == 12
+    assert capture_result["registration"]["asset"]["path"] == str(saved_path)
+    assert capture_result["registration"]["asset"]["asset_id"] == "asset_capture_video"
+    assert capture_result["registration"]["take"]["take_id"] == "take_capture_video"
+    assert capture_result["registration"]["take"]["asset_id"] == "asset_capture_video"
     assert timeline["assets"][0]["metadata"]["frame_count"] == 12
     assert timeline["sequence"]["shots"][0]["takes"][0]["seed"] == 456
     assert validate_video_timeline(timeline)["is_valid"] is True
@@ -514,6 +527,13 @@ def test_timeline_take_capture_private_preview_is_tagged_and_debug_redacted(tmp_
     assert output.ui["images"][0]["filename"] == saved_path.name
     assert output.ui["images"][0]["subfolder"]
     assert output.ui["animated"] == (True,)
+    capture_result = output.ui["helto_take_capture_result"][0]
+    assert capture_result["type"] == "HELTO_TAKE_CAPTURE_RESULT"
+    assert capture_result["summary"]["filename"] == "Generated video"
+    assert capture_result["summary"]["path"] == "Private path"
+    assert capture_result["media"]["path"] == str(saved_path)
+    assert capture_result["registration"]["asset"]["path"] == str(saved_path)
+    assert capture_result["registration"]["take"]["take_id"] == "take_private_video"
     assert output[4]["summary"]["filename"] == "Generated video"
     assert output[4]["summary"]["subfolder"] is None
     assert output[4]["summary"]["path"] == "Private path"
@@ -564,7 +584,11 @@ def test_timeline_take_capture_node_saves_video_to_absolute_project_root(tmp_pat
     assert saved_path.with_suffix(".helto_take.json").is_file()
     assert output[4]["summary"]["storage_action"] == "saved"
     assert output[4]["summary"]["path"] == str(saved_path)
-    assert output.ui is None
+    assert "helto_take_capture_preview" not in output.ui
+    capture_result = output.ui["helto_take_capture_result"][0]
+    assert capture_result["type"] == "HELTO_TAKE_CAPTURE_RESULT"
+    assert capture_result["media"]["path"] == str(saved_path)
+    assert capture_result["registration"]["asset"]["path"] == str(saved_path)
 
 
 def test_timeline_take_capture_node_rejects_relative_project_asset_root(tmp_path):

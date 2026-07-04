@@ -1,6 +1,13 @@
 import { htdTokenBlock } from "./design_tokens.js";
+import {
+  generatedTakePayloadAlreadyApplied,
+  registerGeneratedTakePayload,
+} from "./media_actions.js";
 
 const PREVIEW_WIDGET_NAME = "helto_take_capture_preview";
+const TAKE_CAPTURE_RESULT_TYPE = "HELTO_TAKE_CAPTURE_RESULT";
+const VIDEO_TIMELINE_INPUT_NAME = "video_timeline";
+const DIRECTOR_NODE_TYPE = "HeltoVideoTimelineDirector";
 const NATIVE_PREVIEW_WIDGET_NAMES = new Set(["$$canvas-image-preview", "$$comfy_animation_preview", "video-preview"]);
 const STYLE_ID = "helto-take-capture-preview-style";
 const PREVIEW_HEIGHT = 180;
@@ -61,6 +68,7 @@ export function installTakeCapturePreview(nodeType, appRef, apiRef) {
   nodeType.prototype.onExecuted = function (output) {
     const nativeArgs = [stripTakeCapturePreviewMedia(output), ...Array.prototype.slice.call(arguments, 1)];
     const result = onExecuted?.apply(this, nativeArgs);
+    syncTakeCaptureResultToDirector(this, output, { appRef });
     syncTakeCapturePreview(this, output, { appRef, apiRef });
     return result;
   };
@@ -113,6 +121,71 @@ export function syncTakeCapturePreview(node, output, { appRef = null, apiRef = n
   scheduleTakeCapturePreviewMaintenance(node, output, appRef);
   setCanvasDirty(node, appRef);
   return true;
+}
+
+export function takeCaptureResultsFromOutput(output) {
+  const values = Array.isArray(output?.helto_take_capture_result)
+    ? output.helto_take_capture_result
+    : [output?.helto_take_capture_result];
+  return values.filter(isTakeCaptureResultPayload);
+}
+
+export function syncTakeCaptureResultToDirector(node, output, { appRef = null } = {}) {
+  const payloads = takeCaptureResultsFromOutput(output);
+  if (!payloads.length) return false;
+  return applyTakeCaptureResultsToDirector(findLinkedDirectorNode(node), payloads, { appRef });
+}
+
+export function applyTakeCaptureResultsToDirector(directorNode, payloads, { appRef = null } = {}) {
+  const updateTimelineState = directorUpdateTimelineState(directorNode);
+  if (!directorNode || !updateTimelineState || !payloads.length) return false;
+
+  const matchedShotIds = payloads
+    .map((payload) => takeCaptureResultShotId(payload))
+    .filter((shotId) => shotId && timelineHasShot(directorTimeline(directorNode), shotId));
+  if (!matchedShotIds.length) return false;
+  // A capture result means new take files exist on disk, so the cached
+  // project-captures listing is stale even when the take itself is a replay.
+  invalidateDirectorCapturesCache(directorNode);
+
+  let applied = false;
+  for (const payload of payloads) {
+    const shotId = takeCaptureResultShotId(payload);
+    if (!shotId) continue;
+    const currentTimeline = directorTimeline(directorNode);
+    if (!timelineHasShot(currentTimeline, shotId)) continue;
+    if (generatedTakePayloadAlreadyApplied(currentTimeline, shotId, payload)) continue;
+    try {
+      let registrationResult = null;
+      updateTimelineState((timeline) => {
+        registrationResult = registerGeneratedTakePayload(timeline, shotId, payload);
+      }, "take capture result", { rerender: true });
+      applied = Boolean(registrationResult) || applied;
+    } catch (error) {
+      console?.warn?.("Helto Take Capture could not update linked Director timeline.", error);
+    }
+  }
+  if (applied) setCanvasDirty(directorNode, appRef);
+  return applied;
+}
+
+export function installTakeCaptureResultListener(appRef, apiRef) {
+  if (!apiRef?.addEventListener || apiRef._heltoTakeCaptureResultListener) return false;
+  const handler = (event) => handleTakeCaptureExecutedEvent(appRef, event);
+  apiRef.addEventListener("executed", handler);
+  apiRef._heltoTakeCaptureResultListener = handler;
+  return true;
+}
+
+export function handleTakeCaptureExecutedEvent(appRef, event) {
+  const output = event?.detail?.output ?? event?.output ?? null;
+  const payloads = takeCaptureResultsFromOutput(output);
+  if (!payloads.length) return false;
+  let applied = false;
+  for (const director of graphDirectorNodes(appRef?.graph)) {
+    applied = applyTakeCaptureResultsToDirector(director, payloads, { appRef }) || applied;
+  }
+  return applied;
 }
 
 export function maintainTakeCapturePreview(node, { appRef = null } = {}) {
@@ -391,6 +464,129 @@ function setCanvasDirty(node, appRef = null) {
 
 function firstValue(value) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function isTakeCaptureResultPayload(payload) {
+  return Boolean(
+    payload
+    && typeof payload === "object"
+    && !Array.isArray(payload)
+    && payload.type === TAKE_CAPTURE_RESULT_TYPE
+    && Number(payload.schema_version ?? 0) >= 1,
+  );
+}
+
+function takeCaptureResultShotId(payload) {
+  return stringValue(payload?.shot_id ?? payload?.registration?.shot_id ?? payload?.summary?.shot_id);
+}
+
+function findLinkedDirectorNode(node, seen = new Set()) {
+  if (!node || seen.has(node)) return null;
+  seen.add(node);
+  const upstreamNodes = upstreamInputNodes(node);
+  for (const upstream of upstreamNodes) {
+    if (isDirectorNode(upstream)) return upstream;
+  }
+  if (seen.size >= 8) return null;
+  for (const upstream of upstreamNodes) {
+    const director = findLinkedDirectorNode(upstream, seen);
+    if (director) return director;
+  }
+  return null;
+}
+
+function upstreamInputNodes(node) {
+  const inputs = Array.isArray(node?.inputs) ? node.inputs : [];
+  const orderedInputs = [
+    ...inputs.filter((input) => input?.name === VIDEO_TIMELINE_INPUT_NAME),
+    ...inputs.filter((input) => input?.name !== VIDEO_TIMELINE_INPUT_NAME),
+  ];
+  const upstreamNodes = [];
+  for (const input of orderedInputs) {
+    for (const linkId of inputLinkIds(input)) {
+      const originId = graphLinkOriginId(graphLinkById(node?.graph, linkId));
+      const upstream = graphNodeById(node?.graph, originId);
+      if (upstream && !upstreamNodes.includes(upstream)) upstreamNodes.push(upstream);
+    }
+  }
+  return upstreamNodes;
+}
+
+function inputLinkIds(input) {
+  const links = Array.isArray(input?.links) ? input.links : [];
+  if (input?.link != null && !links.includes(input.link)) return [input.link, ...links];
+  return input?.link == null ? links : [input.link, ...links];
+}
+
+function graphLinkById(graph, linkId) {
+  if (linkId == null) return null;
+  const targetId = String(linkId);
+  const links = graph?.links;
+  if (!links) return null;
+  if (links instanceof Map) return links.get(linkId) ?? links.get(String(linkId)) ?? null;
+  if (Array.isArray(links)) {
+    return links.find((link) => String(Array.isArray(link) ? link[0] : link?.id) === targetId) ?? null;
+  }
+  return links[linkId] ?? links[targetId] ?? Object.values(links).find((link) => String(link?.id) === targetId) ?? null;
+}
+
+function graphLinkOriginId(link) {
+  if (Array.isArray(link)) return link[1] ?? null;
+  return link?.origin_id ?? link?.originId ?? null;
+}
+
+function graphNodeById(graph, nodeId) {
+  if (nodeId == null) return null;
+  return graph?.getNodeById?.(nodeId)
+    ?? graph?._nodes_by_id?.[nodeId]
+    ?? graph?._nodes_by_id?.[String(nodeId)]
+    ?? graph?._nodes?.find((candidate) => candidate?.id === nodeId || String(candidate?.id) === String(nodeId))
+    ?? null;
+}
+
+function isDirectorNode(node) {
+  return Boolean(
+    node
+    && (
+      node.type === DIRECTOR_NODE_TYPE
+      || node.comfyClass === DIRECTOR_NODE_TYPE
+      || node.constructor?.nodeData?.name === DIRECTOR_NODE_TYPE
+      || node?._videoTimelineStateController
+      || typeof node?.updateTimelineState === "function"
+    ),
+  );
+}
+
+function directorUpdateTimelineState(node) {
+  if (typeof node?.updateTimelineState === "function") return node.updateTimelineState.bind(node);
+  const controller = node?._videoTimelineStateController;
+  if (typeof controller?.updateTimeline === "function") return controller.updateTimeline.bind(controller);
+  return null;
+}
+
+function directorTimeline(node) {
+  return node?._videoTimelineStateController?.timeline ?? node?.timeline ?? null;
+}
+
+function graphDirectorNodes(graph) {
+  const nodes = Array.isArray(graph?._nodes) ? graph._nodes : [];
+  return nodes.filter((node) => isDirectorNode(node));
+}
+
+function invalidateDirectorCapturesCache(directorNode) {
+  const renderer = directorNode?._timelineRenderer;
+  if (renderer?.availableCaptures) {
+    renderer.availableCaptures = { key: "", loading: false, error: "", items: [] };
+  }
+}
+
+function timelineHasShot(timeline, shotId) {
+  return Boolean((timeline?.sequence?.shots ?? []).some((shot) => String(shot?.shot_id ?? "") === shotId));
+}
+
+function stringValue(value) {
+  const text = String(value ?? "").trim();
+  return text || "";
 }
 
 function installTakeCapturePreviewStyles(documentRef) {

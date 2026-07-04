@@ -29,6 +29,8 @@ from ...shared.timeline.take_registration import (
 
 
 DEFAULT_FILENAME_PREFIX = "%shot_id%_%take_id%"
+TAKE_CAPTURE_RESULT_TYPE = "HELTO_TAKE_CAPTURE_RESULT"
+TAKE_CAPTURE_RESULT_SCHEMA_VERSION = 1
 _MISSING = object()
 
 
@@ -42,7 +44,7 @@ class TimelineTakeCapture(io.ComfyNode):
             description="Register generated media as a VIDEO_TIMELINE shot take and write a sidecar for Director UI attachment.",
             inputs=[
                 VIDEO_TIMELINE.Input("video_timeline", display_name="VIDEO_TIMELINE"),
-                DEBUG_INFO.Input("runtime_debug", display_name="runtime_debug", optional=True, lazy=True),
+                DEBUG_INFO.Input("runtime_context", display_name="runtime_context", optional=True, lazy=True),
                 io.Video.Input("video", display_name="video", optional=True, lazy=True),
                 io.Image.Input("images", display_name="images", optional=True, lazy=True),
                 io.Audio.Input("audio", display_name="audio", optional=True, lazy=True),
@@ -112,7 +114,7 @@ class TimelineTakeCapture(io.ComfyNode):
     def check_lazy_status(
         cls,
         video_timeline: dict,
-        runtime_debug=_MISSING,
+        runtime_context=_MISSING,
         video=_MISSING,
         images=_MISSING,
         audio=_MISSING,
@@ -121,15 +123,15 @@ class TimelineTakeCapture(io.ComfyNode):
         shot_id_override: str = "",
         **kwargs,
     ) -> list[str]:
-        if runtime_debug is None:
-            return ["runtime_debug"]
-        if _runtime_generation_skipped(runtime_debug):
+        if runtime_context is None:
+            return ["runtime_context"]
+        if _runtime_generation_skipped(runtime_context):
             return []
         if (
-            runtime_debug is not _MISSING
+            runtime_context is not _MISSING
             and not _safe_string(take_registration_json)
             and not _safe_string(shot_id_override)
-            and not _runtime_take_registration_status(runtime_debug)["ready"]
+            and not _runtime_take_registration_status(runtime_context)["ready"]
         ):
             return []
         if _safe_string(generated_asset_path):
@@ -144,7 +146,7 @@ class TimelineTakeCapture(io.ComfyNode):
     def execute(
         cls,
         video_timeline: dict,
-        runtime_debug: dict | None = _MISSING,
+        runtime_context: dict | None = _MISSING,
         video=_MISSING,
         images=_MISSING,
         audio=_MISSING,
@@ -157,36 +159,36 @@ class TimelineTakeCapture(io.ComfyNode):
         update_clip_instance: bool = True,
     ) -> io.NodeOutput:
         video_timeline = normalize_video_timeline(video_timeline)
-        runtime_debug = None if runtime_debug is _MISSING else runtime_debug
+        runtime_context = None if runtime_context is _MISSING else runtime_context
         video = None if video is _MISSING else video
         images = None if images is _MISSING else images
         audio = None if audio is _MISSING else audio
-        if _runtime_generation_skipped(runtime_debug):
+        if _runtime_generation_skipped(runtime_context):
             return io.NodeOutput(
                 video_timeline,
                 None,
                 "",
                 "",
-                _skipped_debug_info(video_timeline, runtime_debug),
+                _skipped_debug_info(video_timeline, runtime_context),
                 ui=None,
             )
         if (
-            runtime_debug is not None
+            runtime_context is not None
             and not _safe_string(take_registration_json)
             and not _safe_string(shot_id_override)
         ):
-            registration_status = _runtime_take_registration_status(runtime_debug)
+            registration_status = _runtime_take_registration_status(runtime_context)
             if not registration_status["ready"]:
                 return io.NodeOutput(
                     video_timeline,
                     None,
                     "",
                     "",
-                    _registration_not_ready_debug_info(video_timeline, runtime_debug, registration_status),
+                    _registration_not_ready_debug_info(video_timeline, runtime_context, registration_status),
                     ui=None,
                 )
         registration_input = _registration_from_inputs(
-            runtime_debug=runtime_debug,
+            runtime_context=runtime_context,
             take_registration_json=take_registration_json,
             shot_id_override=shot_id_override,
         )
@@ -236,6 +238,15 @@ class TimelineTakeCapture(io.ComfyNode):
             saved_result=saved_result,
         )
         preview = _take_capture_preview_ui(result["timeline"], saved_result)
+        preview = _with_take_capture_result_ui(
+            preview,
+            _take_capture_result_ui_payload(
+                result,
+                registration=registration,
+                media_payload=media_payload,
+                debug_info=debug_info,
+            ),
+        )
         return io.NodeOutput(
             result["timeline"],
             video_output,
@@ -248,14 +259,14 @@ class TimelineTakeCapture(io.ComfyNode):
 
 def _registration_from_inputs(
     *,
-    runtime_debug: dict | None,
+    runtime_context: dict | None,
     take_registration_json: str,
     shot_id_override: str,
 ) -> dict[str, Any] | str:
     text = _safe_string(take_registration_json)
     if text:
         return text
-    runtime_registration = _runtime_take_registration(runtime_debug)
+    runtime_registration = _runtime_take_registration(runtime_context)
     if runtime_registration is not None:
         return runtime_registration
     shot_id = _safe_string(shot_id_override)
@@ -273,30 +284,30 @@ def _registration_from_inputs(
     }
 
 
-def _runtime_generation_skipped(runtime_debug: Any) -> bool:
-    if not isinstance(runtime_debug, dict):
+def _runtime_generation_skipped(runtime_context: Any) -> bool:
+    if not isinstance(runtime_context, dict):
         return False
-    summary = runtime_debug.get("summary") if isinstance(runtime_debug.get("summary"), dict) else {}
+    summary = runtime_context.get("summary") if isinstance(runtime_context.get("summary"), dict) else {}
     if summary.get("generation_required") is False:
         return True
     if summary.get("generation_status") == "skipped":
         return True
-    policy = runtime_debug.get("generation_policy") if isinstance(runtime_debug.get("generation_policy"), dict) else {}
+    policy = runtime_context.get("generation_policy") if isinstance(runtime_context.get("generation_policy"), dict) else {}
     return policy.get("status") == "skipped"
 
 
-def _runtime_take_registration_status(runtime_debug: Any) -> dict[str, Any]:
-    if not isinstance(runtime_debug, dict):
+def _runtime_take_registration_status(runtime_context: Any) -> dict[str, Any]:
+    if not isinstance(runtime_context, dict):
         return {
             "ready": False,
             "registration": None,
             "capture_blockers": ["TAKE_CAPTURE_NO_RUNTIME_REGISTRATION"],
             "shot_ids": [],
-            "message": "Runtime debug did not contain take registration metadata.",
+            "message": "Runtime context did not contain take registration metadata.",
         }
 
-    registrations = _runtime_take_registration_candidates(runtime_debug)
-    summary = runtime_debug.get("summary") if isinstance(runtime_debug.get("summary"), dict) else {}
+    registrations = _runtime_take_registration_candidates(runtime_context)
+    summary = runtime_context.get("summary") if isinstance(runtime_context.get("summary"), dict) else {}
     if summary.get("take_registration_ready") is False and not registrations:
         return {
             "ready": False,
@@ -343,13 +354,13 @@ def _runtime_take_registration_status(runtime_debug: Any) -> dict[str, Any]:
     }
 
 
-def _runtime_take_registration_candidates(runtime_debug: dict[str, Any]) -> list[dict[str, Any]]:
-    direct = runtime_debug.get("take_registration")
+def _runtime_take_registration_candidates(runtime_context: dict[str, Any]) -> list[dict[str, Any]]:
+    direct = runtime_context.get("take_registration")
     if isinstance(direct, dict):
         return [deepcopy(direct)]
     return [
         deepcopy(segment["take_registration"])
-        for segment in runtime_debug.get("segments") or []
+        for segment in runtime_context.get("segments") or []
         if isinstance(segment, dict) and isinstance(segment.get("take_registration"), dict)
     ]
 
@@ -367,11 +378,11 @@ def _runtime_registration_shot_ids(registrations: list[dict[str, Any]]) -> list[
     return shot_ids
 
 
-def _skipped_debug_info(video_timeline: dict, runtime_debug: dict | None) -> dict[str, Any]:
+def _skipped_debug_info(video_timeline: dict, runtime_context: dict | None) -> dict[str, Any]:
     project = video_timeline.get("project") if isinstance(video_timeline.get("project"), dict) else {}
     privacy_mode = global_privacy_mode()
     storage_summary = resolved_project_storage_summary(project) if project else {}
-    summary = runtime_debug.get("summary") if isinstance(runtime_debug, dict) and isinstance(runtime_debug.get("summary"), dict) else {}
+    summary = runtime_context.get("summary") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("summary"), dict) else {}
     return {
         "type": "DEBUG_INFO",
         "ok": True,
@@ -396,13 +407,13 @@ def _skipped_debug_info(video_timeline: dict, runtime_debug: dict | None) -> dic
 
 def _registration_not_ready_debug_info(
     video_timeline: dict,
-    runtime_debug: dict | None,
+    runtime_context: dict | None,
     registration_status: dict[str, Any],
 ) -> dict[str, Any]:
     project = video_timeline.get("project") if isinstance(video_timeline.get("project"), dict) else {}
     privacy_mode = global_privacy_mode()
     storage_summary = resolved_project_storage_summary(project) if project else {}
-    summary = runtime_debug.get("summary") if isinstance(runtime_debug, dict) and isinstance(runtime_debug.get("summary"), dict) else {}
+    summary = runtime_context.get("summary") if isinstance(runtime_context, dict) and isinstance(runtime_context.get("summary"), dict) else {}
     return {
         "type": "DEBUG_INFO",
         "ok": True,
@@ -428,8 +439,8 @@ def _registration_not_ready_debug_info(
     }
 
 
-def _runtime_take_registration(runtime_debug: dict | None) -> dict[str, Any] | None:
-    status = _runtime_take_registration_status(runtime_debug)
+def _runtime_take_registration(runtime_context: dict | None) -> dict[str, Any] | None:
+    status = _runtime_take_registration_status(runtime_context)
     return deepcopy(status["registration"]) if status["ready"] and isinstance(status.get("registration"), dict) else None
 
 
@@ -687,6 +698,49 @@ def _take_capture_preview_ui(timeline: dict, saved_result: ui.SavedResult | None
         **preview,
         "helto_take_capture_preview": [True],
         "helto_privacy_mode": [privacy_mode],
+    }
+
+
+def _with_take_capture_result_ui(
+    preview: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        **(preview or {}),
+        "helto_take_capture_result": [payload],
+    }
+
+
+def _take_capture_result_ui_payload(
+    result: dict[str, Any],
+    *,
+    registration: dict[str, Any],
+    media_payload: dict[str, Any],
+    debug_info: dict[str, Any],
+) -> dict[str, Any]:
+    registration_payload = deepcopy(registration)
+    asset = _raw_dict(registration_payload.get("asset"))
+    asset["asset_id"] = result.get("asset_id")
+    if media_payload.get("path") and not _safe_string(asset.get("path") or asset.get("file_path")):
+        asset["path"] = media_payload["path"]
+    registration_payload["asset"] = asset
+
+    take = _raw_dict(registration_payload.get("take"))
+    take["take_id"] = result.get("take_id")
+    take["asset_id"] = result.get("asset_id")
+    if result.get("accepted"):
+        take["status"] = "Accepted"
+    registration_payload["take"] = take
+
+    return {
+        "type": TAKE_CAPTURE_RESULT_TYPE,
+        "schema_version": TAKE_CAPTURE_RESULT_SCHEMA_VERSION,
+        "shot_id": result.get("shot_id"),
+        "asset_id": result.get("asset_id"),
+        "take_id": result.get("take_id"),
+        "summary": deepcopy(debug_info.get("summary") if isinstance(debug_info.get("summary"), dict) else {}),
+        "media": deepcopy(media_payload),
+        "registration": registration_payload,
     }
 
 

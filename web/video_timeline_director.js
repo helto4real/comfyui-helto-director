@@ -3,10 +3,19 @@ import { api } from "../../scripts/api.js";
 import { mountTimelineMediaCache, unmountTimelineMediaCache } from "./timeline/media_cache.js";
 import { mountTimelineState, unmountTimelineState } from "./timeline/state.js";
 import { mountTimelineRenderer, unmountTimelineRenderer } from "./timeline/renderer.js";
-import { installTakeCapturePreview } from "./timeline/take_capture_preview.js";
+import {
+  installTakeCapturePreview,
+  installTakeCaptureResultListener,
+} from "./timeline/take_capture_preview.js";
 
 app.registerExtension({
   name: "helto.videoTimelineDirector.state",
+
+  setup() {
+    // Director-side safety net: apply take capture results from the global
+    // execution event stream even if the capture node's own hook misses them.
+    installTakeCaptureResultListener(app, api);
+  },
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData?.name === "HeltoWAN22TimelineSegmentedExecutor") {

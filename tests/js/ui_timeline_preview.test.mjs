@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createDefaultVideoTimeline } from "../../web/timeline/schema.js";
+import { addSection } from "../../web/timeline/operations.js";
 import {
   AUDIO_LANE_HEIGHT,
   DIRECTOR_TRACK_HEIGHT,
@@ -22,14 +23,19 @@ import {
   waveformPeaksForClip,
 } from "../../web/timeline/renderer.js";
 import {
+  applyTakeCaptureResultsToDirector,
   clearNativeTakeCapturePreview,
   ensureTakeCapturePreviewNodeFits,
+  handleTakeCaptureExecutedEvent,
   installTakeCapturePreview,
+  installTakeCaptureResultListener,
   maintainTakeCapturePreview,
   repairTakeCaptureShiftedSocketlessWidgetValues,
   setTakeCapturePreviewReveal,
   stripTakeCapturePreviewMedia,
+  syncTakeCaptureResultToDirector,
   suppressNativeTakeCapturePreview,
+  takeCaptureResultsFromOutput,
   syncTakeCapturePreview,
   takeCapturePreviewFromOutput,
   takeCapturePreviewRequiredNodeHeight,
@@ -224,7 +230,12 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes('this.renderCheckboxField(boundary, "reuse_style"'), true);
   assert.equal(rendererSource.includes(".htd-boundary-prompt"), true);
   assert.equal(rendererSource.includes("renderAssemblyReadinessPill(timeline, shot)"), true);
-  assert.equal(rendererSource.includes("renderLatestCapture(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("renderCurrentTakeCard(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("renderShotDetails(timeline, shot)"), true);
+  assert.equal(rendererSource.includes("renderCurrentTakeThumbnail(previewData)"), true);
+  assert.equal(rendererSource.includes(".htd-root.is-private .htd-current-take-thumb video { opacity: 0; }"), true);
+  assert.equal(rendererSource.indexOf("const latestTake = latestAttachedTake(shot);") < rendererSource.indexOf("if (state.loading)"), true);
+  assert.equal(rendererSource.indexOf("const latestTake = latestAttachedTake(shot);") < rendererSource.indexOf("if (state.items.length)"), true);
   assert.equal(rendererSource.includes("renderCaptureManagementModal(timeline, modalShot)"), true);
   assert.equal(rendererSource.includes("renderAvailableCaptures(timeline, shot)"), false);
   assert.equal(rendererSource.includes("Copy Shot ID For Planner Input"), false);
@@ -237,7 +248,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("Attach Existing Generated Asset As Candidate Take"), true);
   assert.equal(rendererSource.includes("Pick Existing Generated Asset As Candidate Take"), true);
   assert.equal(rendererSource.includes("Attach Generated Video As Take"), false);
-  assert.equal(rendererSource.includes("Latest Capture"), true);
+  assert.equal(rendererSource.includes("Current Take"), true);
+  assert.equal(rendererSource.includes("Latest Capture"), false);
   assert.equal(rendererSource.includes("Available Captures"), false);
   assert.equal(rendererSource.includes("Project Captures"), true);
   assert.equal(rendererSource.includes("Attached Takes"), true);
@@ -334,7 +346,7 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("shotIdInput"), false);
   assert.equal(rendererSource.includes("htd-shot-id"), false);
   assert.equal(rendererSource.includes('this.renderInspectorCompactField("ID:"'), false);
-  assert.equal(rendererSource.includes('const nameField = this.renderInspectorCompactField("Name:", nameInput, "is-shot-name")'), true);
+  assert.equal(rendererSource.includes('this.renderInspectorCompactField("Name:", nameInput, "is-shot-name")'), true);
   assert.equal(rendererSource.includes(".htd-shot-name { width: min(100%, 520px); min-width: 220px; max-width: none; }"), true);
   assert.equal(rendererSource.includes("htd-project-end"), true);
   assert.equal(rendererSource.includes("TIMELINE_RIGHT_PADDING"), true);
@@ -537,6 +549,29 @@ function testSharedMediaPreviewSupportsVideoControls() {
   assert.equal(previewSource.includes(".pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover video"), true);
 }
 
+function testShotBandShowsCurrentTakeBadge() {
+  const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+
+  assert.equal(rendererSource.includes('el("span", "htd-shot-take-badge")'), true);
+  assert.equal(rendererSource.includes('badge.classList.toggle("is-accepted", Boolean(shot.accepted_take_id))'), true);
+  assert.equal(rendererSource.includes("badge.textContent = `T${takes.length}`"), true);
+  assert.equal(rendererSource.includes("latest ${latestStatus}"), true);
+  assert.equal(rendererSource.includes(".htd-shot-band .htd-shot-take-badge {"), true);
+  assert.equal(rendererSource.includes(".htd-shot-band .htd-shot-take-badge.is-accepted {"), true);
+  assert.equal(rendererSource.includes(".htd-root.is-private:not(.is-privacy-revealed) .htd-shot-take-badge { visibility: hidden; }"), true);
+}
+
+function testAttachedTakeRowCompactKeepsSingleLine() {
+  const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+
+  // Compact take/capture rows append four children (label, summary, status, actions),
+  // so the compact grid must define four columns or the actions wrap to a second line.
+  assert.equal(
+    rendererSource.includes(".htd-take-row.is-compact, .htd-capture-row.is-compact { grid-template-columns: minmax(92px, 0.28fr) minmax(100px, 1fr) auto auto; }"),
+    true,
+  );
+}
+
 function testTakeCapturePreviewHelpersUseTaggedOutput() {
   const source = { filename: "shot take 001.mp4", subfolder: "takes/shot_001", type: "output" };
   const apiRef = { apiURL: (path) => `/api${path}` };
@@ -567,6 +602,181 @@ function testTakeCapturePreviewHelpersUseTaggedOutput() {
     helto_take_capture_preview: [true],
     helto_privacy_mode: [true],
   });
+}
+
+function testTakeCapturePreviewAppliesResultToLinkedDirector() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { director, takeCaptureNode } = createLinkedTakeCaptureGraph(timeline);
+  const payload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_001",
+    takeId: "take_capture_001",
+    path: "/project/takes/shot_001/capture_001.mp4",
+  });
+
+  assert.deepEqual(takeCaptureResultsFromOutput({ helto_take_capture_result: [payload] }), [payload]);
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [payload] }), true);
+  assert.equal(timeline.assets.length, 1);
+  assert.equal(timeline.assets[0].asset_id, "asset_capture_001");
+  assert.equal(timeline.assets[0].path, "/project/takes/shot_001/capture_001.mp4");
+  assert.equal(shot.takes.length, 1);
+  assert.equal(shot.takes[0].take_id, "take_capture_001");
+  assert.equal(shot.takes[0].asset_id, "asset_capture_001");
+  assert.equal(shot.takes[0].status, "Candidate");
+  assert.equal(shot.accepted_take_id, null);
+  assert.deepEqual(director.updateCalls, [{ reason: "take capture result", options: { rerender: true } }]);
+}
+
+function testTakeCapturePreviewReplayDoesNotDuplicateLinkedDirectorTake() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { director, takeCaptureNode } = createLinkedTakeCaptureGraph(timeline);
+  const payload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_001",
+    takeId: "take_capture_001",
+    path: "/project/takes/shot_001/capture_001.mp4",
+  });
+
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [payload] }), true);
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [payload] }), false);
+  assert.equal(timeline.assets.length, 1);
+  assert.equal(shot.takes.length, 1);
+  assert.equal(director.updateCalls.length, 1);
+}
+
+function testTakeCapturePreviewReusedIdsWithDifferentPathAddsDistinctTake() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { takeCaptureNode } = createLinkedTakeCaptureGraph(timeline);
+  const firstPayload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_reused",
+    takeId: "take_capture_reused",
+    path: "/project/takes/shot_001/reroll_001.mp4",
+  });
+  const secondPayload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_reused",
+    takeId: "take_capture_reused",
+    path: "/project/takes/shot_001/reroll_002.mp4",
+  });
+
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [firstPayload] }), true);
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [secondPayload] }), true);
+  assert.equal(timeline.assets.length, 2);
+  assert.equal(shot.takes.length, 2);
+  assert.deepEqual(timeline.assets.map((asset) => asset.path), [
+    "/project/takes/shot_001/reroll_001.mp4",
+    "/project/takes/shot_001/reroll_002.mp4",
+  ]);
+  assert.equal(timeline.assets[0].asset_id, "asset_capture_reused");
+  assert.equal(timeline.assets[1].asset_id, "asset_capture_reused_2");
+  assert.notEqual(shot.takes[0].take_id, shot.takes[1].take_id);
+}
+
+function testTakeCapturePreviewAcceptedResultUpdatesLinkedDirectorAcceptedTake() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { takeCaptureNode } = createLinkedTakeCaptureGraph(timeline);
+  const payload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_accepted",
+    takeId: "take_capture_accepted",
+    path: "/project/takes/shot_001/accepted.mp4",
+    status: "Accepted",
+  });
+
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [payload] }), true);
+  assert.equal(shot.takes.length, 1);
+  assert.equal(shot.takes[0].status, "Accepted");
+  assert.equal(shot.accepted_take_id, "take_capture_accepted");
+  assert.equal(shot.clip_instance.asset_id, "asset_capture_accepted");
+}
+
+function testTakeCapturePreviewResultWithoutLinkedDirectorIsNoop() {
+  const output = {
+    helto_take_capture_result: [
+      takeCaptureResultPayload("shot_001", {
+        assetId: "asset_orphan",
+        takeId: "take_orphan",
+        path: "/project/takes/shot_001/orphan.mp4",
+      }),
+    ],
+  };
+
+  assert.doesNotThrow(() => syncTakeCaptureResultToDirector(createFakeTakeCaptureNode(), output));
+  assert.equal(syncTakeCaptureResultToDirector(createFakeTakeCaptureNode(), output), false);
+}
+
+function testTakeCaptureExecutedListenerAppliesResultToGraphDirectors() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { director } = createLinkedTakeCaptureGraph(timeline);
+  director._timelineRenderer = {
+    availableCaptures: { key: "stale-key", loading: false, error: "", items: [{ path: "/stale.mp4" }] },
+  };
+  const listeners = {};
+  const apiRef = {
+    addEventListener(name, handler) {
+      listeners[name] = handler;
+    },
+  };
+  const appRef = { graph: { _nodes: [director, { id: 999, type: "OtherNode" }] } };
+
+  assert.equal(installTakeCaptureResultListener(appRef, apiRef), true);
+  assert.equal(typeof listeners.executed, "function");
+  assert.equal(installTakeCaptureResultListener(appRef, apiRef), false, "listener installs once");
+
+  const payload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_event",
+    takeId: "take_capture_event",
+    path: "/project/takes/shot_001/event_001.mp4",
+  });
+  listeners.executed({ detail: { node: 241, output: { helto_take_capture_result: [payload] } } });
+
+  assert.equal(shot.takes.length, 1);
+  assert.equal(shot.takes[0].take_id, "take_capture_event");
+  assert.equal(
+    director._timelineRenderer.availableCaptures.key,
+    "",
+    "captures cache is invalidated so the disk listing refetches",
+  );
+
+  assert.equal(handleTakeCaptureExecutedEvent(appRef, { detail: { output: {} } }), false);
+  assert.equal(
+    handleTakeCaptureExecutedEvent(appRef, { detail: { output: { helto_take_capture_result: [payload] } } }),
+    false,
+    "replayed event deduplicates",
+  );
+  assert.equal(shot.takes.length, 1);
+}
+
+function testApplyTakeCaptureResultsSkipsDirectorsWithoutMatchingShot() {
+  const { timeline } = createTimelineWithShot();
+  const { director } = createLinkedTakeCaptureGraph(timeline);
+  director._timelineRenderer = {
+    availableCaptures: { key: "stale-key", loading: false, error: "", items: [] },
+  };
+  const payload = takeCaptureResultPayload("shot_not_in_timeline", {
+    assetId: "asset_foreign",
+    takeId: "take_foreign",
+    path: "/project/takes/other/foreign.mp4",
+  });
+
+  assert.equal(applyTakeCaptureResultsToDirector(director, [payload]), false);
+  assert.equal(director.updateCalls.length, 0);
+  assert.equal(
+    director._timelineRenderer.availableCaptures.key,
+    "stale-key",
+    "unrelated results leave the captures cache alone",
+  );
+}
+
+function testTakeCapturePreviewFindsLinkedDirectorThroughRuntimeContextPath() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { takeCaptureNode } = createIndirectLinkedTakeCaptureGraph(timeline);
+  const payload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_indirect",
+    takeId: "take_capture_indirect",
+    path: "/project/takes/shot_001/indirect.mp4",
+  });
+
+  assert.equal(syncTakeCaptureResultToDirector(takeCaptureNode, { helto_take_capture_result: [payload] }), true);
+  assert.equal(timeline.assets.length, 1);
+  assert.equal(shot.takes.length, 1);
+  assert.equal(shot.takes[0].take_id, "take_capture_indirect");
 }
 
 function testTakeCapturePreviewClearsNativeAndRevealsOnHover() {
@@ -682,6 +892,41 @@ function testTakeCapturePreviewInstallerStripsNativeMediaBeforeOriginalOnExecute
   } finally {
     globalThis.document = previousDocument;
   }
+}
+
+function testTakeCapturePreviewInstallerAppliesResultToLinkedDirector() {
+  const { timeline, shot } = createTimelineWithShot();
+  const { director, takeCaptureNode } = createLinkedTakeCaptureGraph(timeline);
+  const payload = takeCaptureResultPayload(shot.shot_id, {
+    assetId: "asset_capture_installed",
+    takeId: "take_capture_installed",
+    path: "/project/takes/shot_001/installed.mp4",
+  });
+  let forwardedOutput = null;
+  function FakeNode() {
+    Object.assign(this, takeCaptureNode);
+  }
+  FakeNode.prototype.onExecuted = function (output) {
+    forwardedOutput = output;
+    return "native-result";
+  };
+
+  installTakeCapturePreview(FakeNode, { canvas: { setDirty() {} } }, { apiURL: (path) => path });
+  const node = new FakeNode();
+  const result = node.onExecuted({
+    images: [{ filename: "installed.mp4", type: "output" }],
+    animated: [true],
+    helto_take_capture_preview: [true],
+    helto_take_capture_result: [payload],
+  });
+
+  assert.equal(result, "native-result");
+  assert.equal("images" in forwardedOutput, false);
+  assert.deepEqual(forwardedOutput.helto_take_capture_result, [payload]);
+  assert.equal(timeline.assets.length, 1);
+  assert.equal(shot.takes.length, 1);
+  assert.equal(shot.takes[0].take_id, "take_capture_installed");
+  assert.equal(director.updateCalls.length, 1);
 }
 
 function testTakeCapturePreviewConsumesNativeStoredOutput() {
@@ -827,9 +1072,10 @@ function testTakeCapturePreviewExtensionIsInstalled() {
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
 
   assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), true);
-  assert.equal(extensionSource.includes('import { installTakeCapturePreview } from "./timeline/take_capture_preview.js";'), true);
+  assert.equal(extensionSource.includes('} from "./timeline/take_capture_preview.js";'), true);
   assert.equal(extensionSource.includes('nodeData?.name === "HeltoTimelineTakeCapture"'), true);
   assert.equal(extensionSource.includes("installTakeCapturePreview(nodeType, app, api)"), true);
+  assert.equal(extensionSource.includes("installTakeCaptureResultListener(app, api)"), true);
 
   const previewSource = readFileSync(new URL("../../web/timeline/take_capture_preview.js", import.meta.url), "utf8");
   assert.equal(previewSource.includes("helto_take_capture_preview"), true);
@@ -1119,10 +1365,21 @@ testBoundarySelectionUsesInspectorHeightAndLiveFieldUpdates();
 testSectionPreviewUsesContainedRepeatedFrames();
 testProjectCaptureAttachmentMatchingPrefersPath();
 testSharedMediaPreviewSupportsVideoControls();
+testShotBandShowsCurrentTakeBadge();
+testAttachedTakeRowCompactKeepsSingleLine();
 testTakeCapturePreviewHelpersUseTaggedOutput();
+testTakeCapturePreviewAppliesResultToLinkedDirector();
+testTakeCapturePreviewReplayDoesNotDuplicateLinkedDirectorTake();
+testTakeCapturePreviewReusedIdsWithDifferentPathAddsDistinctTake();
+testTakeCapturePreviewAcceptedResultUpdatesLinkedDirectorAcceptedTake();
+testTakeCapturePreviewResultWithoutLinkedDirectorIsNoop();
+testTakeCaptureExecutedListenerAppliesResultToGraphDirectors();
+testApplyTakeCaptureResultsSkipsDirectorsWithoutMatchingShot();
+testTakeCapturePreviewFindsLinkedDirectorThroughRuntimeContextPath();
 testTakeCapturePreviewClearsNativeAndRevealsOnHover();
 testTakeCapturePublicPreviewUsesHoverWidgetAndRestoresNativeVisibility();
 testTakeCapturePreviewInstallerStripsNativeMediaBeforeOriginalOnExecuted();
+testTakeCapturePreviewInstallerAppliesResultToLinkedDirector();
 testTakeCapturePreviewConsumesNativeStoredOutput();
 testTakeCapturePreviewNodeGrowthUsesStableFitTarget();
 testTakeCapturePreviewPreservesSocketlessWidgetOrder();
@@ -1138,6 +1395,136 @@ testWaveformHelpersAdaptAndTrimPeaks();
 testViewportMeasurementIgnoresCollapsedChildWidth();
 
 console.log("timeline preview UI tests passed");
+
+function createTimelineWithShot() {
+  const timeline = createDefaultVideoTimeline();
+  const section = addSection(timeline, "Text", 0);
+  const shot = timeline.sequence.shots.find((candidate) => candidate.section_ids.includes(section.item_id));
+  return { timeline, shot };
+}
+
+function takeCaptureResultPayload(shotId, {
+  assetId = "asset_capture",
+  takeId = "take_capture",
+  path = "/captures/take.mp4",
+  status = "Candidate",
+} = {}) {
+  return {
+    type: "HELTO_TAKE_CAPTURE_RESULT",
+    schema_version: 1,
+    shot_id: shotId,
+    asset_id: assetId,
+    take_id: takeId,
+    summary: {
+      accepted: status === "Accepted",
+      asset_id: assetId,
+      filename: path.split("/").pop(),
+      media_type: "Video",
+      path,
+      shot_id: shotId,
+      take_id: takeId,
+    },
+    media: {
+      type: "Video",
+      source_kind: "Generated",
+      filename: path.split("/").pop(),
+      path,
+      frame_rate: 24,
+      frame_count: 49,
+      duration_seconds: 2,
+      width: 768,
+      height: 432,
+    },
+    registration: {
+      type: "TAKE_REGISTRATION_ENVELOPE",
+      shot_id: shotId,
+      asset: {
+        asset_id: assetId,
+        type: "Video",
+        path,
+        name: path.split("/").pop(),
+      },
+      take: {
+        take_id: takeId,
+        status,
+      },
+    },
+  };
+}
+
+function createLinkedTakeCaptureGraph(timeline) {
+  const director = {
+    id: 101,
+    type: "HeltoVideoTimelineDirector",
+    updateCalls: [],
+    _videoTimelineStateController: { timeline },
+    updateTimelineState(mutator, reason, options = {}) {
+      this.updateCalls.push({ reason, options });
+      mutator(this._videoTimelineStateController.timeline);
+      return this._videoTimelineStateController.timeline;
+    },
+  };
+  const graph = {
+    links: {
+      901: { id: 901, origin_id: director.id, target_id: 241, target_slot: 0 },
+    },
+    dirty: [],
+    getNodeById(id) {
+      return String(id) === String(director.id) ? director : null;
+    },
+    setDirtyCanvas(...args) {
+      this.dirty.push(args);
+    },
+  };
+  director.graph = graph;
+  const takeCaptureNode = createFakeTakeCaptureNode({
+    id: 241,
+    graph,
+    inputs: [{ name: "video_timeline", link: 901 }],
+  });
+  return { director, takeCaptureNode };
+}
+
+function createIndirectLinkedTakeCaptureGraph(timeline) {
+  const director = {
+    id: 101,
+    type: "HeltoVideoTimelineDirector",
+    _videoTimelineStateController: { timeline },
+    updateTimelineState(mutator) {
+      mutator(this._videoTimelineStateController.timeline);
+      return this._videoTimelineStateController.timeline;
+    },
+  };
+  const planner = {
+    id: 202,
+    type: "HeltoWAN22TimelinePlanner",
+    inputs: [{ name: "video_timeline", link: 801 }],
+  };
+  const runtime = {
+    id: 303,
+    type: "HeltoWAN22TimelineRuntime",
+    inputs: [{ name: "wan_timeline_plan", link: 802 }],
+  };
+  const graph = {
+    links: {
+      801: { id: 801, origin_id: director.id, target_id: planner.id, target_slot: 0 },
+      802: { id: 802, origin_id: planner.id, target_id: runtime.id, target_slot: 0 },
+      803: { id: 803, origin_id: runtime.id, target_id: 241, target_slot: 1 },
+    },
+    _nodes: [director, planner, runtime],
+    setDirtyCanvas() {},
+  };
+  director.graph = graph;
+  planner.graph = graph;
+  runtime.graph = graph;
+  const takeCaptureNode = createFakeTakeCaptureNode({
+    id: 241,
+    graph,
+    inputs: [{ name: "runtime_context", link: 803 }],
+  });
+  graph._nodes.push(takeCaptureNode);
+  return { director, takeCaptureNode };
+}
 
 function createFakeTakeCaptureNode(overrides = {}) {
   const node = {

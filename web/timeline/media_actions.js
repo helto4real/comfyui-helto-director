@@ -7,10 +7,12 @@ import {
   deepClone,
 } from "./schema.js";
 import {
+  acceptTake,
   addAudioClip,
   addSection,
   addTakeMetadata,
   attachVideoAssetAsTake,
+  findShot,
   findSection,
 } from "./operations.js";
 import { attachMediaAsset, createFilePathAsset } from "./media.js";
@@ -128,32 +130,26 @@ export async function deleteProjectTakeCapture(timeline, shotId, path, options =
 
 export function registerGeneratedTakePayload(timeline, shotId, payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const registration = registrationFromPayload(payload);
-  const summary = payload.summary && typeof payload.summary === "object" ? payload.summary : null;
-  const media = payload.media && typeof payload.media === "object" ? payload.media : null;
-  const registrationAsset = registration?.asset && typeof registration.asset === "object"
-    ? registration.asset
-    : null;
-  const takeData = takeDataFromRegistration(takePayloadFromRegistration(registration, summary));
-  const assetPayload = {
-    ...safeObject(registrationAsset),
-    ...safeObject(summary),
-  };
-  const assetPath = stringValue(
-    registrationAsset?.path
-    ?? registrationAsset?.file_path
-    ?? registration?.path
-    ?? registration?.file_path
-    ?? media?.path
-    ?? media?.file_path
-    ?? summary?.path,
-  );
-  const requestedAssetId = stringValue(
-    registrationAsset?.asset_id
-    ?? registration?.asset_id
-    ?? takeData.asset_id
-    ?? summary?.asset_id,
-  );
+  const normalized = normalizeGeneratedTakePayload(payload);
+  if (!normalized) return null;
+  const {
+    summary,
+    media,
+    registrationAsset,
+    takeData,
+    assetPayload,
+    assetPath,
+    requestedAssetId,
+    requestedTakeId,
+    requestedTakeStatus,
+  } = normalized;
+  const existing = existingRegisteredTakeForPayload(timeline, shotId, assetPath, requestedTakeId);
+  if (existing) {
+    if (requestedTakeStatus === "Accepted" && existing.take.status !== "Accepted") {
+      acceptTake(timeline, shotId, existing.take.take_id);
+    }
+    return existing;
+  }
   let asset = null;
   let assetId = requestedAssetId;
   if (assetPath) {
@@ -183,11 +179,19 @@ export function registerGeneratedTakePayload(timeline, shotId, payload) {
   if (!assetId) return null;
   const take = addTakeMetadata(timeline, shotId, {
     ...takeData,
-    take_id: takeData.take_id ?? summary?.take_id,
+    take_id: requestedTakeId,
     asset_id: assetId,
-    status: TAKE_STATUSES.includes(takeData.status) ? takeData.status : "Candidate",
+    status: requestedTakeStatus,
   });
   return take ? { asset, take } : null;
+}
+
+export function generatedTakePayloadAlreadyApplied(timeline, shotId, payload) {
+  const normalized = normalizeGeneratedTakePayload(payload);
+  if (!normalized) return false;
+  const existing = existingRegisteredTakeForPayload(timeline, shotId, normalized.assetPath, normalized.requestedTakeId);
+  if (!existing) return false;
+  return normalized.requestedTakeStatus !== "Accepted" || existing.take.status === "Accepted";
 }
 
 export function replacePickedSectionMedia(timeline, itemId, assetType, item) {
@@ -217,6 +221,62 @@ function registrationFromPayload(payload) {
   }
   if (payload.registration && typeof payload.registration === "object") return payload.registration;
   return payload;
+}
+
+function normalizeGeneratedTakePayload(payload) {
+  const registration = registrationFromPayload(payload);
+  const summary = payload.summary && typeof payload.summary === "object" ? payload.summary : null;
+  const media = payload.media && typeof payload.media === "object" ? payload.media : null;
+  const registrationAsset = registration?.asset && typeof registration.asset === "object"
+    ? registration.asset
+    : null;
+  const takeData = takeDataFromRegistration(takePayloadFromRegistration(registration, summary));
+  const requestedTakeId = stringValue(takeData.take_id ?? summary?.take_id);
+  const requestedTakeStatus = TAKE_STATUSES.includes(takeData.status) ? takeData.status : "Candidate";
+  return {
+    registration,
+    summary,
+    media,
+    registrationAsset,
+    takeData,
+    requestedTakeId,
+    requestedTakeStatus,
+    assetPayload: {
+      ...safeObject(registrationAsset),
+      ...safeObject(summary),
+    },
+    assetPath: stringValue(
+      registrationAsset?.path
+      ?? registrationAsset?.file_path
+      ?? registration?.path
+      ?? registration?.file_path
+      ?? media?.path
+      ?? media?.file_path
+      ?? summary?.path,
+    ),
+    requestedAssetId: stringValue(
+      registrationAsset?.asset_id
+      ?? registration?.asset_id
+      ?? takeData.asset_id
+      ?? summary?.asset_id,
+    ),
+  };
+}
+
+function existingRegisteredTakeForPayload(timeline, shotId, assetPath, takeId) {
+  const shot = findShot(timeline, shotId);
+  if (!shot) return null;
+  const takes = Array.isArray(shot.takes) ? shot.takes : [];
+  if (assetPath) {
+    const take = takes.find((candidate) => assetMediaPath(assetForId(timeline, candidate.asset_id)) === assetPath);
+    return take ? { asset: assetForId(timeline, take.asset_id), take } : null;
+  }
+  if (!takeId) return null;
+  const take = takes.find((candidate) => (
+    candidate.take_id === takeId
+    && !assetMediaPath(assetForId(timeline, candidate.asset_id))
+  ));
+  return take ? { asset: assetForId(timeline, take.asset_id), take } : null;
 }
 
 function takeDataFromRegistration(take) {
@@ -268,6 +328,15 @@ function safeObject(value) {
 function stringValue(value) {
   const text = String(value ?? "").trim();
   return text || "";
+}
+
+function assetForId(timeline, assetId) {
+  if (assetId == null) return null;
+  return timeline.assets?.find((asset) => asset.asset_id === assetId) ?? null;
+}
+
+function assetMediaPath(asset) {
+  return stringValue(asset?.path ?? asset?.file_path);
 }
 
 function uniqueAssetId(timeline, preferredId, path) {
