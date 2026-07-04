@@ -197,7 +197,7 @@ output:
 - Tests: `tests/wan/test_planner_config_contract.py`,
   `tests/wan/test_media_policy_and_plan_only.py`,
   `tests/wan/test_runtime_core_and_conditioning.py`,
-  `tests/wan/test_runtime_debug_compatibility.py`,
+  `tests/wan/test_runtime_context_compatibility.py`,
   `tests/wan/test_visual_conditioning_modes.py`, `tests/wan/test_bernini.py`
 
 Keep all WAN-specific behavior in these WAN paths. The Director remains generic,
@@ -221,11 +221,11 @@ PYTHONPATH=/home/thhel/git/ComfyUI python -m pytest
 
 If `python -m pytest` reports `No module named pytest`, do not assume pytest is
 missing globally. The user's pyenv Python at
-`/home/thhel/.pyenv/versions/3.13.2/bin/python` has pytest installed and should
+`/home/thhel/.pyenv/versions/3.13.14/bin/python` has pytest installed and should
 be used for validation before reporting pytest as unavailable:
 
 ```bash
-PYTHONPATH=/home/thhel/git/ComfyUI /home/thhel/.pyenv/versions/3.13.2/bin/python -m pytest
+PYTHONPATH=/home/thhel/git/ComfyUI /home/thhel/.pyenv/versions/3.13.14/bin/python -m pytest
 ```
 
 Run focused Python tests:

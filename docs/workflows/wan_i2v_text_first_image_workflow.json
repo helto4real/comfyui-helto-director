@@ -15,7 +15,7 @@
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
       "title": "WAN I2V First Image Notes",
       "properties": {},
-      "widgets_values": ["WAN I2V-A14B example with one Image Section followed by Text Sections. Runtime debug should show one requested Start keyframe candidate and Prompt Relay local prompts."]
+      "widgets_values": ["WAN I2V-A14B example with one Image Section followed by Text Sections. Runtime context should show one requested Start keyframe candidate and Prompt Relay local prompts."]
     },
     {
       "id": 2,
@@ -98,7 +98,7 @@
         { "name": "positive", "type": "CONDITIONING", "links": [] },
         { "name": "negative", "type": "CONDITIONING", "links": [] },
         { "name": "video_latent", "type": "LATENT", "links": [] },
-        { "name": "runtime_debug", "type": "DEBUG_INFO", "links": [] }
+        { "name": "runtime_context", "type": "DEBUG_INFO", "links": [] }
       ],
       "title": "WAN 2.2 Timeline Runtime",
       "properties": {},

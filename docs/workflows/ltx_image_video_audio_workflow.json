@@ -131,7 +131,7 @@
         { "name": "audio_latent", "type": "LATENT", "links": [] },
         { "name": "combined_audio", "type": "AUDIO", "links": [] },
         { "name": "guide_data", "type": "GUIDE_DATA", "links": [] },
-        { "name": "runtime_debug", "type": "DEBUG_INFO", "links": [] }
+        { "name": "runtime_context", "type": "DEBUG_INFO", "links": [] }
       ],
       "title": "LTX 2.3 Timeline Runtime",
       "properties": {},

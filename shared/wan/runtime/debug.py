@@ -35,7 +35,7 @@ def build_runtime_validation(entries: list[dict[str, Any]]) -> dict[str, Any]:
     return create_validation_result(entries)
 
 
-def build_runtime_debug(
+def build_runtime_context(
     *,
     plan: dict[str, Any],
     requested_backend: str,
@@ -53,7 +53,7 @@ def build_runtime_debug(
 ) -> dict[str, Any]:
     wan = plan.get("model_specific", {}).get("wan", {})
     config = wan.get("config", {})
-    bernini = _bernini_runtime_debug(wan.get("bernini") or {}, media_decisions or [], diagnostics)
+    bernini = _bernini_runtime_context(wan.get("bernini") or {}, media_decisions or [], diagnostics)
     continuity = _runtime_continuity_debug(plan)
     boundary_conditioning = _runtime_boundary_conditioning_debug(plan)
     validation = build_runtime_validation(validation_entries)
@@ -67,7 +67,7 @@ def build_runtime_debug(
         validation=validation,
         model_patch_status=model_patch_status or {},
     )
-    runtime_debug = {
+    runtime_context = {
         "type": "DEBUG_INFO",
         "source": "WAN Runtime",
         "enabled": config.get("debug_mode") != "Off",
@@ -120,15 +120,15 @@ def build_runtime_debug(
         "diagnostics": list(diagnostics),
     }
     if take_registration is not None:
-        runtime_debug["take_registration"] = deepcopy(take_registration)
-        runtime_debug["summary"]["take_registration_ready"] = bool(
+        runtime_context["take_registration"] = deepcopy(take_registration)
+        runtime_context["summary"]["take_registration_ready"] = bool(
             take_registration.get("registration_ready")
         )
-        runtime_debug["summary"]["take_registration_shot_ids"] = list(
+        runtime_context["summary"]["take_registration_shot_ids"] = list(
             take_registration.get("shot_ids") or []
         )
-    runtime_debug["status"] = summarize_wan_runtime_status(plan, runtime_debug, validation)
-    return runtime_debug
+    runtime_context["status"] = summarize_wan_runtime_status(plan, runtime_context, validation)
+    return runtime_context
 
 
 def _runtime_continuity_debug(plan: dict[str, Any]) -> dict[str, Any]:
@@ -410,11 +410,11 @@ def _known_limitations(plan: dict[str, Any], visual: dict[str, Any], capabilitie
     if visual.get("unsupported_keyframes"):
         limitations.append("Some requested visual keyframes are preserved in debug but unsupported by the selected backend.")
     if bernini.get("enabled") and bernini.get("ignored_timeline_media"):
-        limitations.append("Bernini uses only the first usable timeline image/video as source/background context; ignored timeline media is reported in runtime_debug.bernini.")
+        limitations.append("Bernini uses only the first usable timeline image/video as source/background context; ignored timeline media is reported in runtime_context.bernini.")
     return limitations
 
 
-def _bernini_runtime_debug(
+def _bernini_runtime_context(
     bernini_plan: dict[str, Any],
     media_decisions: list[dict[str, Any]],
     diagnostics: list[str],
@@ -467,7 +467,7 @@ def _recommended_next_action(
             return "Connect CLIP, VAE, and at least one WAN model phase, or keep Plan Only for debug."
         return "Switch Runtime Backend Profile to ComfyUI Core and connect the required backend inputs to execute supported conditioning."
     if missing_requirements:
-        return "Connect the missing backend requirements listed in runtime_debug.backend.missing_requirements."
+        return "Connect the missing backend requirements listed in runtime_context.backend.missing_requirements."
     if unsupported_features:
         return "Inspect unsupported_features and unsupported_keyframes; use Start/End image guidance for the current ComfyUI Core backend."
     if prompt_debug.get("patched"):

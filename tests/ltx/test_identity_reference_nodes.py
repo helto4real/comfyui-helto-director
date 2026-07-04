@@ -331,12 +331,12 @@ def test_runtime_applies_identity_anchor_and_does_not_mutate_plan(monkeypatch):
         sigmas="sigmas",
     )
 
-    runtime_model, *_rest, runtime_debug = outputs
+    runtime_model, *_rest, runtime_context = outputs
     assert runtime_model == "identity-patched-model"
     assert calls["identity_anchor"] == {"kind": "face"}
     assert calls["sigmas"] == "sigmas"
     assert isinstance(calls["guide_data"], dict)
-    assert not any("accepted but legacy runtime does not apply" in entry for entry in runtime_debug["diagnostics"])
+    assert not any("accepted but legacy runtime does not apply" in entry for entry in runtime_context["diagnostics"])
     assert plan == original_plan
 
 

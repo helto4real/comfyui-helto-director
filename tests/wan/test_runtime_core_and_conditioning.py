@@ -59,7 +59,7 @@ def test_runtime_schema_uses_dual_model_sockets():
         "positive",
         "negative",
         "video_latent",
-        "runtime_debug",
+        "runtime_context",
     ]
     assert "model" not in _item_names(schema.inputs)
     assert "model" not in _item_names(schema.outputs)
@@ -71,7 +71,7 @@ def test_plan_only_runtime_succeeds_without_model_clip_or_vae():
         create_wan_timeline_config(debug_mode="Summary"),
     )
 
-    high_model, low_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    high_model, low_model, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         wan_timeline_plan=plan,
     )
 
@@ -80,9 +80,9 @@ def test_plan_only_runtime_succeeds_without_model_clip_or_vae():
     assert positive == []
     assert negative == []
     assert video_latent["samples"].shape[1] == 16
-    assert runtime_debug["summary"]["requested_backend"] == "Plan Only"
-    assert runtime_debug["summary"]["resolved_backend"] == "Plan Only"
-    assert _validation_codes(runtime_debug, "info").count("WAN_RUNTIME_BACKEND_PLAN_ONLY") >= 1
+    assert runtime_context["summary"]["requested_backend"] == "Plan Only"
+    assert runtime_context["summary"]["resolved_backend"] == "Plan Only"
+    assert _validation_codes(runtime_context, "info").count("WAN_RUNTIME_BACKEND_PLAN_ONLY") >= 1
 
 
 def test_wan_runtime_skipped_plan_returns_no_take_registration_without_backend_inputs():
@@ -100,12 +100,12 @@ def test_wan_runtime_skipped_plan_returns_no_take_registration_without_backend_i
         "mode": "Missing Only",
     }
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_outputs, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    assert runtime_debug["summary"]["generation_required"] is False
-    assert runtime_debug["summary"]["generation_status"] == "skipped"
-    assert runtime_debug["summary"]["take_registration_ready"] is False
-    assert "take_registration" not in runtime_debug
+    assert runtime_context["summary"]["generation_required"] is False
+    assert runtime_context["summary"]["generation_status"] == "skipped"
+    assert runtime_context["summary"]["take_registration_ready"] is False
+    assert "take_registration" not in runtime_context
 
 
 def test_wan_shot_runtime_emits_take_registration_metadata():
@@ -119,9 +119,9 @@ def test_wan_shot_runtime_emits_take_registration_metadata():
         MODEL_LORA_TARGET_LOW_NOISE: _lora_stack("low.safetensors"),
     }
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_outputs, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    metadata = runtime_debug["take_registration"]
+    metadata = runtime_context["take_registration"]
     assert metadata["type"] == TAKE_CAPTURE_TYPE
     assert metadata["schema_version"] == 1
     assert metadata["shot_id"] == "shot_section_text"
@@ -141,8 +141,8 @@ def test_wan_shot_runtime_emits_take_registration_metadata():
     assert metadata["asset_suggestion"]["name"] == metadata["suggested_asset_name"]
     assert metadata["asset"].get("path") is None
     assert "simple prompt" not in str(metadata)
-    assert runtime_debug["summary"]["take_registration_ready"] is True
-    assert runtime_debug["summary"]["take_registration_shot_ids"] == ["shot_section_text"]
+    assert runtime_context["summary"]["take_registration_ready"] is True
+    assert runtime_context["summary"]["take_registration_shot_ids"] == ["shot_section_text"]
 
     registered = apply_take_registration(
         _text_timeline(),
@@ -194,14 +194,14 @@ def test_wan_runtime_reports_shot_continuity_debug():
         },
     }
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_outputs, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    assert runtime_debug["summary"]["shot_continuity_policy"] == "continuous"
-    assert runtime_debug["summary"]["shot_continuity_status"] == "applied"
-    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
-    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "not_executed"
-    assert runtime_debug["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
-    assert runtime_debug["boundary_conditioning"]["asset_id"] == "asset_previous_take"
+    assert runtime_context["summary"]["shot_continuity_policy"] == "continuous"
+    assert runtime_context["summary"]["shot_continuity_status"] == "applied"
+    assert runtime_context["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_context["summary"]["boundary_conditioning_runtime_status"] == "not_executed"
+    assert runtime_context["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
+    assert runtime_context["boundary_conditioning"]["asset_id"] == "asset_previous_take"
 
 
 def test_wan_runtime_applies_boundary_tail_as_core_transient_start_and_take_metadata(tmp_path):
@@ -218,17 +218,17 @@ def test_wan_runtime_applies_boundary_tail_as_core_transient_start_and_take_meta
     )
 
     assert validation["is_valid"] is True
-    *_outputs, runtime_debug = build_wan_runtime_outputs(
+    *_outputs, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["summary"]["shot_continuity_status"] == "applied"
-    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
-    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "applied"
-    boundary = runtime_debug["boundary_conditioning"]
+    assert runtime_context["summary"]["shot_continuity_status"] == "applied"
+    assert runtime_context["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_context["summary"]["boundary_conditioning_runtime_status"] == "applied"
+    boundary = runtime_context["boundary_conditioning"]
     assert boundary["boundary_id"] == "boundary_previous_next"
     assert boundary["requested_tail_frames"] == 6
     assert boundary["effective_tail_frames"] == 9
@@ -241,7 +241,7 @@ def test_wan_runtime_applies_boundary_tail_as_core_transient_start_and_take_meta
     ]
     assert "path" not in boundary
 
-    applied = runtime_debug["visual_conditioning"]["applied_keyframes"]
+    applied = runtime_context["visual_conditioning"]["applied_keyframes"]
     assert applied == [
         {
             "role": "Start",
@@ -251,14 +251,14 @@ def test_wan_runtime_applies_boundary_tail_as_core_transient_start_and_take_meta
         }
     ]
     decision = next(
-        item for item in runtime_debug["media_decisions"]
+        item for item in runtime_context["media_decisions"]
         if item.get("section_id") == "boundary_tail_boundary_previous_next"
     )
     assert decision["kind"] == "boundary_conditioning"
     assert decision["transient"] is True
     assert decision["tensor_shape"] == boundary["tensor_shape"]
 
-    metadata = runtime_debug["take_registration"]
+    metadata = runtime_context["take_registration"]
     boundary_metadata = metadata["take"]["metadata"]["model_specific"]["wan"]["boundary_conditioning"]
     assert boundary_metadata["model_status"] == "applied"
     assert boundary_metadata["runtime_status"] == "applied"
@@ -283,24 +283,24 @@ def test_wan_runtime_applies_boundary_tail_as_bernini_source_video(tmp_path):
     )
 
     assert validation["is_valid"] is True
-    *_outputs, runtime_debug = build_wan_runtime_outputs(
+    *_outputs, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "applied"
-    assert runtime_debug["bernini"]["task_type"] == "v2v"
+    assert runtime_context["summary"]["boundary_conditioning_runtime_status"] == "applied"
+    assert runtime_context["bernini"]["task_type"] == "v2v"
     decision = next(
-        item for item in runtime_debug["bernini"]["runtime_media_decisions"]
+        item for item in runtime_context["bernini"]["runtime_media_decisions"]
         if item.get("section_id") == "boundary_tail_boundary_previous_next"
     )
     assert decision["kind"] == "boundary_conditioning"
     assert decision["bernini_role"] == "source_video"
     assert decision["source_video_frame_count"] == 9
     assert decision["boundary_id"] == "boundary_previous_next"
-    assert any("boundary conditioning" in item.lower() for item in runtime_debug["bernini"]["runtime_diagnostics"])
+    assert any("boundary conditioning" in item.lower() for item in runtime_context["bernini"]["runtime_diagnostics"])
 
 
 def test_wan_runtime_applies_boundary_tail_for_fmlf_without_prev_latent(tmp_path):
@@ -317,7 +317,7 @@ def test_wan_runtime_applies_boundary_tail_for_fmlf_without_prev_latent(tmp_path
     )
 
     assert validation["is_valid"] is True
-    _high, _low, positive, _negative, _latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, _negative, _latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -327,8 +327,8 @@ def test_wan_runtime_applies_boundary_tail_for_fmlf_without_prev_latent(tmp_path
     )
 
     assert positive["_helto_wan_conditioning_split"] is True
-    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "applied"
-    fmlf = runtime_debug["fmlf_advanced_i2v"]
+    assert runtime_context["summary"]["boundary_conditioning_runtime_status"] == "applied"
+    fmlf = runtime_context["fmlf_advanced_i2v"]
     assert fmlf["used_prev_latent"] is False
     assert fmlf["anchor_source"] == "boundary_tail_boundary_previous_next"
     decision = next(
@@ -359,17 +359,17 @@ def test_wan_runtime_does_not_copy_boundary_tail_into_later_segment(tmp_path):
     }
 
     assert validation["is_valid"] is True
-    *_outputs, runtime_debug = build_wan_runtime_outputs(
+    *_outputs, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["summary"]["boundary_conditioning_runtime_status"] == "skipped_segment"
+    assert runtime_context["summary"]["boundary_conditioning_runtime_status"] == "skipped_segment"
     assert not any(
         item.get("section_id") == "boundary_tail_boundary_previous_next"
-        for item in runtime_debug["media_decisions"]
+        for item in runtime_context["media_decisions"]
     )
 
 
@@ -407,7 +407,7 @@ def test_comfyui_core_patches_both_models_when_connected(tmp_path):
     high_input = FakeModel("high")
     low_input = FakeModel("low")
 
-    high_model, low_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    high_model, low_model, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=high_input,
         low_noise_model=low_input,
         clip=FakeClip(),
@@ -423,7 +423,7 @@ def test_comfyui_core_patches_both_models_when_connected(tmp_path):
     assert positive[0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 4
     assert video_latent["samples"].shape[1] == 16
-    assert runtime_debug["model_patch_status"] == {
+    assert runtime_context["model_patch_status"] == {
         "high_noise_model": "patched",
         "low_noise_model": "patched",
     }
@@ -449,7 +449,7 @@ def test_wan_runtime_applies_resolved_high_low_loras_to_models_and_not_clip(tmp_
     }
     clip = FakeClip()
 
-    high_model, low_model, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    high_model, low_model, _positive, _negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel("high"),
         low_noise_model=FakeModel("low"),
         clip=clip,
@@ -461,11 +461,11 @@ def test_wan_runtime_applies_resolved_high_low_loras_to_models_and_not_clip(tmp_
     assert high_model.label == "high+hi.safetensors"
     assert low_model.label == "low+low.safetensors"
     assert not hasattr(clip, "lora_applied")
-    assert runtime_debug["loras"]["source_scope"] == "single_generation_loras"
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE]["applied"][0]["name"] == "hi.safetensors"
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE]["applied"][0]["name"] == "low.safetensors"
-    assert runtime_debug["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE][0]["name"] == "hi.safetensors"
-    assert runtime_debug["summary"]["lora_applied_count"] == 2
+    assert runtime_context["loras"]["source_scope"] == "single_generation_loras"
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE]["applied"][0]["name"] == "hi.safetensors"
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE]["applied"][0]["name"] == "low.safetensors"
+    assert runtime_context["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_HIGH_NOISE][0]["name"] == "hi.safetensors"
+    assert runtime_context["summary"]["lora_applied_count"] == 2
 
 
 def test_wan_runtime_reports_missing_model_for_resolved_lora_target(tmp_path, monkeypatch):
@@ -484,7 +484,7 @@ def test_wan_runtime_reports_missing_model_for_resolved_lora_target(tmp_path, mo
         MODEL_LORA_TARGET_LOW_NOISE: _lora_stack("low.safetensors"),
     }
 
-    _high, low_model, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, low_model, _positive, _negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel("high"),
         clip=FakeClip(),
         vae=FakeVAE(),
@@ -492,11 +492,11 @@ def test_wan_runtime_reports_missing_model_for_resolved_lora_target(tmp_path, mo
     )
 
     assert low_model is None
-    low_report = runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE]
+    low_report = runtime_context["loras"]["targets"][MODEL_LORA_TARGET_LOW_NOISE]
     assert low_report["resolved_count"] == 1
     assert low_report["applied_count"] == 0
     assert low_report["model_connected"] is False
-    assert any("low_noise_model is not connected" in entry for entry in runtime_debug["diagnostics"])
+    assert any("low_noise_model is not connected" in entry for entry in runtime_context["diagnostics"])
     assert any("low_noise_model is not connected" in entry for entry in low_report["warnings"])
 
 
@@ -506,7 +506,7 @@ def test_comfyui_core_patches_one_model_and_warns_when_other_missing(tmp_path):
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core"),
     )
 
-    high_model, low_model, _positive, _negative, _latent, runtime_debug = build_wan_runtime_outputs(
+    high_model, low_model, _positive, _negative, _latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
@@ -516,9 +516,9 @@ def test_comfyui_core_patches_one_model_and_warns_when_other_missing(tmp_path):
     assert isinstance(high_model, FakeModel)
     assert len(high_model.object_patches) == 2
     assert low_model is None
-    assert runtime_debug["model_patch_status"]["high_noise_model"] == "patched"
-    assert runtime_debug["model_patch_status"]["low_noise_model"] == "not_connected"
-    assert "WAN_RUNTIME_REQUIRED_INPUT_MISSING" in _validation_codes(runtime_debug, "warnings")
+    assert runtime_context["model_patch_status"]["high_noise_model"] == "patched"
+    assert runtime_context["model_patch_status"]["low_noise_model"] == "not_connected"
+    assert "WAN_RUNTIME_REQUIRED_INPUT_MISSING" in _validation_codes(runtime_context, "warnings")
 
 
 def test_comfyui_core_errors_when_prompt_relay_enabled_without_model():
@@ -541,7 +541,7 @@ def test_runtime_latent_uses_model_format_not_mismatched_vae():
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B"),
     )
 
-    _high_model, _low_model, _positive, _negative, video_latent, _runtime_debug = build_wan_runtime_outputs(
+    _high_model, _low_model, _positive, _negative, video_latent, _runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE48(),
@@ -663,8 +663,8 @@ def _lora_stack(name: str, strength_model: float = 0.8, strength_clip: float = 0
     }
 
 
-def _validation_codes(runtime_debug: dict, bucket: str) -> list[str]:
-    return [entry["code"] for entry in runtime_debug["validation"].get(bucket, [])]
+def _validation_codes(runtime_context: dict, bucket: str) -> list[str]:
+    return [entry["code"] for entry in runtime_context["validation"].get(bucket, [])]
 
 
 def _text_timeline():

@@ -98,7 +98,7 @@
         { "name": "positive", "type": "CONDITIONING", "links": [] },
         { "name": "negative", "type": "CONDITIONING", "links": [] },
         { "name": "video_latent", "type": "LATENT", "links": [] },
-        { "name": "runtime_debug", "type": "DEBUG_INFO", "links": [] }
+        { "name": "runtime_context", "type": "DEBUG_INFO", "links": [] }
       ],
       "title": "WAN 2.2 Timeline Runtime",
       "properties": {},

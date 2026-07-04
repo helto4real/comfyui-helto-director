@@ -15,7 +15,7 @@
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
       "title": "WAN Timed Keyframes Notes",
       "properties": {},
-      "widgets_values": ["WAN timed visual keyframe planning example. Runtime debug should preserve all requested image keyframes and mark Timed keyframes unsupported in the current ComfyUI Core backend."]
+      "widgets_values": ["WAN timed visual keyframe planning example. Runtime context should preserve all requested image keyframes and mark Timed keyframes unsupported in the current ComfyUI Core backend."]
     },
     {
       "id": 2,
@@ -98,7 +98,7 @@
         { "name": "positive", "type": "CONDITIONING", "links": [] },
         { "name": "negative", "type": "CONDITIONING", "links": [] },
         { "name": "video_latent", "type": "LATENT", "links": [] },
-        { "name": "runtime_debug", "type": "DEBUG_INFO", "links": [] }
+        { "name": "runtime_context", "type": "DEBUG_INFO", "links": [] }
       ],
       "title": "WAN 2.2 Timeline Runtime",
       "properties": {},

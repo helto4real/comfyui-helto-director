@@ -365,30 +365,30 @@ def test_ltx_runtime_skipped_plan_returns_no_take_registration_without_model_inp
         "mode": "Missing Only",
     }
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(
+    *_outputs, runtime_context = build_ltx_runtime_outputs(
         model=None,
         clip=None,
         vae=None,
         ltx_timeline_plan=plan,
     )
 
-    assert runtime_debug["summary"]["generation_required"] is False
-    assert runtime_debug["summary"]["generation_status"] == "skipped"
-    assert runtime_debug["summary"]["take_registration_ready"] is False
-    assert runtime_debug["summary"]["conditioning_frame_rate"] == 24.0
-    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is False
-    assert "take_registration" not in runtime_debug
+    assert runtime_context["summary"]["generation_required"] is False
+    assert runtime_context["summary"]["generation_status"] == "skipped"
+    assert runtime_context["summary"]["take_registration_ready"] is False
+    assert runtime_context["summary"]["conditioning_frame_rate"] == 24.0
+    assert runtime_context["summary"]["conditioning_frame_rate_applied"] is False
+    assert "take_registration" not in runtime_context
 
 
 def test_ltx_runtime_applies_frame_rate_conditioning_to_prompt_relay():
     plan = _text_plan(duration=1.0, prompt="wide shot")
 
-    _, positive, negative, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    _, positive, negative, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert positive[0][1]["frame_rate"] == 24.0
     assert negative[0][1]["frame_rate"] == 24.0
-    assert runtime_debug["summary"]["conditioning_frame_rate"] == 24.0
-    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is True
+    assert runtime_context["summary"]["conditioning_frame_rate"] == 24.0
+    assert runtime_context["summary"]["conditioning_frame_rate_applied"] is True
 
 
 def test_ltx_runtime_applies_frame_rate_conditioning_to_plain_prompt():
@@ -400,13 +400,13 @@ def test_ltx_runtime_applies_frame_rate_conditioning_to_plain_prompt():
     )
     assert validation["is_valid"] is True
 
-    _, positive, negative, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    _, positive, negative, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert positive[0][1]["text"] == "plain prompt"
     assert positive[0][1]["frame_rate"] == 24.0
     assert negative[0][1]["frame_rate"] == 24.0
-    assert runtime_debug["summary"]["conditioning_frame_rate"] == 24.0
-    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is True
+    assert runtime_context["summary"]["conditioning_frame_rate"] == 24.0
+    assert runtime_context["summary"]["conditioning_frame_rate_applied"] is True
 
 
 def _timeline_for_section(item_id: str, *, duration=1.0, prompt="wide shot"):
@@ -827,7 +827,7 @@ def test_ltx_runtime_node_schema_io_order():
         "source_video_audio",
         "source_video_frame_rate",
         "source_video_frame_count",
-        "runtime_debug",
+        "runtime_context",
     ]
 
 
@@ -863,7 +863,7 @@ def test_director_to_ltx_runtime_smoke_graph_with_image_and_audio(tmp_path):
         source_video_audio,
         source_video_frame_rate,
         source_video_frame_count,
-        runtime_debug,
+        runtime_context,
     ) = Runtime.execute(FakeModel(), FakeClip(), FakeVAE(), ltx_plan, audio_vae=FakeAudioVAE()).result
 
     assert director_validation["is_valid"] is True
@@ -880,9 +880,9 @@ def test_director_to_ltx_runtime_smoke_graph_with_image_and_audio(tmp_path):
     assert source_video_audio["waveform"].shape[1] == 2
     assert source_video_frame_rate == ltx_plan["resolved_output"]["frame_rate"]
     assert source_video_frame_count == 0
-    assert runtime_debug["enabled"] is True
-    assert runtime_debug["summary"]["applied_guides"] == 1
-    assert runtime_debug["summary"]["audio_clip_count"] == 1
+    assert runtime_context["enabled"] is True
+    assert runtime_context["summary"]["applied_guides"] == 1
+    assert runtime_context["summary"]["audio_clip_count"] == 1
 
 
 def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
@@ -900,7 +900,7 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
         source_video_audio,
         source_video_frame_rate,
         source_video_frame_count,
-        runtime_debug,
+        runtime_context,
     ) = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert len(runtime_model.object_patches) == 4
@@ -917,8 +917,8 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
     assert source_video_audio["waveform"].shape[1] == 2
     assert source_video_frame_rate == plan["resolved_output"]["frame_rate"]
     assert source_video_frame_count == 0
-    assert runtime_debug["type"] == "DEBUG_INFO"
-    assert [event["stage"] for event in runtime_debug["status_events"]] == [
+    assert runtime_context["type"] == "DEBUG_INFO"
+    assert [event["stage"] for event in runtime_context["status_events"]] == [
         "timeline.prepare",
         "timeline.prompt",
         "ltx.guide_data",
@@ -926,9 +926,9 @@ def test_text_only_timeline_outputs_patched_model_latents_audio_and_debug():
         "timeline.audio",
         "timeline.done",
     ]
-    assert runtime_debug["summary"]["applied_guides"] == 0
-    assert runtime_debug["summary"]["audio_clip_count"] == 0
-    assert any("No audio_vae connected" in entry for entry in runtime_debug["diagnostics"])
+    assert runtime_context["summary"]["applied_guides"] == 0
+    assert runtime_context["summary"]["audio_clip_count"] == 0
+    assert any("No audio_vae connected" in entry for entry in runtime_context["diagnostics"])
 
 
 def test_ltx_runtime_applies_resolved_main_lora_stack(monkeypatch):
@@ -946,14 +946,14 @@ def test_ltx_runtime_applies_resolved_main_lora_stack(monkeypatch):
         MODEL_LORA_TARGET_MAIN: resolved_stack,
     }
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert calls == [resolved_stack]
-    assert runtime_debug["loras"]["source_scope"] == "single_generation_loras"
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applies_to"] == ["model", "clip"]
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"][0]["name"] == "style.safetensors"
-    assert runtime_debug["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_MAIN][0]["name"] == "style.safetensors"
-    assert runtime_debug["summary"]["lora_count"] == 1
+    assert runtime_context["loras"]["source_scope"] == "single_generation_loras"
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applies_to"] == ["model", "clip"]
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"][0]["name"] == "style.safetensors"
+    assert runtime_context["loras"]["take_snapshot"]["targets"][MODEL_LORA_TARGET_MAIN][0]["name"] == "style.safetensors"
+    assert runtime_context["summary"]["lora_count"] == 1
 
 
 def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
@@ -967,9 +967,9 @@ def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
         MODEL_LORA_TARGET_MAIN: _lora_stack("style.safetensors"),
     }
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
-    metadata = runtime_debug["take_registration"]
+    metadata = runtime_context["take_registration"]
     assert metadata["type"] == TAKE_CAPTURE_TYPE
     assert metadata["schema_version"] == 1
     assert metadata["shot_id"] == "shot_section_001"
@@ -991,8 +991,8 @@ def test_ltx_shot_runtime_emits_take_registration_metadata(monkeypatch):
     assert metadata["asset"].get("path") is None
     assert "secret hero prompt" not in json.dumps(metadata)
     assert "data:" not in json.dumps(metadata)
-    assert runtime_debug["summary"]["take_registration_ready"] is True
-    assert runtime_debug["summary"]["take_registration_shot_ids"] == ["shot_section_001"]
+    assert runtime_context["summary"]["take_registration_ready"] is True
+    assert runtime_context["summary"]["take_registration_shot_ids"] == ["shot_section_001"]
 
     registered = apply_take_registration(
         _timeline_for_section("section_001", duration=2.0, prompt="secret hero prompt"),
@@ -1034,12 +1034,12 @@ def test_ltx_runtime_reports_shot_continuity_debug():
         "effective_tail_frames": 9,
     }
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
-    assert runtime_debug["summary"]["shot_continuity_policy"] == "continuous"
-    assert runtime_debug["summary"]["shot_continuity_status"] == "applied"
-    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
-    assert runtime_debug["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
+    assert runtime_context["summary"]["shot_continuity_policy"] == "continuous"
+    assert runtime_context["summary"]["shot_continuity_status"] == "applied"
+    assert runtime_context["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_context["continuity"]["clip_reference"]["asset_id"] == "asset_previous_take"
 
 
 def test_ltx_runtime_injects_transient_previous_tail_guide_and_take_metadata(tmp_path):
@@ -1054,7 +1054,7 @@ def test_ltx_runtime_injects_transient_previous_tail_guide_and_take_metadata(tmp
         _source_audio,
         _source_fps,
         source_count,
-        runtime_debug,
+        runtime_context,
     ) = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert source_count == 0
@@ -1075,14 +1075,14 @@ def test_ltx_runtime_injects_transient_previous_tail_guide_and_take_metadata(tmp
     assert reference["effective_tail_frames"] == 9
     assert reference["selected_frame_count"] == 9
     assert guide_data["insert_frames"] == [0]
-    assert runtime_debug["summary"]["boundary_conditioning_status"] == "applied"
-    assert runtime_debug["boundary_conditioning"]["media_item_id"] == "boundary_tail_boundary_previous_next"
-    assert runtime_debug["guide_data"]["references"][0]["kind"] == "boundary_conditioning"
-    assert runtime_debug["guide_data"]["references"][0]["selected_frame_count"] == 9
-    assert "image" not in runtime_debug["guide_data"]["references"][0]
-    assert "path" not in runtime_debug["guide_data"]["references"][0]
+    assert runtime_context["summary"]["boundary_conditioning_status"] == "applied"
+    assert runtime_context["boundary_conditioning"]["media_item_id"] == "boundary_tail_boundary_previous_next"
+    assert runtime_context["guide_data"]["references"][0]["kind"] == "boundary_conditioning"
+    assert runtime_context["guide_data"]["references"][0]["selected_frame_count"] == 9
+    assert "image" not in runtime_context["guide_data"]["references"][0]
+    assert "path" not in runtime_context["guide_data"]["references"][0]
 
-    metadata = runtime_debug["take_registration"]
+    metadata = runtime_context["take_registration"]
     boundary_metadata = metadata["take"]["metadata"]["model_specific"]["ltx"]["boundary_conditioning"]
     assert boundary_metadata["model_status"] == "applied"
     assert boundary_metadata["boundary_id"] == "boundary_previous_next"
@@ -1107,19 +1107,19 @@ def test_ltx_segment_plan_preserves_and_applies_transient_boundary_guide(tmp_pat
         _source_audio,
         _source_fps,
         _source_count,
-        runtime_debug,
+        runtime_context,
     ) = build_ltx_runtime_outputs(**_runtime_args(segment_plan))
 
     refs = [entry for entry in guide_data["reference_images"] if entry["kind"] == "boundary_conditioning"]
     debug_refs = [
         entry
-        for entry in runtime_debug["guide_data"]["references"]
+        for entry in runtime_context["guide_data"]["references"]
         if entry["kind"] == "boundary_conditioning"
     ]
     assert len(refs) == 1
     assert guide_data["insert_frames"] == [0]
-    assert runtime_debug["summary"]["guide_count"] == 1
-    assert runtime_debug["summary"]["applied_guides"] == 1
+    assert runtime_context["summary"]["guide_count"] == 1
+    assert runtime_context["summary"]["applied_guides"] == 1
     assert debug_refs == [
         {
             "id": "boundary_tail_boundary_previous_next",
@@ -1193,9 +1193,9 @@ def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monke
         MODEL_LORA_TARGET_MAIN: _lora_stack("private_style.safetensors"),
     }
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
-    metadata = runtime_debug["take_registration"]
+    metadata = runtime_context["take_registration"]
     row = metadata["take"]["resolved_loras"]["targets"][MODEL_LORA_TARGET_MAIN][0]
     assert row["name"] == "lora_001"
     assert row["name_hash"]
@@ -1221,11 +1221,11 @@ def test_ltx_runtime_ignores_legacy_timeline_lora_fields(monkeypatch):
         "ui": {"show_strengths": "single", "match": ""},
     }
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
-    assert runtime_debug["summary"]["lora_count"] == 0
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["resolved_count"] == 0
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"] == []
+    assert runtime_context["summary"]["lora_count"] == 0
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["resolved_count"] == 0
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied"] == []
 
 
 def test_ltx_runtime_missing_lora_resolution_fields_are_noop(monkeypatch):
@@ -1233,12 +1233,12 @@ def test_ltx_runtime_missing_lora_resolution_fields_are_noop(monkeypatch):
     plan = _text_plan()
     plan["model_specific"]["ltx"].pop("lora_resolution", None)
 
-    *_outputs, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    *_outputs, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
-    assert runtime_debug["loras"]["source_scope"] == "missing_lora_resolution"
-    assert runtime_debug["summary"]["lora_count"] == 0
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["resolved_count"] == 0
-    assert runtime_debug["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied_count"] == 0
+    assert runtime_context["loras"]["source_scope"] == "missing_lora_resolution"
+    assert runtime_context["summary"]["lora_count"] == 0
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["resolved_count"] == 0
+    assert runtime_context["loras"]["targets"][MODEL_LORA_TARGET_MAIN]["applied_count"] == 0
 
 
 def test_take_resolved_lora_snapshot_helper_builds_valid_snapshot():
@@ -1330,7 +1330,7 @@ def test_video_section_does_not_require_prompt_for_guidance(tmp_path):
     _write_test_video(video_path, frame_count=12, fps=12)
     plan = _video_plan(video_path, prompt="")
 
-    runtime_model, positive, negative, _video_latent, _audio_latent, _combined_audio, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+    runtime_model, positive, negative, _video_latent, _audio_latent, _combined_audio, guide_data, *_rest, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1338,8 +1338,8 @@ def test_video_section_does_not_require_prompt_for_guidance(tmp_path):
     assert positive[0][1]["text"] == ""
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
     assert guide_data["reference_images"][0]["section_type"] == SECTION_TYPE_VIDEO
-    assert runtime_debug["prompt_relay"]["local_prompts"] == []
-    assert runtime_debug["summary"]["applied_guides"] == 1
+    assert runtime_context["prompt_relay"]["local_prompts"] == []
+    assert runtime_context["summary"]["applied_guides"] == 1
 
 
 def test_promptless_video_before_text_preserves_late_prompt_timing(tmp_path):
@@ -1390,14 +1390,14 @@ def test_promptless_video_before_text_preserves_late_prompt_timing(tmp_path):
     )
     assert validation["is_valid"] is True
 
-    runtime_model, positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    runtime_model, positive, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert len(runtime_model.object_patches) == 4
     assert positive[0][1]["text"] == " future city continuation future city continuation"
-    assert runtime_debug["prompt_relay"]["local_prompts"] == ["future city continuation", "future city continuation"]
-    assert [entry["item_id"] for entry in runtime_debug["prompt_relay"]["prompt_sections"]] == ["section_001", "section_002"]
-    assert runtime_debug["prompt_relay"]["latent_ranges"][0]["start"] == 0
-    assert runtime_debug["prompt_relay"]["latent_ranges"][1]["start"] >= 3
+    assert runtime_context["prompt_relay"]["local_prompts"] == ["future city continuation", "future city continuation"]
+    assert [entry["item_id"] for entry in runtime_context["prompt_relay"]["prompt_sections"]] == ["section_001", "section_002"]
+    assert runtime_context["prompt_relay"]["latent_ranges"][0]["start"] == 0
+    assert runtime_context["prompt_relay"]["latent_ranges"][1]["start"] >= 3
 
 
 def test_promptless_image_between_text_sections_borrows_next_prompt_and_preserves_timing(tmp_path):
@@ -1405,16 +1405,16 @@ def test_promptless_image_between_text_sections_borrows_next_prompt_and_preserve
     Image.new("RGB", (64, 64), (20, 80, 180)).save(image_path)
     plan = _prompt_timing_plan_with_media_gap(image_path, ASSET_TYPE_IMAGE)
 
-    runtime_model, _positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    runtime_model, _positive, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert len(runtime_model.object_patches) == 4
-    assert runtime_debug["prompt_relay"]["local_prompts"] == ["opening prompt", "ending prompt", "ending prompt"]
-    assert [entry["item_id"] for entry in runtime_debug["prompt_relay"]["prompt_sections"]] == [
+    assert runtime_context["prompt_relay"]["local_prompts"] == ["opening prompt", "ending prompt", "ending prompt"]
+    assert [entry["item_id"] for entry in runtime_context["prompt_relay"]["prompt_sections"]] == [
         "section_001",
         "section_002",
         "section_003",
     ]
-    first_range, image_range, ending_range = runtime_debug["prompt_relay"]["latent_ranges"]
+    first_range, image_range, ending_range = runtime_context["prompt_relay"]["latent_ranges"]
     assert image_range["start"] >= first_range["end"]
     assert ending_range["start"] >= image_range["end"]
 
@@ -1451,23 +1451,23 @@ def test_promptless_image_with_global_prompt_stays_in_prompt_relay(tmp_path):
     plan, validation, _ = build_ltx_timeline_plan(timeline, create_ltx_timeline_config())
     assert validation["is_valid"] is True
 
-    runtime_model, positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    runtime_model, positive, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert len(runtime_model.object_patches) == 4
     assert positive[0][1]["text"] == "cinematic lighting cinematic lighting"
-    assert runtime_debug["prompt_relay"]["local_prompts"] == ["cinematic lighting"]
-    assert runtime_debug["prompt_relay"]["prompt_sections"][0]["item_id"] == "section_001"
+    assert runtime_context["prompt_relay"]["local_prompts"] == ["cinematic lighting"]
+    assert runtime_context["prompt_relay"]["prompt_sections"][0]["item_id"] == "section_001"
 
 
 def test_timeline_gap_before_text_preserves_late_prompt_timing():
     plan = _gap_then_text_plan()
 
-    runtime_model, _positive, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    runtime_model, _positive, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert len(runtime_model.object_patches) == 4
-    assert runtime_debug["prompt_relay"]["local_prompts"] == ["late prompt"]
-    assert runtime_debug["prompt_relay"]["prompt_sections"][0]["item_id"] == "section_001"
-    assert runtime_debug["prompt_relay"]["latent_ranges"][0]["start"] >= 3
+    assert runtime_context["prompt_relay"]["local_prompts"] == ["late prompt"]
+    assert runtime_context["prompt_relay"]["prompt_sections"][0]["item_id"] == "section_001"
+    assert runtime_context["prompt_relay"]["latent_ranges"][0]["start"] >= 3
 
 
 def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
@@ -1475,7 +1475,7 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     Image.new("RGB", (64, 64), (255, 32, 128)).save(image_path)
     plan = _image_plan(image_path)
 
-    _, positive, negative, video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(**_runtime_args(plan))
+    _, positive, negative, video_latent, _, _, guide_data, *_rest, runtime_context = build_ltx_runtime_outputs(**_runtime_args(plan))
 
     assert guide_data["strengths"] == [0.5]
     assert guide_data["insert_frames"] == [0]
@@ -1486,8 +1486,8 @@ def test_image_section_creates_guide_data_and_applies_guide_behavior(tmp_path):
     assert positive[0][1]["frame_rate"] == 24.0
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.5
     assert negative[0][1]["frame_rate"] == 24.0
-    assert runtime_debug["summary"]["applied_guides"] == 1
-    assert runtime_debug["summary"]["conditioning_frame_rate_applied"] is True
+    assert runtime_context["summary"]["applied_guides"] == 1
+    assert runtime_context["summary"]["conditioning_frame_rate_applied"] is True
 
 
 def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(tmp_path):
@@ -1495,12 +1495,12 @@ def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(t
     Image.new("RGB", (64, 64), (220, 30, 20)).save(reference_path)
     plan = _character_reference_plan(reference_path)
 
-    _, positive, negative, video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+    _, positive, negative, video_latent, _, _, guide_data, *_rest, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
-    assert runtime_debug["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
-    assert "@" not in runtime_debug["prompt_relay"]["full_prompt"]
+    assert runtime_context["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
+    assert "@" not in runtime_context["prompt_relay"]["full_prompt"]
     assert guide_data["hidden_reference_count"] == 1
     assert guide_data["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
     assert guide_data["reserved_latent_frames"] == (
@@ -1521,8 +1521,8 @@ def test_character_reference_tag_creates_hidden_tail_guide_and_replaces_prompt(t
     assert positive[0][1]["frame_rate"] == 24.0
     assert negative[0][1]["guide_attention_entries"][0]["strength"] == 0.6
     assert negative[0][1]["frame_rate"] == 24.0
-    assert runtime_debug["character_references"]["guide_count"] == 1
-    assert runtime_debug["character_references"]["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
+    assert runtime_context["character_references"]["guide_count"] == 1
+    assert runtime_context["character_references"]["hidden_reference_guard_latent_frames"] == LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 
     cropped = crop_latent_to_frame_count(
         video_latent,
@@ -1570,7 +1570,7 @@ def test_character_references_work_in_guide_data_mode_without_prompt_relay(tmp_p
     Image.new("RGB", (64, 64), (80, 200, 120)).save(reference_path)
     plan = _character_reference_plan(reference_path, reference_mode="Guide Data")
 
-    runtime_model, positive, _negative, _video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+    runtime_model, positive, _negative, _video_latent, _, _, guide_data, *_rest, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1578,8 +1578,8 @@ def test_character_references_work_in_guide_data_mode_without_prompt_relay(tmp_p
     assert positive[0][1]["text"] == "follow red jacket hero"
     assert guide_data["hidden_reference_count"] == 1
     assert guide_data["reference_images"][0]["hidden_tail"] is True
-    assert runtime_debug["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
-    assert runtime_debug["character_references"]["active"] is True
+    assert runtime_context["prompt_relay"]["local_prompts"] == ["follow red jacket hero"]
+    assert runtime_context["character_references"]["active"] is True
 
 
 def test_duplicate_character_reference_same_strength_reuses_hidden_guide(tmp_path):
@@ -1588,7 +1588,7 @@ def test_duplicate_character_reference_same_strength_reuses_hidden_guide(tmp_pat
     plan = _character_reference_plan(reference_path, duplicate=True)
     specs = plan["model_specific"]["ltx"]["character_references"]["guide_specs"]
 
-    _, _positive, _negative, _video_latent, _, _, guide_data, *_rest, runtime_debug = build_ltx_runtime_outputs(
+    _, _positive, _negative, _video_latent, _, _, guide_data, *_rest, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1596,7 +1596,7 @@ def test_duplicate_character_reference_same_strength_reuses_hidden_guide(tmp_pat
     assert specs[0]["section_id"] == "section_001,section_002"
     assert guide_data["hidden_reference_count"] == 1
     assert len([entry for entry in guide_data["reference_images"] if entry.get("hidden_tail")]) == 1
-    assert runtime_debug["character_references"]["guide_count"] == 1
+    assert runtime_context["character_references"]["guide_count"] == 1
 
 
 def test_video_section_creates_source_guide_data_and_outputs(tmp_path):
@@ -1604,7 +1604,7 @@ def test_video_section_creates_source_guide_data_and_outputs(tmp_path):
     _write_test_video(video_path, frame_count=12, fps=12)
     plan = _video_plan(video_path, source_in=0.25, source_out=0.75)
 
-    _, positive, negative, video_latent, _, _, guide_data, source_images, source_audio, source_fps, source_count, runtime_debug = build_ltx_runtime_outputs(
+    _, positive, negative, video_latent, _, _, guide_data, source_images, source_audio, source_fps, source_count, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1630,7 +1630,7 @@ def test_video_section_creates_source_guide_data_and_outputs(tmp_path):
     assert source_audio["waveform"].shape[-1] == math.ceil(6 / 12 * 44100)
     assert source_fps == pytest.approx(12.0)
     assert source_count == 6
-    assert runtime_debug["summary"]["applied_guides"] == 1
+    assert runtime_context["summary"]["applied_guides"] == 1
 
 
 @pytest.mark.parametrize(
@@ -1647,7 +1647,7 @@ def test_video_timing_modes_select_deterministic_guide_frames(tmp_path, timing_m
     _write_test_video(video_path, frame_count=12, fps=12)
     plan = _video_plan(video_path, timing_mode=timing_mode)
 
-    *_, guide_data, _source_images, _source_audio, _source_fps, _source_count, _runtime_debug = build_ltx_runtime_outputs(
+    *_, guide_data, _source_images, _source_audio, _source_fps, _source_count, _runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1678,7 +1678,7 @@ def test_use_source_timing_caps_video_guide_to_section_frame_count(tmp_path):
     _write_test_video(video_path, frame_count=30, fps=30)
     plan = _video_plan(video_path, timing_mode=VIDEO_TIMING_USE_SOURCE_TIMING, duration=0.5)
 
-    *_, guide_data, source_images, _source_audio, source_fps, source_count, _runtime_debug = build_ltx_runtime_outputs(
+    *_, guide_data, source_images, _source_audio, source_fps, source_count, _runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1703,7 +1703,7 @@ def test_full_source_range_preserves_video_guide_timing_behavior(tmp_path):
         guidance_range=VIDEO_GUIDANCE_RANGE_FULL_SOURCE,
     )
 
-    *_, guide_data, source_images, _source_audio, _source_fps, source_count, _runtime_debug = build_ltx_runtime_outputs(
+    *_, guide_data, source_images, _source_audio, _source_fps, source_count, _runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1723,7 +1723,7 @@ def test_last_frames_guidance_selects_tail_after_source_trim(tmp_path):
     _write_test_video(video_path, frame_count=30, fps=30)
     plan = _video_plan(video_path, source_in=0.2, source_out=0.8, guidance_frame_count=9)
 
-    *_, guide_data, source_images, _source_audio, _source_fps, source_count, _runtime_debug = build_ltx_runtime_outputs(
+    *_, guide_data, source_images, _source_audio, _source_fps, source_count, _runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1750,7 +1750,7 @@ def test_non_ltx_frame_count_tail_guidance_clamps_to_compatible_window(tmp_path)
         guidance_frame_count=10,
     )
 
-    *_, guide_data, _source_images, _source_audio, _source_fps, _source_count, _runtime_debug = build_ltx_runtime_outputs(
+    *_, guide_data, _source_images, _source_audio, _source_fps, _source_count, _runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1785,7 +1785,7 @@ def test_generated_wav_audio_mixes_with_volume_and_fades(tmp_path):
     _write_test_wav(audio_path)
     plan = _audio_plan(audio_path)
 
-    *_, combined_audio, _guide_data, _source_images, _source_audio, _source_fps, _source_count, runtime_debug = build_ltx_runtime_outputs(
+    *_, combined_audio, _guide_data, _source_images, _source_audio, _source_fps, _source_count, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan)
     )
 
@@ -1796,22 +1796,22 @@ def test_generated_wav_audio_mixes_with_volume_and_fades(tmp_path):
     assert waveform.abs().max() < 0.35
     assert waveform[:, :, :100].abs().max() < 0.05
     assert waveform[:, :, -100:].abs().max() < 0.05
-    assert runtime_debug["summary"]["audio_clip_count"] == 1
+    assert runtime_context["summary"]["audio_clip_count"] == 1
 
 
 def test_native_audio_enabled_creates_empty_audio_latent_for_supported_model():
     plan = _text_plan()
     plan["project"]["audio"]["use_native_audio"] = True
 
-    *_, audio_latent, _combined_audio, _guide_data, _source_images, _source_audio, _source_fps, _source_count, runtime_debug = build_ltx_runtime_outputs(
+    *_, audio_latent, _combined_audio, _guide_data, _source_images, _source_audio, _source_fps, _source_count, runtime_context = build_ltx_runtime_outputs(
         **_runtime_args(plan, audio_vae=FakeAudioVAE())
     )
 
     assert audio_latent["type"] == "audio"
     assert audio_latent["samples"].shape[1] == 4
     assert audio_latent["samples"].shape[3] == 16
-    assert any("Native audio is enabled" in entry for entry in runtime_debug["diagnostics"])
-    assert not any("No audio_vae connected" in entry for entry in runtime_debug["diagnostics"])
+    assert any("Native audio is enabled" in entry for entry in runtime_context["diagnostics"])
+    assert not any("No audio_vae connected" in entry for entry in runtime_context["diagnostics"])
 
 
 def test_native_audio_enabled_fails_for_non_native_audio_model():

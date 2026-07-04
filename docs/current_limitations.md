@@ -53,7 +53,7 @@ For the current node list, see [Node Reference](node_reference.md).
 - WAN 2.2 has Config, Planner, and Runtime nodes.
 - I2V-A14B is the default WAN mode.
 - Prompt Relay planning and all Image Section visual keyframe candidates are preserved in `WAN_TIMELINE_PLAN`.
-- The default Runtime Backend Profile is `Plan Only`, with `runtime_debug.backend` and `runtime_debug.status` intended for workflow inspection.
+- The default Runtime Backend Profile is `Plan Only`, with `runtime_context.backend` and `runtime_context.status` intended for workflow inspection.
 - The Runtime uses separate optional `high_noise_model` and `low_noise_model` sockets for WAN 2.2 Prompt Relay patching.
 - The `ComfyUI Core` backend can execute the supported core path: prompt conditioning, Prompt Relay patching for compatible high/low models, WAN latent creation, and Start/End image conditioning.
 - Default `I2V-A14B` ComfyUI Core execution requires at least one Image Section; text-only execution should use `Plan Only` or an explicit text-capable model mode.

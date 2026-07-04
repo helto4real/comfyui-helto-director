@@ -120,7 +120,7 @@ def build_wan_segmented_executor_outputs(
                 positive,
                 runtime_negative,
                 video_latent,
-                runtime_debug,
+                runtime_context,
             ) = build_wan_runtime_outputs(
                 high_noise_model=high_noise_model,
                 low_noise_model=low_noise_model,
@@ -213,7 +213,7 @@ def build_wan_segmented_executor_outputs(
                 segment_count=segment_count,
             )
             cleanup_events.append(post_decode_memory_cleanup(f"post_decode_{segment.get('id') or index + 1}"))
-            wan_debug = runtime_debug.get("wan", runtime_debug) if isinstance(runtime_debug, dict) else {}
+            wan_debug = runtime_context.get("wan", runtime_context) if isinstance(runtime_context, dict) else {}
             visual_debug = wan_debug.get("visual_conditioning", {}) if isinstance(wan_debug, dict) else {}
             take_registration = build_take_capture_metadata(
                 segment_plan,
@@ -247,7 +247,7 @@ def build_wan_segmented_executor_outputs(
                         .get("runtime_backend_profile")
                         or ""
                     ),
-                    "boundary_conditioning": _runtime_boundary_conditioning_from_debug(runtime_debug),
+                    "boundary_conditioning": _runtime_boundary_conditioning_from_debug(runtime_context),
                 },
             )
             segment_debug.append({
@@ -269,7 +269,7 @@ def build_wan_segmented_executor_outputs(
                 "sampling": sampling_debug,
                 "bernini": wan_debug.get("bernini"),
                 "fmlf_advanced_i2v": wan_debug.get("fmlf_advanced_i2v"),
-                "loras": wan_debug.get("loras") or runtime_debug.get("loras") if isinstance(runtime_debug, dict) else {},
+                "loras": wan_debug.get("loras") or runtime_context.get("loras") if isinstance(runtime_context, dict) else {},
                 "take_registration": take_registration,
                 "visual_conditioning": {
                     "requested_keyframes": visual_debug.get("requested_keyframes") or [],
@@ -849,10 +849,10 @@ def _wan_plan_as_audio_mix_plan(plan: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
-def _runtime_boundary_conditioning_from_debug(runtime_debug: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(runtime_debug, dict):
+def _runtime_boundary_conditioning_from_debug(runtime_context: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(runtime_context, dict):
         return {}
-    take_registration = runtime_debug.get("take_registration")
+    take_registration = runtime_context.get("take_registration")
     if isinstance(take_registration, dict):
         take = take_registration.get("take") if isinstance(take_registration.get("take"), dict) else {}
         metadata = take.get("metadata") if isinstance(take.get("metadata"), dict) else {}
@@ -861,5 +861,5 @@ def _runtime_boundary_conditioning_from_debug(runtime_debug: dict[str, Any]) -> 
         boundary = wan.get("boundary_conditioning")
         if isinstance(boundary, dict):
             return deepcopy(boundary)
-    boundary = runtime_debug.get("boundary_conditioning")
+    boundary = runtime_context.get("boundary_conditioning")
     return deepcopy(boundary) if isinstance(boundary, dict) else {}

@@ -69,7 +69,7 @@ class WANTimelineRuntime(io.ComfyNode):
                 io.Conditioning.Output("positive", display_name="positive"),
                 io.Conditioning.Output("negative", display_name="negative"),
                 io.Latent.Output("video_latent", display_name="video_latent"),
-                DEBUG_INFO.Output("runtime_debug", display_name="runtime_debug"),
+                DEBUG_INFO.Output("runtime_context", display_name="runtime_context"),
             ],
             hidden=[io.Hidden.unique_id],
         )
@@ -163,7 +163,7 @@ class WANTimelineSegmentedExecutor(io.ComfyNode):
                 io.Image.Output("images", display_name="images"),
                 io.Audio.Output("audio", display_name="audio"),
                 io.Float.Output("frame_rate", display_name="frame_rate"),
-                DEBUG_INFO.Output("executor_debug", display_name="executor_debug"),
+                DEBUG_INFO.Output("executor_context", display_name="executor_context"),
             ],
             hidden=[io.Hidden.unique_id],
         )

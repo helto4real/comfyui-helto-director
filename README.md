@@ -23,7 +23,7 @@ data, debug output, segmented runs, or final assembled clips.
   mixing/native-audio checks, identity anchors, and segmented execution.
 - Plan and run supported WAN 2.2 workflows with Prompt Relay, Start/End image
   conditioning, Bernini task prompting, high/low model phase patching, and
-  runtime debug output.
+  runtime context output.
 - Capture generated outputs as shot takes, accept the best takes, and assemble
   accepted generated clips plus imported clips into a final sequence.
 - Keep model-specific behavior out of the generic Director node.

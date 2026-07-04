@@ -24,7 +24,7 @@ from .capabilities import (
     resolve_backend,
     resolve_visual_conditioning,
 )
-from .debug import build_runtime_debug, error, info, warning
+from .debug import build_runtime_context, error, info, warning
 from .continuity import apply_wan_previous_tail_continuity
 from .fmlf import build_fmlf_advanced_i2v_payload
 from .prompt_relay import patch_wan_prompt_relay_models, prepare_wan_prompt_relay_payload, validate_segment_lengths
@@ -145,7 +145,7 @@ def build_wan_runtime_outputs(
         ))
         diagnostics.append("WAN runtime backend is Plan Only; no conditioning execution was performed.")
         video_latent = empty_wan22_video_latent(width, height, frame_count, batch_size, latent_spec)
-        runtime_debug = build_runtime_debug(
+        runtime_context = build_runtime_context(
             plan=plan,
             requested_backend=requested_backend,
             resolved_backend=resolved_backend,
@@ -164,11 +164,11 @@ def build_wan_runtime_outputs(
                 backend=resolved_backend,
             ),
         )
-        _attach_wan_lora_debug(runtime_debug, lora_report)
+        _attach_wan_lora_debug(runtime_context, lora_report)
         if complete_status:
             status_reporter.done("WAN Runtime: ready")
-            runtime_debug["status_events"] = status_reporter.snapshot()
-        return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_debug
+            runtime_context["status_events"] = status_reporter.snapshot()
+        return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_context
 
     if resolved_backend == BACKEND_WAN_VIDEO_WRAPPER:
         validation_entries.append(error(
@@ -302,17 +302,17 @@ def build_wan_runtime_outputs(
     if is_bernini:
         payload_code = "BERNINI_RUNTIME_PAYLOAD_BUILT"
         payload_message = "Built Bernini runtime conditioning payload for the selected backend."
-        payload_hint = "Inspect runtime_debug.bernini and runtime_debug.visual_conditioning for applied and deferred media."
+        payload_hint = "Inspect runtime_context.bernini and runtime_context.visual_conditioning for applied and deferred media."
     elif resolved_backend == BACKEND_FMLF_ADVANCED_I2V:
         payload_code = "WAN_FMLF_ADVANCED_I2V_PAYLOAD_BUILT"
         payload_message = "Built FMLF Advanced I2V runtime conditioning payload for the selected backend."
-        payload_hint = "Inspect runtime_debug.fmlf_advanced_i2v for continuation and high/low conditioning details."
+        payload_hint = "Inspect runtime_context.fmlf_advanced_i2v for continuation and high/low conditioning details."
     else:
         payload_code = "WAN_VISUAL_KEYFRAME_RUNTIME_PAYLOAD_BUILT"
         payload_message = "Built WAN visual keyframe runtime payload for the selected backend."
-        payload_hint = "Inspect runtime_debug.visual_conditioning for applied and unsupported keyframes."
+        payload_hint = "Inspect runtime_context.visual_conditioning for applied and unsupported keyframes."
     validation_entries.append(info(payload_code, payload_message, payload_hint))
-    runtime_debug = build_runtime_debug(
+    runtime_context = build_runtime_context(
         plan=plan,
         requested_backend=requested_backend,
         resolved_backend=resolved_backend,
@@ -332,11 +332,11 @@ def build_wan_runtime_outputs(
             backend=resolved_backend,
         ),
     )
-    _attach_wan_lora_debug(runtime_debug, lora_report)
+    _attach_wan_lora_debug(runtime_context, lora_report)
     if complete_status:
         status_reporter.done("WAN Runtime: ready")
-        runtime_debug["status_events"] = status_reporter.snapshot()
-    return runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, runtime_debug
+        runtime_context["status_events"] = status_reporter.snapshot()
+    return runtime_high_model, runtime_low_model, positive, runtime_negative, video_latent, runtime_context
 
 
 def _build_skipped_wan_runtime_outputs(
@@ -359,7 +359,7 @@ def _build_skipped_wan_runtime_outputs(
     status_reporter.report("timeline.skip", "WAN Runtime: generation skipped by Director policy")
     if complete_status:
         status_reporter.done("WAN Runtime: generation skipped")
-    runtime_debug = {
+    runtime_context = {
         "type": "DEBUG_INFO",
         "source": "WAN Runtime",
         "enabled": True,
@@ -378,7 +378,7 @@ def _build_skipped_wan_runtime_outputs(
         "diagnostics": ["Generation skipped; no WAN backend, prompt, visual conditioning, or LoRA work was performed."],
         "status_events": status_reporter.snapshot(),
     }
-    return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_debug
+    return high_noise_model, low_noise_model, [], negative if negative is not None else [], video_latent, runtime_context
 
 
 def resolve_wan_latent_spec(*, high_noise_model=None, low_noise_model=None, vae=None) -> dict[str, Any]:
@@ -444,7 +444,7 @@ def _apply_wan_boundary_conditioning(
         return
     if not _active_segment_allows_boundary_conditioning(wan):
         boundary["runtime_status"] = "skipped_segment"
-        wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+        wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_context(boundary)
         return
     try:
         tail, metadata = _decode_wan_boundary_tail_frames(boundary, width, height)
@@ -459,12 +459,12 @@ def _apply_wan_boundary_conditioning(
                 "message": message,
             }
         )
-        wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+        wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_context(boundary)
         validation_entries.append(warning(
             "WAN_BOUNDARY_CONDITIONING_UNAVAILABLE",
             message,
             "Generate normally, or verify the previous accepted/imported clip still exists and can be decoded.",
-            _safe_boundary_runtime_debug(boundary),
+            _safe_boundary_runtime_context(boundary),
         ))
         diagnostics.append(message)
         return
@@ -485,7 +485,7 @@ def _apply_wan_boundary_conditioning(
         source="boundary",
         boundary_conditioning=boundary,
     )
-    wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+    wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_context(boundary)
     diagnostics.append(
         "WAN boundary conditioning used "
         f"{int(tail.shape[0])} previous-tail frame(s) as transient start guidance."
@@ -498,7 +498,7 @@ def _mark_wan_boundary_plan_only(plan: dict[str, Any]) -> None:
     if not isinstance(boundary, dict) or boundary.get("model_status") != "applied":
         return
     boundary["runtime_status"] = "not_executed"
-    wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_debug(boundary)
+    wan["boundary_conditioning_runtime"] = _safe_boundary_runtime_context(boundary)
 
 
 def _active_segment_allows_boundary_conditioning(wan: dict[str, Any]) -> bool:
@@ -556,7 +556,7 @@ def _boundary_conditioning_media_item_id(boundary: dict[str, Any]) -> str:
     return f"boundary_tail_{str(boundary.get('boundary_id') or boundary.get('asset_id') or 'incoming')}"
 
 
-def _safe_boundary_runtime_debug(boundary: dict[str, Any]) -> dict[str, Any]:
+def _safe_boundary_runtime_context(boundary: dict[str, Any]) -> dict[str, Any]:
     safe_keys = {
         "type",
         "mode",
@@ -721,7 +721,7 @@ def _validate_comfy_core_visual_requirements(config: dict[str, Any], visual: dic
         validation_entries.append(info(
             "WAN_CONTINUATION_TAIL_IMAGE_CONDITIONING",
             "WAN I2V continuation image conditioning is satisfied by the previous segment tail.",
-            "Inspect runtime_debug.visual_conditioning.media_decisions for segment_previous_tail.",
+            "Inspect runtime_context.visual_conditioning.media_decisions for segment_previous_tail.",
         ))
         return
     validation_entries.append(error(
@@ -876,7 +876,7 @@ def _visual_validation_entries(visual: dict[str, Any], backend: str) -> list[dic
         entries.append(warning(
             "WAN_TIMED_KEYFRAME_UNSUPPORTED_BY_BACKEND",
             "Timed visual keyframes are unsupported by the selected WAN backend.",
-            "They remain visible in runtime_debug.unsupported_keyframes.",
+            "They remain visible in runtime_context.unsupported_keyframes.",
             {"count": len(timed)},
         ))
     other = [entry for entry in unsupported if entry.get("role") != "Timed"]
@@ -884,7 +884,7 @@ def _visual_validation_entries(visual: dict[str, Any], backend: str) -> list[dic
         entries.append(warning(
             "WAN_VISUAL_KEYFRAME_UNSUPPORTED_BY_BACKEND",
             "Some visual keyframes are unsupported by the selected WAN backend.",
-            "Inspect runtime_debug.visual_conditioning.unsupported_keyframes.",
+            "Inspect runtime_context.visual_conditioning.unsupported_keyframes.",
             {"count": len(other)},
         ))
     return entries
@@ -1022,17 +1022,17 @@ def _build_wan_lora_report(
     }
 
 
-def _attach_wan_lora_debug(runtime_debug: dict[str, Any], lora_report: dict[str, Any]) -> None:
-    runtime_debug["loras"] = lora_report
+def _attach_wan_lora_debug(runtime_context: dict[str, Any], lora_report: dict[str, Any]) -> None:
+    runtime_context["loras"] = lora_report
     targets = lora_report.get("targets") if isinstance(lora_report.get("targets"), dict) else {}
-    runtime_debug.setdefault("summary", {})
-    runtime_debug["summary"]["lora_target_count"] = len(targets)
-    runtime_debug["summary"]["lora_resolved_count"] = sum(
+    runtime_context.setdefault("summary", {})
+    runtime_context["summary"]["lora_target_count"] = len(targets)
+    runtime_context["summary"]["lora_resolved_count"] = sum(
         int(target.get("resolved_count") or 0)
         for target in targets.values()
         if isinstance(target, dict)
     )
-    runtime_debug["summary"]["lora_applied_count"] = sum(
+    runtime_context["summary"]["lora_applied_count"] = sum(
         int(target.get("applied_count") or 0)
         for target in targets.values()
         if isinstance(target, dict)
@@ -1068,7 +1068,7 @@ def _build_wan_take_registration(
 def _take_boundary_conditioning(boundary_conditioning: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(boundary_conditioning, dict):
         return {}
-    return _safe_boundary_runtime_debug(boundary_conditioning)
+    return _safe_boundary_runtime_context(boundary_conditioning)
 
 
 def _call_or_value(obj, name: str, fallback):

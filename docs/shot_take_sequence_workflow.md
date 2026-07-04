@@ -86,7 +86,7 @@ Take metadata can include:
 - resolved LoRA snapshot;
 - runtime/settings metadata.
 
-Runtime and executor debug payloads may produce take-registration metadata.
+Runtime and executor context payloads may produce take-registration metadata.
 Attaching generated output to the timeline is currently manual or
 semi-automatic through UI/helper flows rather than automatic hidden mutation of
 the Director node after execution.

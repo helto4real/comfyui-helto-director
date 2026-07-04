@@ -209,11 +209,11 @@ def test_bernini_plan_only_debug_needs_no_backend_inputs(tmp_path):
         create_wan_timeline_config(model_mode="Bernini-A14B", debug_mode="Full"),
     )
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_outputs, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    assert runtime_debug["bernini"]["task_type"] == "i2v"
-    assert runtime_debug["summary"]["bernini_task_type"] == "i2v"
-    assert runtime_debug["status"]["plan_only"] is True
+    assert runtime_context["bernini"]["task_type"] == "i2v"
+    assert runtime_context["summary"]["bernini_task_type"] == "i2v"
+    assert runtime_context["status"]["plan_only"] is True
 
 
 def test_bernini_plan_reports_empty_user_conditioning():
@@ -270,18 +270,18 @@ def test_bernini_comfyui_core_allows_text_only_t2v_prompt():
         ),
     )
 
-    _high, _low, positive, _negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, _negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["bernini"]["task_type"] == "t2v"
-    assert runtime_debug["bernini"]["has_user_conditioning"] is True
-    assert runtime_debug["bernini"]["timeline_prompt_count"] == 1
-    assert _helper_decision(runtime_debug) == "BerniniConditioning"
-    assert "BERNINI_PROMPT_RELAY_DISABLED" in [entry["code"] for entry in runtime_debug["validation"]["warnings"]]
+    assert runtime_context["bernini"]["task_type"] == "t2v"
+    assert runtime_context["bernini"]["has_user_conditioning"] is True
+    assert runtime_context["bernini"]["timeline_prompt_count"] == 1
+    assert _helper_decision(runtime_context) == "BerniniConditioning"
+    assert "BERNINI_PROMPT_RELAY_DISABLED" in [entry["code"] for entry in runtime_context["validation"]["warnings"]]
     assert positive[0][1]["prompt"].startswith(BERNINI_SYSTEM_PROMPTS["t2v"])
     assert video_latent["samples"].shape[1] == 16
 
@@ -297,32 +297,32 @@ def test_bernini_comfyui_core_uses_context_latents_for_i2v_single_frame_source(t
         ),
     )
 
-    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["output_payload_type"] == "COMFYUI_CORE_BERNINI_CONDITIONING_LATENT"
-    assert runtime_debug["bernini"]["task_type"] == "i2v"
-    assert runtime_debug["bernini"]["system_prompt"] == BERNINI_SYSTEM_PROMPTS["i2v"]
-    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["bernini_role"] == "source_video_single_frame"
-    assert "reference_images" not in runtime_debug["bernini"]["runtime_media_decisions"][0]
-    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["tensor_shape"] == [1, 8, 12, 3]
-    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["tensor_stats"]["max"] > 0.0
-    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["source_aspect_ratio"] == 1.5
-    assert runtime_debug["bernini"]["runtime_media_decisions"][0]["aspect_mismatch"] is True
-    assert "BERNINI_SOURCE_ASPECT_MISMATCH" in [entry["code"] for entry in runtime_debug["validation"]["warnings"]]
-    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+    assert runtime_context["output_payload_type"] == "COMFYUI_CORE_BERNINI_CONDITIONING_LATENT"
+    assert runtime_context["bernini"]["task_type"] == "i2v"
+    assert runtime_context["bernini"]["system_prompt"] == BERNINI_SYSTEM_PROMPTS["i2v"]
+    assert runtime_context["bernini"]["runtime_media_decisions"][0]["bernini_role"] == "source_video_single_frame"
+    assert "reference_images" not in runtime_context["bernini"]["runtime_media_decisions"][0]
+    assert runtime_context["bernini"]["runtime_media_decisions"][0]["tensor_shape"] == [1, 8, 12, 3]
+    assert runtime_context["bernini"]["runtime_media_decisions"][0]["tensor_stats"]["max"] > 0.0
+    assert runtime_context["bernini"]["runtime_media_decisions"][0]["source_aspect_ratio"] == 1.5
+    assert runtime_context["bernini"]["runtime_media_decisions"][0]["aspect_mismatch"] is True
+    assert "BERNINI_SOURCE_ASPECT_MISMATCH" in [entry["code"] for entry in runtime_context["validation"]["warnings"]]
+    conditioning_debug = _bernini_decision(runtime_context, "bernini_conditioning_debug")
     assert conditioning_debug["source_video"]["frame_count"] == 1
     assert conditioning_debug["source_video"]["tensor_shape"] == [1, 8, 12, 3]
     assert conditioning_debug["context_latents"]["count"] == 1
     assert conditioning_debug["context_latents"]["shapes"][0][1] == 16
     assert conditioning_debug["positive_prompt"]["starts_with_system_prompt"] is True
-    assert "single-frame source_video" in " ".join(runtime_debug["bernini"]["runtime_diagnostics"])
-    assert _helper_decision(runtime_debug) == "BerniniConditioning"
-    assert _helper_decision(runtime_debug) not in {"WanImageToVideo", "Wan22ImageToVideoLatent"}
+    assert "single-frame source_video" in " ".join(runtime_context["bernini"]["runtime_diagnostics"])
+    assert _helper_decision(runtime_context) == "BerniniConditioning"
+    assert _helper_decision(runtime_context) not in {"WanImageToVideo", "Wan22ImageToVideoLatent"}
     assert positive[0][1]["prompt"].startswith(BERNINI_SYSTEM_PROMPTS["i2v"])
     assert positive[0][1]["context_latents"][0].shape[1] == 16
     assert negative[0][1]["context_latents"][0].shape[1] == 16
@@ -345,24 +345,24 @@ def test_bernini_comfyui_core_passes_reference_images_for_r2v(tmp_path):
         ),
     )
 
-    _high, _low, positive, negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["bernini"]["task_type"] == "r2v"
-    assert runtime_debug["bernini"]["reference_image_count"] == 1
-    assert "green jacket waves" in runtime_debug["prompt_relay"]["full_prompt"]
-    assert "@image1:character" not in runtime_debug["prompt_relay"]["full_prompt"]
+    assert runtime_context["bernini"]["task_type"] == "r2v"
+    assert runtime_context["bernini"]["reference_image_count"] == 1
+    assert "green jacket waves" in runtime_context["prompt_relay"]["full_prompt"]
+    assert "@image1:character" not in runtime_context["prompt_relay"]["full_prompt"]
     reference_decision = next(
-        decision for decision in runtime_debug["bernini"]["runtime_media_decisions"]
+        decision for decision in runtime_context["bernini"]["runtime_media_decisions"]
         if decision.get("bernini_role") == "subject_reference_image"
     )
     assert reference_decision["label"] == "image1"
     assert reference_decision["tensor_shape"] == [1, 9, 7, 3]
-    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+    conditioning_debug = _bernini_decision(runtime_context, "bernini_conditioning_debug")
     assert conditioning_debug["source_video"]["present"] is False
     assert conditioning_debug["reference_images"]["count"] == 1
     assert conditioning_debug["context_latents"]["count"] == 1
@@ -386,15 +386,15 @@ def test_bernini_comfyui_core_uses_source_context_plus_reference_context(tmp_pat
         ),
     )
 
-    _high, _low, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, _positive, _negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
-    assert runtime_debug["bernini"]["task_type"] == "rv2v"
+    conditioning_debug = _bernini_decision(runtime_context, "bernini_conditioning_debug")
+    assert runtime_context["bernini"]["task_type"] == "rv2v"
     assert conditioning_debug["source_video"]["present"] is True
     assert conditioning_debug["reference_images"]["count"] == 1
     assert conditioning_debug["context_latents"]["count"] == 2
@@ -439,15 +439,15 @@ def test_bernini_source_image_loader_applies_exif_transpose(tmp_path):
         ),
     )
 
-    _high, _low, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, _positive, _negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    media_debug = runtime_debug["bernini"]["runtime_media_decisions"][0]
-    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+    media_debug = runtime_context["bernini"]["runtime_media_decisions"][0]
+    conditioning_debug = _bernini_decision(runtime_context, "bernini_conditioning_debug")
 
     assert media_debug["bernini_role"] == "source_video_single_frame"
     assert media_debug["original_size"] == [3, 5]
@@ -468,14 +468,14 @@ def test_bernini_prompt_debug_falls_back_to_prompt_relay_payload(tmp_path):
         ),
     )
 
-    _high, _low, _positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, _positive, _negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClipWithoutPromptMetadata(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    conditioning_debug = _bernini_decision(runtime_debug, "bernini_conditioning_debug")
+    conditioning_debug = _bernini_decision(runtime_context, "bernini_conditioning_debug")
 
     assert conditioning_debug["positive_prompt"]["present"] is True
     assert conditioning_debug["positive_prompt"]["source"] == "runtime_prompt_debug"
@@ -503,15 +503,15 @@ def test_bernini_comfyui_core_rejects_48_channel_wan22_i2v_wiring(tmp_path):
         )
 
 
-def _helper_decision(runtime_debug: dict) -> str | None:
-    for decision in runtime_debug.get("media_decisions", []):
+def _helper_decision(runtime_context: dict) -> str | None:
+    for decision in runtime_context.get("media_decisions", []):
         if decision.get("type") == "comfy_core_helper":
             return decision.get("helper")
     return None
 
 
-def _bernini_decision(runtime_debug: dict, decision_type: str) -> dict:
-    for decision in runtime_debug["bernini"]["runtime_media_decisions"]:
+def _bernini_decision(runtime_context: dict, decision_type: str) -> dict:
+    for decision in runtime_context["bernini"]["runtime_media_decisions"]:
         if decision.get("type") == decision_type:
             return decision
     raise AssertionError(f"Missing Bernini runtime decision {decision_type}")

@@ -15,7 +15,7 @@
       "outputs": [{ "name": "STRING", "type": "STRING", "links": [] }],
       "title": "Example Notes",
       "properties": {},
-      "widgets_values": ["WAN 2.2 defaults to Plan Only runtime mode. This workflow verifies Director -> WAN Config -> WAN Planner -> WAN Runtime debug without requiring a WAN checkpoint to import."]
+      "widgets_values": ["WAN 2.2 defaults to Plan Only runtime mode. This workflow verifies Director -> WAN Config -> WAN Planner -> WAN Runtime context without requiring a WAN checkpoint to import."]
     },
     {
       "id": 2,
@@ -110,7 +110,7 @@
         { "name": "positive", "type": "CONDITIONING", "links": [] },
         { "name": "negative", "type": "CONDITIONING", "links": [] },
         { "name": "video_latent", "type": "LATENT", "links": [] },
-        { "name": "runtime_debug", "type": "DEBUG_INFO", "links": [] }
+        { "name": "runtime_context", "type": "DEBUG_INFO", "links": [] }
       ],
       "title": "WAN 2.2 Timeline Runtime",
       "properties": {},

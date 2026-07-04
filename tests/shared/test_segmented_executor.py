@@ -691,7 +691,7 @@ def test_wan_segmented_executor_cleans_spill_on_base_exception(monkeypatch, tmp_
     abort = _SegmentAbort("interrupt after spill")
 
     def fake_build_runtime_outputs(**_kwargs):
-        runtime_debug = {
+        runtime_context = {
             "wan": {
                 "visual_conditioning": {
                     "requested_keyframes": [],
@@ -702,7 +702,7 @@ def test_wan_segmented_executor_cleans_spill_on_base_exception(monkeypatch, tmp_
             },
             "summary": {},
         }
-        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 1, 1))}, runtime_debug
+        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 1, 1))}, runtime_context
 
     monkeypatch.setattr(wan_segmented, "build_wan_runtime_outputs", fake_build_runtime_outputs)
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", lambda **kwargs: (kwargs["latent"], {"sampling_policy": "two_phase", "unload_events": []}))
@@ -769,7 +769,7 @@ def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     decode_calls = {"count": 0}
 
     def fake_build_runtime_outputs(**_kwargs):
-        runtime_debug = {
+        runtime_context = {
             "wan": {
                 "visual_conditioning": {
                     "requested_keyframes": [],
@@ -780,7 +780,7 @@ def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
             },
             "summary": {},
         }
-        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 1, 1))}, runtime_debug
+        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 1, 1))}, runtime_context
 
     def fake_decode(_vae, _latent):
         decode_calls["count"] += 1
@@ -830,7 +830,7 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     def fake_build_runtime_outputs(**kwargs):
         tail = kwargs.get("ltx_timeline_plan", {}).get("model_specific", {}).get("ltx", {}).get("segment_continuity", {}).get("previous_tail_images")
         runtime_tail_counts.append(float(tail[-1, 0, 0, 0].item()) if torch.is_tensor(tail) else None)
-        runtime_debug = {"summary": {}}
+        runtime_context = {"summary": {}}
         return (
             object(),
             [],
@@ -845,7 +845,7 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
                 "clean_pixel_frames": 5,
             },
             None,
-            runtime_debug,
+            runtime_context,
         )
 
     def fake_decode(_vae, _latent):
@@ -978,7 +978,7 @@ def test_ltx_segmented_executor_exposes_runtime_prompt_relay_debug(monkeypatch, 
             str(prompt.get("runtime_prompt") or prompt.get("raw_prompt") or "").strip()
             for prompt in segment_plan.get("prompt_plan", [])
         ]
-        runtime_debug = {
+        runtime_context = {
             "summary": {"section_count": len(segment_plan.get("section_plan", []))},
             "prompt_relay": {
                 "full_prompt": " ".join(local_prompts),
@@ -1007,7 +1007,7 @@ def test_ltx_segmented_executor_exposes_runtime_prompt_relay_debug(monkeypatch, 
                 "clean_pixel_frames": 5,
             },
             None,
-            runtime_debug,
+            runtime_context,
         )
 
     _patch_ltx_executor_runtime(monkeypatch, tmp_path, fake_build_runtime_outputs)
@@ -1694,9 +1694,9 @@ def test_wan_two_phase_vram_unload_policy_records_events(monkeypatch):
     ]
 
 
-def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_path):
+def test_wan_segmented_executor_context_includes_status_events(monkeypatch, tmp_path):
     def fake_build_runtime_outputs(**_kwargs):
-        runtime_debug = {
+        runtime_context = {
             "wan": {
                 "visual_conditioning": {
                     "requested_keyframes": [],
@@ -1718,7 +1718,7 @@ def test_wan_segmented_executor_debug_includes_status_events(monkeypatch, tmp_pa
             },
             "summary": {},
         }
-        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 2, 2))}, runtime_debug
+        return object(), object(), [], [], {"samples": torch.zeros((1, 16, 3, 2, 2))}, runtime_context
 
     def fake_sample_wan_segment_latent(**kwargs):
         if kwargs.get("status_reporter") is not None:
@@ -1845,7 +1845,7 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
 
     def fake_build_runtime_outputs(**kwargs):
         runtime_calls.append(kwargs)
-        runtime_debug = {
+        runtime_context = {
             "visual_conditioning": {
                 "requested_keyframes": [],
                 "applied_keyframes": [],
@@ -1866,7 +1866,7 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
             "_helto_wan_conditioning_split": True,
         }
         latent = {"samples": torch.zeros((1, 16, 3, 2, 2))}
-        return object(), object(), positive, [], latent, runtime_debug
+        return object(), object(), positive, [], latent, runtime_context
 
     def fake_sample_wan_segment_latent(**kwargs):
         sample_calls.append(kwargs)
@@ -1944,7 +1944,7 @@ def test_wan_fmlf_svi_three_segment_plan_and_handoff_exclude_padded_tail(monkeyp
         runtime_calls.append(kwargs)
         frame_count = int(kwargs["wan_timeline_plan"]["resolved_output"]["frame_count"])
         latent_slots = ((frame_count - 1) // 4) + 1
-        runtime_debug = {
+        runtime_context = {
             "visual_conditioning": {
                 "requested_keyframes": [],
                 "applied_keyframes": [],
@@ -1965,7 +1965,7 @@ def test_wan_fmlf_svi_three_segment_plan_and_handoff_exclude_padded_tail(monkeyp
             "_helto_wan_conditioning_split": True,
         }
         latent = {"samples": torch.zeros((1, 16, latent_slots, 2, 2))}
-        return object(), object(), positive, [], latent, runtime_debug
+        return object(), object(), positive, [], latent, runtime_context
 
     def fake_sample_wan_segment_latent(**kwargs):
         sample_calls.append(kwargs)
@@ -2049,7 +2049,7 @@ def test_wan_fmlf_svi_10s_debug_shows_two_text_sections_in_second_generation(mon
         runtime_calls.append(kwargs)
         frame_count = int(kwargs["wan_timeline_plan"]["resolved_output"]["frame_count"])
         latent_slots = ((frame_count - 1) // 4) + 1
-        runtime_debug = {
+        runtime_context = {
             "visual_conditioning": {
                 "requested_keyframes": [],
                 "applied_keyframes": [],
@@ -2070,7 +2070,7 @@ def test_wan_fmlf_svi_10s_debug_shows_two_text_sections_in_second_generation(mon
             "_helto_wan_conditioning_split": True,
         }
         latent = {"samples": torch.zeros((1, 16, latent_slots, 2, 2))}
-        return object(), object(), positive, [], latent, runtime_debug
+        return object(), object(), positive, [], latent, runtime_context
 
     def fake_sample_wan_segment_latent(**kwargs):
         sample_calls.append(kwargs)
@@ -2438,7 +2438,7 @@ class _FakeNativeAudioVAE:
 
 
 def _fake_ltx_runtime_result(*, hidden_reference_count, video_latent=None, audio_latent=None):
-    runtime_debug = {"summary": {}}
+    runtime_context = {"summary": {}}
     return (
         object(),
         [],
@@ -2455,7 +2455,7 @@ def _fake_ltx_runtime_result(*, hidden_reference_count, video_latent=None, audio
             "clean_pixel_frames": 5,
         },
         None,
-        runtime_debug,
+        runtime_context,
     )
 
 

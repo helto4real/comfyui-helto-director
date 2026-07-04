@@ -157,7 +157,7 @@ Scope:
   different policy.
 - Use connected `audio_vae` and model capability checks before attempting native
   generated audio.
-- Add clear runtime debug fields for selected policy, applied policy, fallback
+- Add clear runtime context fields for selected policy, applied policy, fallback
   reason, decoded source-video audio, generated/native audio, and final returned
   audio.
 - Update docs so users understand when imported audio is preserved, when gaps

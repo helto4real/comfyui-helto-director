@@ -19,32 +19,32 @@ from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE, create_default_
 from shared.wan import build_wan_runtime_outputs, build_wan_timeline_plan, create_wan_timeline_config
 
 
-def test_plan_only_runtime_debug_has_compatibility_report():
+def test_plan_only_runtime_context_has_compatibility_report():
     plan, _validation, _debug = build_wan_timeline_plan(
         _text_timeline(),
         create_wan_timeline_config(debug_mode="Summary"),
     )
 
-    *_, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    backend = runtime_debug["backend"]
+    backend = runtime_context["backend"]
     assert backend["requested_profile"] == "Plan Only"
     assert backend["resolved_profile"] == "Plan Only"
     assert backend["available"] is False
     assert backend["visual_keyframe_support_level"] == "Plan Only debug"
     assert backend["missing_requirements"]
     assert "ComfyUI Core" in backend["recommended_next_action"]
-    assert runtime_debug["status"]["runtime_executed"] is False
-    assert runtime_debug["status"]["plan_only"] is True
+    assert runtime_context["status"]["runtime_executed"] is False
+    assert runtime_context["status"]["plan_only"] is True
 
 
-def test_comfyui_core_runtime_debug_has_compatibility_report(tmp_path):
+def test_comfyui_core_runtime_context_has_compatibility_report(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=2),
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Summary"),
     )
 
-    *_, runtime_debug = build_wan_runtime_outputs(
+    *_, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -52,15 +52,15 @@ def test_comfyui_core_runtime_debug_has_compatibility_report(tmp_path):
         wan_timeline_plan=plan,
     )
 
-    backend = runtime_debug["backend"]
+    backend = runtime_context["backend"]
     assert backend["requested_profile"] == "ComfyUI Core"
     assert backend["resolved_profile"] == "ComfyUI Core"
     assert backend["available"] is True
     assert backend["prompt_relay_supported"] is True
     assert backend["visual_keyframe_support_level"] == "Start and End only"
     assert backend["max_visual_keyframes"] == 2
-    assert runtime_debug["status"]["runtime_executed"] is True
-    assert runtime_debug["status"]["prompt_relay"]["applied"] is True
+    assert runtime_context["status"]["runtime_executed"] is True
+    assert runtime_context["status"]["prompt_relay"]["applied"] is True
 
 
 def test_auto_plan_only_reports_missing_backend_requirements():
@@ -69,15 +69,15 @@ def test_auto_plan_only_reports_missing_backend_requirements():
         create_wan_timeline_config(runtime_backend_profile="Auto", debug_mode="Summary"),
     )
 
-    *_, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    assert runtime_debug["backend"]["requested_profile"] == "Auto"
-    assert runtime_debug["backend"]["resolved_profile"] == "Plan Only"
-    assert "Auto resolved to Plan Only" in runtime_debug["backend"]["missing_requirements"][0]
-    assert "Connect CLIP, VAE" in runtime_debug["backend"]["recommended_next_action"]
+    assert runtime_context["backend"]["requested_profile"] == "Auto"
+    assert runtime_context["backend"]["resolved_profile"] == "Plan Only"
+    assert "Auto resolved to Plan Only" in runtime_context["backend"]["missing_requirements"][0]
+    assert "Connect CLIP, VAE" in runtime_context["backend"]["recommended_next_action"]
 
 
-def test_four_plus_keyframes_survive_to_runtime_debug_with_reasons(tmp_path):
+def test_four_plus_keyframes_survive_to_runtime_context_with_reasons(tmp_path):
     plan, _validation, _debug = build_wan_timeline_plan(
         _image_timeline(tmp_path, count=5),
         create_wan_timeline_config(runtime_backend_profile="Plan Only", debug_mode="Full"),
@@ -85,21 +85,21 @@ def test_four_plus_keyframes_survive_to_runtime_debug_with_reasons(tmp_path):
     )
     plan_before = copy.deepcopy(plan)
 
-    *_, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
     assert plan == plan_before
-    assert runtime_debug["summary"]["requested_visual_keyframes"] == 5
-    assert runtime_debug["summary"]["applied_visual_keyframes"] == 0
-    assert runtime_debug["summary"]["unsupported_visual_keyframes"] == 5
-    assert [entry["role"] for entry in runtime_debug["visual_conditioning"]["requested_keyframes"]] == [
+    assert runtime_context["summary"]["requested_visual_keyframes"] == 5
+    assert runtime_context["summary"]["applied_visual_keyframes"] == 0
+    assert runtime_context["summary"]["unsupported_visual_keyframes"] == 5
+    assert [entry["role"] for entry in runtime_context["visual_conditioning"]["requested_keyframes"]] == [
         "Start",
         "Timed",
         "Timed",
         "Timed",
         "End",
     ]
-    assert all(entry.get("reason") for entry in runtime_debug["visual_conditioning"]["unsupported_keyframes"])
-    assert runtime_debug["status"]["visual_keyframes"]["unsupported_reasons"]
+    assert all(entry.get("reason") for entry in runtime_context["visual_conditioning"]["unsupported_keyframes"])
+    assert runtime_context["status"]["visual_keyframes"]["unsupported_reasons"]
 
 
 def test_text_only_prompt_relay_reports_no_image_conditioning_error_for_text_capable_mode():
@@ -108,7 +108,7 @@ def test_text_only_prompt_relay_reports_no_image_conditioning_error_for_text_cap
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B", debug_mode="Full"),
     )
 
-    *_, runtime_debug = build_wan_runtime_outputs(
+    *_, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
@@ -116,16 +116,16 @@ def test_text_only_prompt_relay_reports_no_image_conditioning_error_for_text_cap
     )
 
     assert validation["is_valid"] is True
-    assert runtime_debug["status"]["prompt_relay"]["enabled"] is True
-    assert runtime_debug["status"]["prompt_relay"]["supported"] is True
-    assert runtime_debug["status"]["prompt_relay"]["applied"] is True
-    assert runtime_debug["status"]["visual_keyframes"] == {
+    assert runtime_context["status"]["prompt_relay"]["enabled"] is True
+    assert runtime_context["status"]["prompt_relay"]["supported"] is True
+    assert runtime_context["status"]["prompt_relay"]["applied"] is True
+    assert runtime_context["status"]["visual_keyframes"] == {
         "requested": 0,
         "applied": 0,
         "unsupported": 0,
         "unsupported_reasons": [],
     }
-    assert not any("image" in entry.lower() for entry in runtime_debug["backend"]["missing_requirements"])
+    assert not any("image" in entry.lower() for entry in runtime_context["backend"]["missing_requirements"])
 
 
 def test_audio_final_mix_only_is_reported():
@@ -134,13 +134,13 @@ def test_audio_final_mix_only_is_reported():
         create_wan_timeline_config(runtime_backend_profile="Plan Only", debug_mode="Summary"),
     )
 
-    *_, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
     assert validation["is_valid"] is True
     assert "WAN_AUDIO_FINAL_MIX_ONLY" in [entry["code"] for entry in validation["info"]]
-    assert runtime_debug["backend"]["audio_policy"] == "Final Mix Only"
-    assert "WAN audio conditioning is unsupported" in " ".join(runtime_debug["backend"]["unsupported_features"])
-    assert runtime_debug["status"]["audio"] == {
+    assert runtime_context["backend"]["audio_policy"] == "Final Mix Only"
+    assert "WAN audio conditioning is unsupported" in " ".join(runtime_context["backend"]["unsupported_features"])
+    assert runtime_context["status"]["audio"] == {
         "clip_count": 1,
         "policy": "Final Mix Only",
         "final_mix_only": True,

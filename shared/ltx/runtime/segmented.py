@@ -129,7 +129,7 @@ def build_ltx_segmented_executor_outputs(
                 _segment_audio,
                 guide_data,
                 *_rest,
-                runtime_debug,
+                runtime_context,
             ) = build_ltx_runtime_outputs(
                 model=model,
                 clip=clip,
@@ -239,8 +239,8 @@ def build_ltx_segmented_executor_outputs(
                 model_version=LTX_MODEL_VERSION,
                 source="LTX Segmented Executor",
                 resolved_loras=(
-                    runtime_debug.get("loras", {}).get("take_snapshot")
-                    if isinstance(runtime_debug, dict)
+                    runtime_context.get("loras", {}).get("take_snapshot")
+                    if isinstance(runtime_context, dict)
                     else None
                 ),
                 seed=segment_seed_value,
@@ -281,9 +281,9 @@ def build_ltx_segmented_executor_outputs(
                 "character_reference_labels_requested": reference_guidance_debug["character_reference_labels_requested"],
                 "character_reference_labels_guided": reference_guidance_debug["character_reference_labels_guided"],
                 "character_reference_labels_text_only": reference_guidance_debug["character_reference_labels_text_only"],
-                "runtime_summary": runtime_debug.get("summary") if isinstance(runtime_debug, dict) else None,
-                "runtime_prompt_relay": deepcopy(runtime_debug.get("prompt_relay")) if isinstance(runtime_debug, dict) else None,
-                "loras": runtime_debug.get("loras", []) if isinstance(runtime_debug, dict) else [],
+                "runtime_summary": runtime_context.get("summary") if isinstance(runtime_context, dict) else None,
+                "runtime_prompt_relay": deepcopy(runtime_context.get("prompt_relay")) if isinstance(runtime_context, dict) else None,
+                "loras": runtime_context.get("loras", []) if isinstance(runtime_context, dict) else [],
                 "take_registration": take_registration,
                 "sampling": sampling_debug,
                 "native_audio": native_audio_debug,

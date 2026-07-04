@@ -56,7 +56,7 @@ def test_wan_visual_runtime_schema_preserves_existing_contract():
         "positive",
         "negative",
         "video_latent",
-        "runtime_debug",
+        "runtime_context",
     ]
     assert [hidden.value for hidden in schema.hidden] == ["UNIQUE_ID"]
     assert "model" not in input_names
@@ -84,17 +84,17 @@ def test_wan_visual_comfyui_core_applies_one_start_image_with_real_core_helper(t
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full", resolution_profile="Quick Draft"),
     )
 
-    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
 
-    assert runtime_debug["output_payload_type"] == "COMFYUI_CORE_CONDITIONING_LATENT"
-    assert runtime_debug["visual_conditioning"]["selected_primary_image"]["section_id"] == "section_image_0"
-    assert _helper_decision(runtime_debug) == "WanImageToVideo"
-    assert runtime_debug["visual_conditioning"]["painter_motion_boost"]["status"] == "off"
+    assert runtime_context["output_payload_type"] == "COMFYUI_CORE_CONDITIONING_LATENT"
+    assert runtime_context["visual_conditioning"]["selected_primary_image"]["section_id"] == "section_image_0"
+    assert _helper_decision(runtime_context) == "WanImageToVideo"
+    assert runtime_context["visual_conditioning"]["painter_motion_boost"]["status"] == "off"
     assert positive[0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 1
     assert video_latent["samples"].shape[1] == 16
@@ -108,7 +108,7 @@ def test_wan_visual_comfyui_core_applies_start_end_and_preserves_timed_unsupport
     )
     plan_before = copy.deepcopy(plan)
 
-    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -117,11 +117,11 @@ def test_wan_visual_comfyui_core_applies_start_end_and_preserves_timed_unsupport
     )
 
     assert plan == plan_before
-    assert _helper_decision(runtime_debug) == "WanFirstLastFrameToVideo"
-    assert runtime_debug["summary"]["applied_visual_keyframes"] == 2
-    assert runtime_debug["summary"]["unsupported_visual_keyframes"] == 2
-    assert [entry["role"] for entry in runtime_debug["visual_conditioning"]["unsupported_keyframes"]] == ["Timed", "Timed"]
-    assert "Timed visual keyframes are planned and reported" in " ".join(runtime_debug["known_limitations"])
+    assert _helper_decision(runtime_context) == "WanFirstLastFrameToVideo"
+    assert runtime_context["summary"]["applied_visual_keyframes"] == 2
+    assert runtime_context["summary"]["unsupported_visual_keyframes"] == 2
+    assert [entry["role"] for entry in runtime_context["visual_conditioning"]["unsupported_keyframes"]] == ["Timed", "Timed"]
+    assert "Timed visual keyframes are planned and reported" in " ".join(runtime_context["known_limitations"])
     assert positive[0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 4
     assert video_latent["samples"].shape[1] == 16
@@ -139,15 +139,15 @@ def test_wan_visual_painter_motion_boost_applies_i2v_variant(tmp_path):
         ),
     )
 
-    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
-    painter = runtime_debug["visual_conditioning"]["painter_motion_boost"]
+    painter = runtime_context["visual_conditioning"]["painter_motion_boost"]
 
-    assert _helper_decision(runtime_debug) == "WanImageToVideo"
+    assert _helper_decision(runtime_context) == "WanImageToVideo"
     assert painter["status"] == "applied"
     assert painter["algorithm"] == "painter_i2v"
     assert painter["amplitude"] == 1.35
@@ -171,16 +171,16 @@ def test_wan_visual_painter_motion_boost_applies_first_last_variant(tmp_path):
         generation_mode=GENERATION_MODE_FORCE_FULL_TIMELINE,
     )
 
-    _high, _low, positive, _negative, _video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, _negative, _video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
         wan_timeline_plan=plan,
     )
-    painter = runtime_debug["visual_conditioning"]["painter_motion_boost"]
+    painter = runtime_context["visual_conditioning"]["painter_motion_boost"]
 
-    assert _helper_decision(runtime_debug) == "WanFirstLastFrameToVideo"
+    assert _helper_decision(runtime_context) == "WanFirstLastFrameToVideo"
     assert painter["status"] == "applied"
     assert painter["algorithm"] == "painter_flf2v"
     assert painter["start_protected_chunk_count"] == 1
@@ -194,14 +194,14 @@ def test_wan_visual_wan22_latent_helper_is_used_for_48_channel_vae(tmp_path):
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", debug_mode="Full", resolution_profile="Quick Draft"),
     )
 
-    _high, _low, positive, _negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, _negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel48(),
         clip=FakeClip(),
         vae=FakeVAE48(),
         wan_timeline_plan=plan,
     )
 
-    assert _helper_decision(runtime_debug) == "Wan22ImageToVideoLatent"
+    assert _helper_decision(runtime_context) == "Wan22ImageToVideoLatent"
     assert video_latent["samples"].shape[1] == 48
     assert "noise_mask" in video_latent
     assert positive[0][1]["prompt"]
@@ -219,15 +219,15 @@ def test_wan_visual_painter_motion_boost_preserves_wan22_latent_shape(tmp_path):
         ),
     )
 
-    _high, _low, _positive, _negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, _positive, _negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel48(),
         clip=FakeClip(),
         vae=FakeVAE48(),
         wan_timeline_plan=plan,
     )
-    painter = runtime_debug["visual_conditioning"]["painter_motion_boost"]
+    painter = runtime_context["visual_conditioning"]["painter_motion_boost"]
 
-    assert _helper_decision(runtime_debug) == "Wan22ImageToVideoLatent"
+    assert _helper_decision(runtime_context) == "Wan22ImageToVideoLatent"
     assert painter["status"] == "applied"
     assert painter["algorithm"] == "painter_i2v"
     assert painter["protected_chunk_count"] == 1
@@ -245,7 +245,7 @@ def test_wan_visual_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
         ),
     )
 
-    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -254,19 +254,19 @@ def test_wan_visual_fmlf_advanced_i2v_builds_split_conditioning(tmp_path):
         split_conditioning=True,
     )
 
-    assert runtime_debug["backend"]["resolved_profile"] == "FMLF Advanced I2V"
-    assert runtime_debug["output_payload_type"] == "FMLF_ADVANCED_I2V_CONDITIONING_LATENT"
+    assert runtime_context["backend"]["resolved_profile"] == "FMLF Advanced I2V"
+    assert runtime_context["output_payload_type"] == "FMLF_ADVANCED_I2V_CONDITIONING_LATENT"
     assert positive["_helto_wan_conditioning_split"] is True
     assert positive["high"][0][1]["concat_latent_image"].shape[1] == 16
     assert positive["low"][0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 1
     assert video_latent["samples"].shape[1] == 16
-    assert runtime_debug["fmlf_advanced_i2v"]["helper"] == "FMLF Advanced I2V"
-    assert runtime_debug["fmlf_advanced_i2v"]["algorithm"] == "svi_latent_continuation"
-    assert runtime_debug["fmlf_advanced_i2v"]["used_prev_latent"] is False
-    assert runtime_debug["fmlf_advanced_i2v"]["prev_latent_shape"] == []
-    assert runtime_debug["fmlf_advanced_i2v"]["conditioning_split"] is True
-    assert all("path" not in decision for decision in runtime_debug["fmlf_advanced_i2v"]["media_decisions"])
+    assert runtime_context["fmlf_advanced_i2v"]["helper"] == "FMLF Advanced I2V"
+    assert runtime_context["fmlf_advanced_i2v"]["algorithm"] == "svi_latent_continuation"
+    assert runtime_context["fmlf_advanced_i2v"]["used_prev_latent"] is False
+    assert runtime_context["fmlf_advanced_i2v"]["prev_latent_shape"] == []
+    assert runtime_context["fmlf_advanced_i2v"]["conditioning_split"] is True
+    assert all("path" not in decision for decision in runtime_context["fmlf_advanced_i2v"]["media_decisions"])
 
 
 def test_wan_visual_fmlf_svi_uses_previous_latent(tmp_path):
@@ -285,7 +285,7 @@ def test_wan_visual_fmlf_svi_uses_previous_latent(tmp_path):
     visual["transient_start_image"] = torch.ones((1, 32, 32, 3)) * 0.75
     visual["continuation_source"] = "previous_tail"
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(
+    *_outputs, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -296,7 +296,7 @@ def test_wan_visual_fmlf_svi_uses_previous_latent(tmp_path):
         fmlf_motion_frames=motion_frames,
     )
 
-    fmlf = runtime_debug["fmlf_advanced_i2v"]
+    fmlf = runtime_context["fmlf_advanced_i2v"]
     assert fmlf["continuation_mode"] == "SVI"
     assert fmlf["algorithm"] == "svi_latent_continuation"
     assert fmlf["used_prev_latent"] is True
@@ -317,7 +317,7 @@ def test_wan_visual_fmlf_auto_continue_uses_motion_frames(tmp_path):
     )
     motion_frames = torch.ones((4, 32, 32, 3)) * 0.5
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(
+    *_outputs, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -327,7 +327,7 @@ def test_wan_visual_fmlf_auto_continue_uses_motion_frames(tmp_path):
         fmlf_motion_frames=motion_frames,
     )
 
-    fmlf = runtime_debug["fmlf_advanced_i2v"]
+    fmlf = runtime_context["fmlf_advanced_i2v"]
     assert fmlf["continuation_mode"] == "AUTO_CONTINUE"
     assert fmlf["algorithm"] == "auto_continue_motion_frames"
     assert fmlf["used_prev_latent"] is False
@@ -361,7 +361,7 @@ def test_wan_visual_text_capable_core_mode_can_run_without_image_keyframes():
         create_wan_timeline_config(runtime_backend_profile="ComfyUI Core", model_mode="T2V-A14B", debug_mode="Summary"),
     )
 
-    _high, _low, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    _high, _low, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         clip=FakeClip(),
         vae=FakeVAE(),
@@ -371,14 +371,14 @@ def test_wan_visual_text_capable_core_mode_can_run_without_image_keyframes():
     assert positive[0][1]["prompt"]
     assert negative[0][1]["pooled_output"].sum().item() == 0
     assert video_latent["samples"].shape[1] == 16
-    assert [event["stage"] for event in runtime_debug["status_events"]] == [
+    assert [event["stage"] for event in runtime_context["status_events"]] == [
         "timeline.prepare",
         "timeline.prompt",
         "timeline.conditioning",
         "timeline.done",
     ]
-    assert runtime_debug["status"]["runtime_executed"] is True
-    assert runtime_debug["visual_conditioning"]["selected_primary_image"] is None
+    assert runtime_context["status"]["runtime_executed"] is True
+    assert runtime_context["visual_conditioning"]["selected_primary_image"] is None
 
 
 def test_wan_visual_missing_media_fails_before_silent_prompt_only_fallback(tmp_path):
@@ -402,14 +402,14 @@ def test_wan_visual_audio_stays_final_mix_metadata_only():
         create_wan_timeline_config(debug_mode="Summary"),
     )
 
-    *_outputs, runtime_debug = build_wan_runtime_outputs(wan_timeline_plan=plan)
+    *_outputs, runtime_context = build_wan_runtime_outputs(wan_timeline_plan=plan)
 
-    assert runtime_debug["status"]["audio"]["final_mix_only"] is True
-    assert "WAN audio conditioning is unsupported" in " ".join(runtime_debug["backend"]["unsupported_features"])
+    assert runtime_context["status"]["audio"]["final_mix_only"] is True
+    assert "WAN audio conditioning is unsupported" in " ".join(runtime_context["backend"]["unsupported_features"])
 
 
-def _helper_decision(runtime_debug: dict) -> str | None:
-    for decision in runtime_debug.get("media_decisions", []):
+def _helper_decision(runtime_context: dict) -> str | None:
+    for decision in runtime_context.get("media_decisions", []):
         if decision.get("type") == "comfy_core_helper":
             return decision.get("helper")
     return None

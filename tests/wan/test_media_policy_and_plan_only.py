@@ -182,7 +182,7 @@ def test_video_policy_and_audio_final_mix_validation(tmp_path):
 def test_plan_only_runtime_validates_and_returns_debug():
     plan, _validation, _debug = build_wan_timeline_plan(_text_timeline(), create_wan_timeline_config(debug_mode="Summary"))
 
-    runtime_high_model, runtime_low_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    runtime_high_model, runtime_low_model, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         wan_timeline_plan=plan,
     )
 
@@ -191,8 +191,8 @@ def test_plan_only_runtime_validates_and_returns_debug():
     assert positive == []
     assert negative == []
     assert tuple(video_latent["samples"].shape[:3]) == (1, 16, plan["model_specific"]["wan"]["prompt_relay"]["latent_chunk_count"])
-    assert runtime_debug["summary"]["resolved_backend"] == "Plan Only"
-    assert runtime_debug["summary"]["requested_visual_keyframes"] == 0
+    assert runtime_context["summary"]["resolved_backend"] == "Plan Only"
+    assert runtime_context["summary"]["requested_visual_keyframes"] == 0
 
 
 def test_comfyui_core_runtime_applies_start_end_and_marks_timed_unsupported(tmp_path):
@@ -220,7 +220,7 @@ def test_comfyui_core_runtime_applies_start_end_and_marks_timed_unsupported(tmp_
     plan_before = copy.deepcopy(plan)
     input_negative = [[torch.ones(1, 2), {"tag": "negative"}]]
 
-    runtime_high_model, runtime_low_model, positive, negative, video_latent, runtime_debug = build_wan_runtime_outputs(
+    runtime_high_model, runtime_low_model, positive, negative, video_latent, runtime_context = build_wan_runtime_outputs(
         high_noise_model=FakeModel(),
         low_noise_model=FakeModel(),
         clip=FakeClip(),
@@ -236,10 +236,10 @@ def test_comfyui_core_runtime_applies_start_end_and_marks_timed_unsupported(tmp_
     assert positive[0][1]["concat_latent_image"].shape[1] == 16
     assert negative[0][1]["concat_mask"].shape[1] == 4
     assert video_latent["samples"].shape[1] == 16
-    assert runtime_debug["summary"]["resolved_backend"] == "ComfyUI Core"
-    assert runtime_debug["summary"]["applied_visual_keyframes"] == 2
-    assert runtime_debug["summary"]["unsupported_visual_keyframes"] == 1
-    assert runtime_debug["visual_conditioning"]["unsupported_keyframes"][0]["role"] == "Timed"
+    assert runtime_context["summary"]["resolved_backend"] == "ComfyUI Core"
+    assert runtime_context["summary"]["applied_visual_keyframes"] == 2
+    assert runtime_context["summary"]["unsupported_visual_keyframes"] == 1
+    assert runtime_context["visual_conditioning"]["unsupported_keyframes"][0]["role"] == "Timed"
 
 
 def _text_timeline():

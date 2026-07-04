@@ -78,7 +78,7 @@ class LTXTimelineRuntime(io.ComfyNode):
                 io.Audio.Output("source_video_audio", display_name="source_video_audio"),
                 io.Float.Output("source_video_frame_rate", display_name="source_video_frame_rate"),
                 io.Int.Output("source_video_frame_count", display_name="source_video_frame_count"),
-                DEBUG_INFO.Output("runtime_debug", display_name="runtime_debug"),
+                DEBUG_INFO.Output("runtime_context", display_name="runtime_context"),
             ],
             hidden=[io.Hidden.unique_id],
         )
@@ -177,7 +177,7 @@ class LTXTimelineSegmentedExecutor(io.ComfyNode):
                 io.Image.Output("images", display_name="images"),
                 io.Audio.Output("audio", display_name="audio"),
                 io.Float.Output("frame_rate", display_name="frame_rate"),
-                DEBUG_INFO.Output("executor_debug", display_name="executor_debug"),
+                DEBUG_INFO.Output("executor_context", display_name="executor_context"),
             ],
             hidden=[io.Hidden.unique_id],
         )

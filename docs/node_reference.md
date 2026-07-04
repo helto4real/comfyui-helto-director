@@ -75,7 +75,7 @@ optional identity anchor, sigmas, and optional IC-LoRA parameters.
 
 Outputs include patched model, positive/negative conditioning, video latent,
 audio latent, combined audio, guide data, source-video outputs, and
-`runtime_debug`.
+`runtime_context`.
 
 ### LTX 2.3 Timeline Segmented Executor
 
@@ -89,7 +89,7 @@ Outputs:
 - `images`
 - `audio`
 - `frame_rate`
-- `executor_debug`
+- `executor_context`
 
 ## LTX Identity And Reference Helpers
 
@@ -169,7 +169,7 @@ Outputs:
 - `positive`
 - `negative`
 - `video_latent`
-- `runtime_debug`
+- `runtime_context`
 
 ### WAN 2.2 Timeline Segmented Executor
 
@@ -184,7 +184,7 @@ Outputs:
 - `images`
 - `audio`
 - `frame_rate`
-- `executor_debug`
+- `executor_context`
 
 For supported backend behavior and known limits, read
 [WAN 2.2 Timeline Support](WAN22_SUPPORT.md).
@@ -196,7 +196,7 @@ For supported backend behavior and known limits, read
 Category: `timeline/tools`
 
 Registers generated media as a shot take and writes a sidecar that the Director
-UI can attach. It can accept runtime debug metadata, video/images/audio outputs,
+UI can attach. It can accept runtime context metadata, video/images/audio outputs,
 a generated asset path, optional shot override, filename prefix, and accept/clip
 update settings.
 

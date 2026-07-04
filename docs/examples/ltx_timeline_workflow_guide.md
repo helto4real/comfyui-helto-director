@@ -33,7 +33,7 @@ Use a short project first: `1.0` to `2.0` seconds, `24` fps, and `Quick Draft`.
 
 ### Text Only
 
-Add one Text Section that covers the whole project duration. Put the local scene action in the section prompt. The runtime patches the model for Prompt Relay when enabled and returns `positive`, `negative`, `video_latent`, `combined_audio`, `audio_latent`, `guide_data`, and `runtime_debug`.
+Add one Text Section that covers the whole project duration. Put the local scene action in the section prompt. The runtime patches the model for Prompt Relay when enabled and returns `positive`, `negative`, `video_latent`, `combined_audio`, `audio_latent`, `guide_data`, and `runtime_context`.
 
 ### Image Guided Sections
 

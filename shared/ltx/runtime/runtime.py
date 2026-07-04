@@ -130,7 +130,7 @@ def build_ltx_runtime_outputs(
     else:
         audio_latent, audio_latent_diagnostics = build_audio_latent(combined_audio, audio_vae, frame_count, frame_rate)
     source_images, source_audio, source_fps, source_frame_count = source_video_outputs(plan, width, height)
-    runtime_debug = _runtime_debug(
+    runtime_context = _runtime_context(
         plan,
         prompt_debug,
         guide_data,
@@ -151,7 +151,7 @@ def build_ltx_runtime_outputs(
     )
     if complete_status:
         status_reporter.done("LTX Runtime: ready")
-        runtime_debug["status_events"] = status_reporter.snapshot()
+        runtime_context["status_events"] = status_reporter.snapshot()
     return (
         runtime_model,
         positive,
@@ -164,7 +164,7 @@ def build_ltx_runtime_outputs(
         source_audio,
         float(source_fps),
         int(source_frame_count),
-        runtime_debug,
+        runtime_context,
     )
 
 
@@ -190,7 +190,7 @@ def _build_skipped_ltx_runtime_outputs(
     status_reporter.report("timeline.skip", "LTX Runtime: generation skipped by Director policy")
     if complete_status:
         status_reporter.done("LTX Runtime: generation skipped")
-    runtime_debug = {
+    runtime_context = {
         "type": "DEBUG_INFO",
         "source": "LTX Runtime",
         "enabled": bool(plan.get("model_specific", {}).get("ltx", {}).get("config", {}).get("debug_mode")),
@@ -223,7 +223,7 @@ def _build_skipped_ltx_runtime_outputs(
         empty_audio(0.0),
         frame_rate,
         0,
-        runtime_debug,
+        runtime_context,
     )
 
 
@@ -426,7 +426,7 @@ def _build_ltx_lora_report(runtime_loras: dict[str, Any], applied_loras: list[di
     }
 
 
-def _runtime_debug(
+def _runtime_context(
     plan,
     prompt_debug,
     guide_data,

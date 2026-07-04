@@ -18,7 +18,7 @@ The Director stays generic. WAN-specific behavior lives in the WAN Config, Plann
 - Visual Conditioning Mode: `Timed Keyframes`
 - Runtime Backend Profile: `Plan Only`
 
-`Plan Only` is the safe default. It validates the WAN plan, reports backend compatibility, and returns runtime debug without attempting WAN tensor conditioning. Switch to `ComfyUI Core` when you want the runtime to materialize supported WAN conditioning and latent outputs.
+`Plan Only` is the safe default. It validates the WAN plan, reports backend compatibility, and returns runtime context without attempting WAN tensor conditioning. Switch to `ComfyUI Core` when you want the runtime to materialize supported WAN conditioning and latent outputs.
 
 ## Backend Profiles
 
@@ -43,7 +43,7 @@ When Prompt Relay is enabled:
 - no connected model phase is an error in `ComfyUI Core`,
 - `Auto` resolves to `ComfyUI Core` only when `clip`, `vae`, and at least one model phase are connected; otherwise it resolves to `Plan Only`.
 
-The runtime builds the output latent from the connected model latent format when a model phase is present. This matters for WanMoe high/low workflows, which commonly expect 16-channel WAN latents and a matching WAN VAE. If image keyframe conditioning is enabled and the VAE encodes into a different latent format than the connected model expects, the runtime fails with `WAN_RUNTIME_LATENT_FORMAT_MISMATCH` before the sampler runs. For 48-channel WAN 2.2 VAE/model wiring, the Core path can use the WAN 2.2 image-to-video latent helper and reports that helper choice in `runtime_debug.media_decisions`.
+The runtime builds the output latent from the connected model latent format when a model phase is present. This matters for WanMoe high/low workflows, which commonly expect 16-channel WAN latents and a matching WAN VAE. If image keyframe conditioning is enabled and the VAE encodes into a different latent format than the connected model expects, the runtime fails with `WAN_RUNTIME_LATENT_FORMAT_MISMATCH` before the sampler runs. For 48-channel WAN 2.2 VAE/model wiring, the Core path can use the WAN 2.2 image-to-video latent helper and reports that helper choice in `runtime_context.media_decisions`.
 
 ## Prompt Relay
 
@@ -85,7 +85,7 @@ Director character references are the Bernini subject-reference path. Add them f
 
 Only prompt-tagged references are passed to Bernini. Untagged active references stay available in the Director UI but do not influence WAN generation. Bernini accepts up to eight subject reference images through the current ComfyUI Core autogrow input; extra tagged references are reported and ignored.
 
-Additional timeline images/videos are preserved in planner/runtime debug as unavailable media for the selected backend. Timeline media is never reclassified as a Bernini subject reference; timeline images/videos are source/background context, and Director references are subject references. `ads2v`, `vi2v`, `vrc2v`, and `mv2v` are reported as unavailable task types.
+Additional timeline images/videos are preserved in planner/runtime context as unavailable media for the selected backend. Timeline media is never reclassified as a Bernini subject reference; timeline images/videos are source/background context, and Director references are subject references. `ads2v`, `vi2v`, `vrc2v`, and `mv2v` are reported as unavailable task types.
 
 Bernini system prompts are prefixes only. ComfyUI Core execution fails with `BERNINI_NO_USER_CONDITIONING` if Bernini receives no user prompt text and no timeline image/video media, because generating from only the trained task prefix usually indicates an unconnected or unserialized Director timeline.
 
@@ -117,7 +117,7 @@ For default `I2V-A14B` execution, at least one usable Image Section is required.
 
 ## Debugging
 
-Set Debug Mode to `Summary` or `Full` on the WAN Config node. Inspect the Planner `DEBUG_INFO` for prompt/keyframe planning, and Runtime `runtime_debug` for:
+Set Debug Mode to `Summary` or `Full` on the WAN Config node. Inspect the Planner `DEBUG_INFO` for prompt/keyframe planning, and Runtime `runtime_context` for:
 
 - `backend`: requested/resolved backend profile, availability, missing requirements, unsupported features, and recommended next action.
 - `status`: compact user-facing summary of execution, Prompt Relay, visual keyframes, audio policy, and validation counts.

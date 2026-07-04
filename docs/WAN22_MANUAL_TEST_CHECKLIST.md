@@ -10,7 +10,7 @@ Use this checklist inside ComfyUI when verifying WAN Timeline workflows.
 - [ ] Create a text-only timeline.
 - [ ] Verify `prompt_relay` appears in Planner `DEBUG_INFO`.
 - [ ] Run Runtime in `Plan Only`.
-- [ ] Verify `runtime_debug.backend` and `runtime_debug.status` explain that no execution backend ran.
+- [ ] Verify `runtime_context.backend` and `runtime_context.status` explain that no execution backend ran.
 - [ ] Create a timeline with one Image Section.
 - [ ] Verify one `Start` keyframe candidate appears in `requested_keyframes`.
 - [ ] Create a timeline with four or more Image Sections.
