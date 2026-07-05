@@ -31,6 +31,7 @@ export function showPromptOptimizer(options) {
           <button class="active" type="button" data-mode="sfw">SFW</button>
           <button type="button" data-mode="nsfw">NSFW</button>
         </div>
+        <button class="edit-ollama icon" type="button" title="Edit Ollama settings" aria-label="Edit Ollama settings">${ICONS.settings}</button>
         <button class="edit-template icon" type="button" title="Edit prompt template" aria-label="Edit prompt template">${ICONS.text}</button>
         <button class="generate icon" type="button" title="Generate timeline prompts" aria-label="Generate timeline prompts">${ICONS.timeline}</button>
       </div>
@@ -39,6 +40,51 @@ export function showPromptOptimizer(options) {
         <input class="hf-token" type="password" autocomplete="off" placeholder="hf_... access token">
         <button class="save-token icon" type="button" title="Save Hugging Face token" aria-label="Save Hugging Face token">${ICONS.key}</button>
         <button class="clear-token icon" type="button" title="Clear Hugging Face token" aria-label="Clear Hugging Face token">${ICONS.clear}</button>
+      </div>
+      <div class="htd-ollama-settings-editor">
+        <div class="htd-ollama-settings-grid">
+          <label class="ollama-field">
+            <span>Model</span>
+            <select class="ollama-model" title="Installed Ollama model"></select>
+          </label>
+          <label class="ollama-field">
+            <span>Base URL</span>
+            <input class="ollama-base-url" type="url" spellcheck="false" autocomplete="off" title="Ollama API base URL">
+          </label>
+          <label class="ollama-field">
+            <span>Keep loaded</span>
+            <input class="ollama-keep-alive" type="number" min="0" step="1" title="Seconds to keep the Ollama model in memory after this optimizer session; 0 releases it after the final generated prompt">
+          </label>
+          <label class="ollama-field">
+            <span>Max tokens</span>
+            <input class="ollama-num-predict" type="number" min="1" step="1" title="Ollama num_predict">
+          </label>
+          <label class="ollama-field">
+            <span>Context</span>
+            <input class="ollama-num-ctx" type="number" min="0" step="1" title="Ollama num_ctx">
+          </label>
+          <label class="ollama-field">
+            <span>Temperature</span>
+            <input class="ollama-temperature" type="number" min="0" max="2" step="0.05" title="Ollama temperature">
+          </label>
+          <label class="ollama-field">
+            <span>Top P</span>
+            <input class="ollama-top-p" type="number" min="0" max="1" step="0.01" title="Ollama top_p">
+          </label>
+          <label class="ollama-field">
+            <span>Top K</span>
+            <input class="ollama-top-k" type="number" min="0" step="1" title="Ollama top_k">
+          </label>
+          <label class="ollama-field">
+            <span>Repeat</span>
+            <input class="ollama-repeat-penalty" type="number" min="0" step="0.01" title="Ollama repeat_penalty">
+          </label>
+        </div>
+        <div class="htd-ollama-settings-toolbar">
+          <span class="ollama-status">Ollama: checking...</span>
+          <button class="save-ollama icon" type="button" title="Save Ollama settings" aria-label="Save Ollama settings">${ICONS.save}</button>
+          <button class="reset-ollama icon" type="button" title="Reset Ollama settings" aria-label="Reset Ollama settings">${ICONS.reset}</button>
+        </div>
       </div>
       <div class="htd-prompt-template-editor">
         <textarea class="prompt-template" spellcheck="false"></textarea>
@@ -63,6 +109,20 @@ export function showPromptOptimizer(options) {
   const panel = overlay.querySelector(".htd-prompt-optimizer-panel");
   const modelSelect = overlay.querySelector(".model");
   const modeButtons = [...overlay.querySelectorAll(".mode button")];
+  const editOllamaBtn = overlay.querySelector(".edit-ollama");
+  const ollamaSettingsEditor = overlay.querySelector(".htd-ollama-settings-editor");
+  const ollamaModelSelect = overlay.querySelector(".ollama-model");
+  const ollamaBaseUrlInput = overlay.querySelector(".ollama-base-url");
+  const ollamaKeepAliveInput = overlay.querySelector(".ollama-keep-alive");
+  const ollamaNumPredictInput = overlay.querySelector(".ollama-num-predict");
+  const ollamaNumCtxInput = overlay.querySelector(".ollama-num-ctx");
+  const ollamaTemperatureInput = overlay.querySelector(".ollama-temperature");
+  const ollamaTopPInput = overlay.querySelector(".ollama-top-p");
+  const ollamaTopKInput = overlay.querySelector(".ollama-top-k");
+  const ollamaRepeatPenaltyInput = overlay.querySelector(".ollama-repeat-penalty");
+  const ollamaStatusEl = overlay.querySelector(".ollama-status");
+  const saveOllamaBtn = overlay.querySelector(".save-ollama");
+  const resetOllamaBtn = overlay.querySelector(".reset-ollama");
   const editTemplateBtn = overlay.querySelector(".edit-template");
   const promptTemplateEditor = overlay.querySelector(".htd-prompt-template-editor");
   const promptTemplateInput = overlay.querySelector(".prompt-template");
@@ -87,17 +147,36 @@ export function showPromptOptimizer(options) {
   let busy = false;
   let closed = false;
   let loadedModelAlias = "";
+  let loadedModelBackend = "";
+  let modelStatuses = [];
 
   const optimizerFetchOptions = (next = {}) => ({ ...next, signal: abortController.signal });
+  const ollamaInputs = [
+    ollamaModelSelect,
+    ollamaBaseUrlInput,
+    ollamaKeepAliveInput,
+    ollamaNumPredictInput,
+    ollamaNumCtxInput,
+    ollamaTemperatureInput,
+    ollamaTopPInput,
+    ollamaTopKInput,
+    ollamaRepeatPenaltyInput,
+    saveOllamaBtn,
+    resetOllamaBtn,
+  ];
   const isClosed = () => closed || abortController.signal.aborted || !overlay.isConnected;
   const setStatus = (message) => {
     statusEl.textContent = message || "";
   };
+  const selectedModelStatus = () => modelStatuses.find((model) => model.alias === modelSelect.value) || null;
+  const selectedModelBackend = () => selectedModelStatus()?.backend || "";
   const setBusy = (value) => {
     busy = Boolean(value);
     for (const input of [
       modelSelect,
       ...modeButtons,
+      editOllamaBtn,
+      ...ollamaInputs,
       editTemplateBtn,
       promptTemplateInput,
       saveTemplateBtn,
@@ -111,6 +190,7 @@ export function showPromptOptimizer(options) {
       input.disabled = busy;
     }
     generateBtn.disabled = busy || !timelineRows.length;
+    syncOllamaVisibility();
   };
   const close = () => {
     closePromptOptimizer(documentRef);
@@ -125,9 +205,72 @@ export function showPromptOptimizer(options) {
     if (closed) return;
     closed = true;
     abortController.abort();
-    unloadPromptOptimizerModel(loadedModelAlias);
+    if (loadedModelBackend !== "ollama") unloadPromptOptimizerModel(loadedModelAlias);
     options.onClose?.();
   };
+
+  const syncOllamaVisibility = () => {
+    const isOllama = selectedModelBackend() === "ollama";
+    editOllamaBtn.hidden = !isOllama;
+    editOllamaBtn.disabled = busy || !isOllama;
+    ollamaSettingsEditor.classList.toggle("is-provider-active", isOllama);
+    if (!isOllama) ollamaSettingsEditor.classList.remove("is-open");
+  };
+
+  const populateOllamaSettings = (settings = {}, status = {}) => {
+    const ollama = settings || {};
+    const models = Array.isArray(status.models) ? status.models : [];
+    const configured = String(ollama.model || status.configured_model || "").trim();
+    const active = configured || (models.length === 1 ? models[0] : "");
+    ollamaModelSelect.innerHTML = "";
+    if (models.length) {
+      if (!configured && models.length > 1) {
+        const placeholder = documentRef.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Choose model";
+        ollamaModelSelect.append(placeholder);
+      }
+      for (const name of models) {
+        const option = documentRef.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        ollamaModelSelect.append(option);
+      }
+    } else {
+      const option = documentRef.createElement("option");
+      option.value = configured;
+      option.textContent = configured || "No local models";
+      ollamaModelSelect.append(option);
+    }
+    ollamaModelSelect.value = [...ollamaModelSelect.options].some((option) => option.value === active)
+      ? active
+      : "";
+    ollamaBaseUrlInput.value = ollama.base_url || "http://127.0.0.1:11434";
+    ollamaKeepAliveInput.value = numberInputValue(ollama.keep_alive_seconds, 0);
+    ollamaNumPredictInput.value = numberInputValue(ollama.num_predict, 2048);
+    ollamaNumCtxInput.value = numberInputValue(ollama.num_ctx, 4096);
+    ollamaTemperatureInput.value = numberInputValue(ollama.temperature, 0.2);
+    ollamaTopPInput.value = numberInputValue(ollama.top_p, 0.95);
+    ollamaTopKInput.value = numberInputValue(ollama.top_k, 40);
+    ollamaRepeatPenaltyInput.value = numberInputValue(ollama.repeat_penalty, 1.05);
+    const state = String(status.status || "").replace(/_/g, " ");
+    const suffix = status.active_model ? `: ${status.active_model}` : (state ? `: ${state}` : "");
+    const vision = ollamaVisionLabel(status);
+    ollamaStatusEl.textContent = `Ollama${suffix}${status.active_model && vision ? ` (${vision})` : ""}`;
+    ollamaStatusEl.title = ollamaVisionTitle(status) || status.error || status.base_url || "";
+  };
+
+  const currentOllamaSettingsPayload = () => ({
+    base_url: ollamaBaseUrlInput.value || "",
+    model: ollamaModelSelect.value || "",
+    keep_alive_seconds: ollamaKeepAliveInput.value || 0,
+    num_predict: ollamaNumPredictInput.value || 2048,
+    num_ctx: ollamaNumCtxInput.value || 4096,
+    temperature: ollamaTemperatureInput.value || 0.2,
+    top_p: ollamaTopPInput.value || 0.95,
+    top_k: ollamaTopKInput.value || 40,
+    repeat_penalty: ollamaRepeatPenaltyInput.value || 1.05,
+  });
 
   const updateProgressBar = (progress = {}, visible = true) => {
     const percentValue = Number(progress.percent);
@@ -243,7 +386,17 @@ export function showPromptOptimizer(options) {
     promptTemplateStatus.textContent = settings.promptTemplateConfigured
       ? "Custom prompt template saved locally."
       : "Using the default motion-only prompt template.";
-    await loadPromptOptimizerModels(options.node, modelSelect, statusEl, optimizerFetchOptions());
+    const modelData = await loadPromptOptimizerModels(
+      options.node,
+      modelSelect,
+      statusEl,
+      optimizerFetchOptions(),
+      () => syncOllamaVisibility(),
+    );
+    modelStatuses = modelData.models || [];
+    const ollamaModel = modelStatuses.find((model) => model.backend === "ollama");
+    populateOllamaSettings(settings.ollamaSettings, ollamaModel?.ollama || {});
+    syncOllamaVisibility();
   };
 
   const runGenerate = async () => {
@@ -263,6 +416,10 @@ export function showPromptOptimizer(options) {
       }
       setStatus("Starting prompt optimization...");
       loadedModelAlias = modelSelect.value;
+      loadedModelBackend = selectedModelBackend();
+      if (loadedModelBackend === "ollama") {
+        await postOptimizerSettings({ ollama: currentOllamaSettingsPayload() });
+      }
       const started = await fetchJson(`${ROUTE_PREFIX}/optimize/start`, optimizerFetchOptions({
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -306,8 +463,11 @@ export function showPromptOptimizer(options) {
     });
   });
   editTemplateBtn.addEventListener("click", () => promptTemplateEditor.classList.toggle("is-open"));
+  editOllamaBtn.addEventListener("click", () => ollamaSettingsEditor.classList.toggle("is-open"));
   saveTokenBtn.addEventListener("click", () => saveSettings({ hf_token: hfTokenInput.value || "" }));
   clearTokenBtn.addEventListener("click", () => saveSettings({ clear: true }));
+  saveOllamaBtn.addEventListener("click", () => saveSettings({ ollama: currentOllamaSettingsPayload() }));
+  resetOllamaBtn.addEventListener("click", () => saveSettings({ reset_ollama_settings: true }));
   saveTemplateBtn.addEventListener("click", () => saveSettings({ prompt_template: promptTemplateInput.value || "" }));
   resetTemplateBtn.addEventListener("click", () => saveSettings({ reset_prompt_template: true }));
   generateBtn.addEventListener("click", runGenerate);
@@ -339,17 +499,21 @@ export function showPromptOptimizer(options) {
   async function saveSettings(payload) {
     setBusy(true);
     try {
-      await fetchJson(`${ROUTE_PREFIX}/settings`, optimizerFetchOptions({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }));
+      await postOptimizerSettings(payload);
       await refreshOptimizerStatus();
     } catch (error) {
       setStatus(error.message);
     } finally {
       if (!isClosed()) setBusy(false);
     }
+  }
+
+  async function postOptimizerSettings(payload) {
+    return fetchJson(`${ROUTE_PREFIX}/settings`, optimizerFetchOptions({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
   }
 }
 
@@ -401,7 +565,7 @@ function mediaCaptionForAsset(asset, section) {
   return asset?.name || asset?.metadata?.browser_filename || asset?.path || `${section.type} segment`;
 }
 
-async function loadPromptOptimizerModels(node, selectEl, statusEl, fetchOptions = undefined) {
+async function loadPromptOptimizerModels(node, selectEl, statusEl, fetchOptions = undefined, onModelChange = null) {
   const data = await fetchJson(`${ROUTE_PREFIX}/models`, fetchOptions);
   const preferred = node?.properties?.helto_prompt_optimizer_model || "qwen3_vl_4b_fast";
   selectEl.innerHTML = "";
@@ -409,28 +573,77 @@ async function loadPromptOptimizerModels(node, selectEl, statusEl, fetchOptions 
     const option = document.createElement("option");
     option.value = model.alias;
     const state = model.status === "ready" || model.status === "downloaded" ? "ready" : String(model.status || "").replace(/_/g, " ");
-    option.textContent = `${model.alias} (${state})`;
-    option.title = model.missing_dependencies?.length ? `Missing: ${model.missing_dependencies.join(", ")}` : model.repo_id;
+    const label = model.display_name || model.alias;
+    const ollamaVision = model.backend === "ollama" ? ollamaVisionLabel(model.ollama || {}) : "";
+    const detail = model.backend === "ollama" && model.active_model
+      ? [model.active_model, ollamaVision].filter(Boolean).join(", ")
+      : state;
+    option.textContent = `${label} (${detail})`;
+    option.title = model.missing_dependencies?.length
+      ? `Missing: ${model.missing_dependencies.join(", ")}`
+      : (model.backend === "ollama" ? ollamaVisionTitle(model.ollama || {}) || model.ollama?.base_url || model.repo_id : model.repo_id);
     selectEl.append(option);
   }
   if ([...selectEl.options].some((option) => option.value === preferred)) selectEl.value = preferred;
   const updateStatus = () => {
     const model = (data.models || []).find((item) => item.alias === selectEl.value);
     if (!model) return;
+    statusEl.title = "";
     if (model.missing_dependencies?.length) {
       statusEl.textContent = `Missing optional packages: ${model.missing_dependencies.join(", ")}`;
+    } else if (model.backend === "ollama") {
+      if (model.status === "ready") {
+        if (model.ollama?.supports_vision === false) {
+          statusEl.textContent = `Ollama ready: ${model.active_model}, but this model does not advertise vision support.`;
+          statusEl.title = ollamaVisionTitle(model.ollama);
+        } else if (model.ollama?.supports_vision === true) {
+          statusEl.textContent = `Ollama ready: ${model.active_model} with vision support.`;
+        } else {
+          statusEl.textContent = `Ollama ready: ${model.active_model}; vision capability could not be checked.`;
+          statusEl.title = ollamaVisionTitle(model.ollama || {});
+        }
+      } else if (model.status === "choose_model") {
+        statusEl.textContent = "Choose an Ollama model in settings.";
+      } else if (model.status === "unavailable") {
+        statusEl.textContent = model.ollama?.error || "Ollama is unavailable.";
+      } else {
+        statusEl.textContent = `Ollama status: ${String(model.status || "unknown").replace(/_/g, " ")}.`;
+      }
     } else if (model.downloaded || model.backend === "fallback") {
       statusEl.textContent = `${model.alias} is ready.`;
     } else {
       statusEl.textContent = `${model.alias} will auto-download on Generate.`;
     }
   };
-  selectEl.addEventListener("change", () => {
+  selectEl.onchange = () => {
     node.properties = node.properties || {};
     node.properties.helto_prompt_optimizer_model = selectEl.value;
     updateStatus();
-  });
+    onModelChange?.((data.models || []).find((item) => item.alias === selectEl.value) || null);
+  };
   updateStatus();
+  onModelChange?.((data.models || []).find((item) => item.alias === selectEl.value) || null);
+  return data;
+}
+
+function ollamaVisionLabel(status = {}) {
+  if (status.supports_vision === true) return "vision";
+  if (status.supports_vision === false) return "no vision";
+  if (status.active_model || status.capability_error) return "vision unknown";
+  return "";
+}
+
+function ollamaVisionTitle(status = {}) {
+  if (status.supports_vision === false) {
+    return "This Ollama model does not advertise vision support; choose a model whose capabilities include 'vision' for image and video timeline sections.";
+  }
+  if (status.capability_error) return `Could not check Ollama vision capability: ${status.capability_error}`;
+  return "";
+}
+
+function numberInputValue(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(value) : String(fallback);
 }
 
 function unloadPromptOptimizerModel(alias) {
@@ -549,7 +762,7 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-dialog { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: var(--htd-overlay); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: var(--htd-font-size) / var(--htd-line) var(--htd-font-sans); -webkit-font-smoothing: antialiased; }
     .htd-prompt-optimizer-panel { width: min(980px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 28px)); display: flex; flex-direction: column; gap: 8px; background: linear-gradient(135deg, var(--htd-modal-from), var(--htd-modal-to)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); padding: 10px; box-shadow: var(--htd-shadow-pop); box-sizing: border-box; }
     .htd-prompt-optimizer-panel h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--htd-text); }
-    .htd-prompt-optimizer-controls { display: grid; grid-template-columns: minmax(180px, 1fr) 150px repeat(2, 32px); gap: 8px; align-items: center; }
+    .htd-prompt-optimizer-controls { display: grid; grid-template-columns: minmax(180px, 1fr) 150px repeat(3, 32px); gap: 8px; align-items: center; }
     .htd-prompt-optimizer-panel button, .htd-prompt-optimizer-panel select, .htd-prompt-optimizer-panel input, .htd-prompt-optimizer-panel textarea { background: var(--htd-surface-2); color: var(--htd-text); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); box-sizing: border-box; font: inherit; }
     .htd-prompt-optimizer-panel button { cursor: pointer; background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); transition: background var(--htd-transition), border-color var(--htd-transition), color var(--htd-transition); }
     .htd-prompt-optimizer-panel button:hover { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: var(--htd-text); }
@@ -563,7 +776,15 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-panel .mode button:hover { background: transparent; color: var(--htd-text); }
     .htd-prompt-optimizer-panel .mode button.active { background: linear-gradient(180deg, #4f3a2a, #3d2d20); color: var(--htd-accent-strong); box-shadow: inset 0 0 0 1px var(--htd-accent-hairline); }
     .htd-prompt-auth-row { display: grid; grid-template-columns: auto minmax(170px, 1fr) auto auto; gap: 8px; align-items: center; padding: 7px; background: var(--htd-surface-2); border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); }
-    .htd-prompt-auth-row span, .htd-prompt-template-toolbar span, .htd-prompt-optimizer-panel .status, .htd-prompt-optimizer-panel .progress-text { color: var(--htd-text-dim); font-size: 11px; }
+    .htd-prompt-auth-row span, .htd-prompt-template-toolbar span, .htd-ollama-settings-toolbar span, .htd-prompt-optimizer-panel .status, .htd-prompt-optimizer-panel .progress-text { color: var(--htd-text-dim); font-size: 11px; }
+    .htd-ollama-settings-editor { display: none; padding: 8px; background: var(--htd-surface-2); border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); }
+    .htd-ollama-settings-editor.is-provider-active.is-open { display: grid; gap: 8px; }
+    .htd-ollama-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 8px; }
+    .htd-ollama-settings-editor .ollama-field { display: grid; gap: 4px; min-width: 0; }
+    .htd-ollama-settings-editor .ollama-field span { color: var(--htd-text-faint); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+    .htd-ollama-settings-editor .ollama-field input, .htd-ollama-settings-editor .ollama-field select { width: 100%; height: 28px; min-width: 0; font-variant-numeric: tabular-nums; }
+    .htd-ollama-settings-toolbar { display: flex; gap: 8px; align-items: center; }
+    .htd-ollama-settings-toolbar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .htd-prompt-template-editor { display: none; padding: 8px; background: var(--htd-surface-2); border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); }
     .htd-prompt-template-editor.is-open { display: block; }
     .htd-prompt-template-editor textarea { width: 100%; height: 150px; min-height: 110px; resize: vertical; padding: 7px; }
@@ -606,6 +827,7 @@ function installPromptOptimizerStyles(documentRef) {
 }
 
 const ICONS = {
+  settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 0 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 0 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"/></svg>`,
   text: `<svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v12M8 18h8"/></svg>`,
   timeline: `<svg viewBox="0 0 24 24"><path d="M4 6h16M4 18h16"/><rect x="6" y="9" width="5" height="6" rx="1"/><rect x="13" y="9" width="5" height="6" rx="1"/></svg>`,
   key: `<svg viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M12 12l8-8"/><path d="M15 7l2 2"/><path d="M17 5l2 2"/></svg>`,

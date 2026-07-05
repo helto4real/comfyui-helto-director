@@ -16,7 +16,9 @@ import threading
 import time
 import traceback
 from typing import Any
+import urllib.error
 from urllib.parse import unquote, urlparse
+import urllib.request
 import uuid
 
 from PIL import Image, ImageOps
@@ -37,6 +39,20 @@ QWEN_DEPS = ("transformers", "huggingface_hub", "accelerate", "qwen_vl_utils")
 FLORENCE_DEPS = ("transformers", "huggingface_hub", "accelerate", "torchvision")
 GEMMA_SAFETENSORS_DEPS = ("transformers", "huggingface_hub", "accelerate")
 LLAMA_CPP_DEPS = ("llama_cpp", "huggingface_hub")
+OLLAMA_LOCAL_ALIAS = "ollama_local"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_OLLAMA_KEEP_ALIVE_SECONDS = 0
+OLLAMA_TAGS_TIMEOUT_SECONDS = 2.0
+OLLAMA_SHOW_TIMEOUT_SECONDS = 5.0
+OLLAMA_REQUEST_TIMEOUT_SECONDS = 300.0
+OLLAMA_NUMERIC_OPTION_KEYS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "repeat_penalty",
+    "num_ctx",
+    "num_predict",
+)
 GEMMA4_E4B_FP8_URL = (
     "https://huggingface.co/Comfy-Org/gemma-4/blob/main/"
     "text_encoders/gemma4_e4b_it_fp8_scaled.safetensors"
@@ -85,6 +101,17 @@ REFERENCE_CAPTION_PROMPT_FALLBACK = (
     "markdown, negative prompts, or explanations.\n\n"
     "User description to respect: {direction}"
 )
+DEFAULT_OLLAMA_SETTINGS = {
+    "base_url": DEFAULT_OLLAMA_BASE_URL,
+    "model": "",
+    "keep_alive_seconds": DEFAULT_OLLAMA_KEEP_ALIVE_SECONDS,
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "top_k": 40,
+    "repeat_penalty": 1.05,
+    "num_ctx": 4096,
+    "num_predict": 2048,
+}
 
 
 def load_reference_caption_prompt_template(path: str | os.PathLike[str] | None = None) -> str:
@@ -180,6 +207,13 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "fallback_text_backend",
         "local/fallback-text-backend",
         "fallback",
+        "",
+        (),
+    ),
+    OLLAMA_LOCAL_ALIAS: OptimizerModelSpec(
+        OLLAMA_LOCAL_ALIAS,
+        "ollama/local",
+        "ollama",
         "",
         (),
     ),
@@ -281,28 +315,94 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
         pass
 
 
+def _coerce_int(value: Any, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+    try:
+        number = int(float(str(value).strip())) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def _coerce_float(value: Any, default: float, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        number = float(str(value).strip()) if isinstance(value, str) else float(value)
+    except (TypeError, ValueError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def _normalize_ollama_base_url(value: Any) -> str:
+    base_url = str(value or "").strip() or DEFAULT_OLLAMA_BASE_URL
+    return base_url.rstrip("/") or DEFAULT_OLLAMA_BASE_URL
+
+
+def normalize_ollama_settings(value: Any) -> dict[str, Any]:
+    settings = dict(DEFAULT_OLLAMA_SETTINGS)
+    if not isinstance(value, dict):
+        return settings
+
+    settings["base_url"] = _normalize_ollama_base_url(value.get("base_url", value.get("baseUrl")))
+    settings["model"] = str(value.get("model") or value.get("model_name") or value.get("modelName") or "").strip()
+    settings["keep_alive_seconds"] = _coerce_int(
+        value.get("keep_alive_seconds", value.get("keepAliveSeconds")),
+        DEFAULT_OLLAMA_KEEP_ALIVE_SECONDS,
+        0,
+    )
+    settings["temperature"] = _coerce_float(value.get("temperature"), DEFAULT_OLLAMA_SETTINGS["temperature"], 0.0, 2.0)
+    settings["top_p"] = _coerce_float(value.get("top_p", value.get("topP")), DEFAULT_OLLAMA_SETTINGS["top_p"], 0.0, 1.0)
+    settings["top_k"] = _coerce_int(value.get("top_k", value.get("topK")), DEFAULT_OLLAMA_SETTINGS["top_k"], 0)
+    settings["repeat_penalty"] = _coerce_float(
+        value.get("repeat_penalty", value.get("repeatPenalty")),
+        DEFAULT_OLLAMA_SETTINGS["repeat_penalty"],
+        0.0,
+    )
+    settings["num_ctx"] = _coerce_int(value.get("num_ctx", value.get("numCtx")), DEFAULT_OLLAMA_SETTINGS["num_ctx"], 0)
+    settings["num_predict"] = _coerce_int(
+        value.get("num_predict", value.get("numPredict")),
+        DEFAULT_OLLAMA_SETTINGS["num_predict"],
+        1,
+    )
+    return settings
+
+
 def load_optimizer_settings(base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     path = settings_path(base_dir)
+    defaults = {"version": 1, "hf_token": "", "prompt_template": "", "ollama": dict(DEFAULT_OLLAMA_SETTINGS)}
     if not path.exists():
-        return {"version": 1, "hf_token": "", "prompt_template": ""}
+        return defaults
     try:
         payload = json.loads(path.read_text(encoding="utf-8") or "{}")
     except Exception:
-        return {"version": 1, "hf_token": "", "prompt_template": ""}
+        return defaults
     return {
         "version": 1,
         "hf_token": str(payload.get("hf_token") or ""),
         "prompt_template": str(payload.get("prompt_template") or ""),
+        "ollama": normalize_ollama_settings(payload.get("ollama")),
     }
 
 
 def _save_optimizer_settings(settings: dict[str, Any], base_dir: str | os.PathLike[str] | None = None) -> None:
+    ollama_settings = normalize_ollama_settings(settings.get("ollama"))
     payload = {
         "version": 1,
         "hf_token": str(settings.get("hf_token") or ""),
         "prompt_template": str(settings.get("prompt_template") or ""),
+        "ollama": ollama_settings,
     }
-    if not payload["hf_token"] and not payload["prompt_template"]:
+    if (
+        not payload["hf_token"]
+        and not payload["prompt_template"]
+        and ollama_settings == DEFAULT_OLLAMA_SETTINGS
+    ):
         settings_path(base_dir).unlink(missing_ok=True)
         return
     _write_private_json(settings_path(base_dir), payload)
@@ -349,6 +449,24 @@ def reset_prompt_template(base_dir: str | os.PathLike[str] | None = None) -> dic
     return get_optimizer_settings_status(base_dir)
 
 
+def configured_ollama_settings(base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    return normalize_ollama_settings(load_optimizer_settings(base_dir).get("ollama"))
+
+
+def save_ollama_settings(value: Any, base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    settings = load_optimizer_settings(base_dir)
+    settings["ollama"] = normalize_ollama_settings(value)
+    _save_optimizer_settings(settings, base_dir)
+    return get_optimizer_settings_status(base_dir)
+
+
+def reset_ollama_settings(base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    settings = load_optimizer_settings(base_dir)
+    settings["ollama"] = dict(DEFAULT_OLLAMA_SETTINGS)
+    _save_optimizer_settings(settings, base_dir)
+    return get_optimizer_settings_status(base_dir)
+
+
 def env_hf_token() -> str:
     return str(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or "").strip()
 
@@ -364,6 +482,7 @@ def hf_auth_token(base_dir: str | os.PathLike[str] | None = None) -> str | None:
 def get_optimizer_settings_status(base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     configured = bool(configured_hf_token(base_dir))
     env_available = bool(env_hf_token())
+    ollama_settings = configured_ollama_settings(base_dir)
     if configured:
         auth_source = "configured"
     elif env_available:
@@ -379,6 +498,9 @@ def get_optimizer_settings_status(base_dir: str | os.PathLike[str] | None = None
         "promptTemplate": active_prompt_template(base_dir),
         "defaultPromptTemplate": DEFAULT_OPTIMIZER_PROMPT_TEMPLATE,
         "promptTemplateConfigured": bool(configured_prompt_template(base_dir)),
+        "ollamaSettings": ollama_settings,
+        "defaultOllamaSettings": dict(DEFAULT_OLLAMA_SETTINGS),
+        "ollamaConfigured": ollama_settings != DEFAULT_OLLAMA_SETTINGS,
     }
 
 
@@ -458,6 +580,346 @@ def _models_dir() -> Path:
     return Path.cwd() / "models"
 
 
+def _ollama_endpoint_url(base_url: str, endpoint: str) -> str:
+    base = _normalize_ollama_base_url(base_url)
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise PromptOptimizerError(f"Invalid Ollama URL: {base}")
+    return f"{base}/{endpoint.lstrip('/')}"
+
+
+def _ollama_request_json(
+    endpoint: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    base_url: str | None = None,
+    timeout: float = OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    method: str | None = None,
+) -> dict[str, Any]:
+    url = _ollama_endpoint_url(base_url or DEFAULT_OLLAMA_BASE_URL, endpoint)
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method or ("POST" if payload is not None else "GET"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            error_payload = json.loads(raw or "{}")
+            message = str(error_payload.get("error") or raw or exc.reason)
+        except Exception:
+            message = raw or str(exc.reason)
+        raise PromptOptimizerError(f"Ollama request failed: {message}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise PromptOptimizerError(f"Could not connect to Ollama at {url}: {exc}") from exc
+    try:
+        parsed = json.loads(text or "{}")
+    except json.JSONDecodeError as exc:
+        raise PromptOptimizerError(f"Ollama returned invalid JSON from {url}") from exc
+    if not isinstance(parsed, dict):
+        raise PromptOptimizerError(f"Ollama returned an unexpected response from {url}")
+    return parsed
+
+
+def _ollama_model_names_from_tags(payload: dict[str, Any]) -> list[str]:
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return []
+    names = []
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("model") or item.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return sorted(set(names), key=str.lower)
+
+
+def _ollama_capability_status(model: str, base_url: str) -> dict[str, Any]:
+    model_name = str(model or "").strip()
+    if not model_name:
+        return {
+            "capabilities": [],
+            "supports_vision": None,
+            "vision_status": "unknown",
+            "capability_error": "",
+        }
+    try:
+        payload = _ollama_request_json(
+            "/api/show",
+            {"model": model_name},
+            base_url=base_url,
+            timeout=OLLAMA_SHOW_TIMEOUT_SECONDS,
+        )
+    except PromptOptimizerError as exc:
+        return {
+            "capabilities": [],
+            "supports_vision": None,
+            "vision_status": "unknown",
+            "capability_error": str(exc),
+        }
+
+    raw_capabilities = payload.get("capabilities")
+    if not isinstance(raw_capabilities, list):
+        return {
+            "capabilities": [],
+            "supports_vision": None,
+            "vision_status": "unknown",
+            "capability_error": "",
+        }
+
+    capabilities = sorted(
+        {
+            str(capability).strip().lower()
+            for capability in raw_capabilities
+            if str(capability).strip()
+        }
+    )
+    supports_vision = "vision" in capabilities
+    return {
+        "capabilities": capabilities,
+        "supports_vision": supports_vision,
+        "vision_status": "supported" if supports_vision else "unsupported",
+        "capability_error": "",
+    }
+
+
+def _ollama_vision_required_message(model: str) -> str:
+    return (
+        f"Ollama model '{model}' does not advertise vision support. "
+        "The prompt optimizer needs a vision-capable Ollama model for image and video timeline sections. "
+        "Choose a local Ollama model whose capabilities include 'vision'."
+    )
+
+
+def _ollama_image_rejection_message(model: str, original_error: str) -> str:
+    return (
+        f"Ollama model '{model}' rejected image input. "
+        "The prompt optimizer needs a vision-capable Ollama model for image and video timeline sections. "
+        "Choose a model whose Ollama capabilities include 'vision', or reinstall the model with its required "
+        f"vision/mmproj support. Original Ollama error: {original_error}"
+    )
+
+
+def _ollama_error_is_image_rejection(message: str) -> bool:
+    normalized = str(message or "").lower()
+    return (
+        "image input is not supported" in normalized
+        or "does not support image" in normalized
+        or "doesn't support image" in normalized
+    )
+
+
+def ollama_connection_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    ollama_settings = normalize_ollama_settings(settings)
+    base_url = ollama_settings["base_url"]
+    configured_model = ollama_settings["model"]
+    try:
+        payload = _ollama_request_json(
+            "/api/tags",
+            base_url=base_url,
+            timeout=OLLAMA_TAGS_TIMEOUT_SECONDS,
+            method="GET",
+        )
+    except PromptOptimizerError as exc:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "error": str(exc),
+            "base_url": base_url,
+            "models": [],
+            "configured_model": configured_model,
+            "active_model": "",
+            "capabilities": [],
+            "supports_vision": None,
+            "vision_status": "unknown",
+            "capability_error": "",
+        }
+
+    local_models = _ollama_model_names_from_tags(payload)
+    active_model = ""
+    if configured_model and configured_model in local_models:
+        active_model = configured_model
+        status = "ready"
+    elif configured_model:
+        active_model = configured_model
+        status = "model_missing"
+    elif len(local_models) == 1:
+        active_model = local_models[0]
+        status = "ready"
+    elif local_models:
+        status = "choose_model"
+    else:
+        status = "no_models"
+
+    status_payload: dict[str, Any] = {
+        "available": True,
+        "status": status,
+        "error": "",
+        "base_url": base_url,
+        "models": local_models,
+        "configured_model": configured_model,
+        "active_model": active_model,
+        "capabilities": [],
+        "supports_vision": None,
+        "vision_status": "unknown",
+        "capability_error": "",
+    }
+    if status == "ready" and active_model:
+        status_payload.update(_ollama_capability_status(active_model, base_url))
+    return status_payload
+
+
+def _ollama_active_model(settings: dict[str, Any] | None = None) -> str:
+    ollama_settings = normalize_ollama_settings(settings)
+    status = ollama_connection_status(ollama_settings)
+    if status["status"] == "ready" and status["active_model"]:
+        return str(status["active_model"])
+    if status["status"] == "unavailable":
+        raise PromptOptimizerError(status["error"] or f"Could not connect to Ollama at {ollama_settings['base_url']}")
+    if status["status"] == "model_missing":
+        raise PromptOptimizerError(
+            f"Ollama model '{ollama_settings['model']}' is not installed locally. "
+            "Choose one of the installed Ollama models in optimizer settings."
+        )
+    if status["status"] == "choose_model":
+        raise PromptOptimizerError("Multiple Ollama models are installed. Choose one in optimizer settings first.")
+    raise PromptOptimizerError("No local Ollama models are installed. Install a model in Ollama before using this backend.")
+
+
+def _ollama_keep_alive_value(settings: dict[str, Any], final_request: bool) -> str | int | None:
+    seconds = _coerce_int(settings.get("keep_alive_seconds"), DEFAULT_OLLAMA_KEEP_ALIVE_SECONDS, 0)
+    if seconds <= 0:
+        return 0 if final_request else None
+    return f"{seconds}s"
+
+
+def _ollama_generation_options(settings: dict[str, Any]) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    for key in OLLAMA_NUMERIC_OPTION_KEYS:
+        value = settings.get(key)
+        if key in {"top_k", "num_ctx", "num_predict"}:
+            number = _coerce_int(value, int(DEFAULT_OLLAMA_SETTINGS[key]), 0)
+            if number > 0:
+                options[key] = number
+        else:
+            options[key] = _coerce_float(value, float(DEFAULT_OLLAMA_SETTINGS[key]), 0.0)
+    return options
+
+
+def _ollama_image_base64(image: Image.Image) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _ollama_prompt(images: list[tuple[str, Image.Image]], user_prompt: str) -> str:
+    labels = [f"{label} image is attached." for label, _image in images]
+    return "\n".join([*labels, user_prompt]).strip()
+
+
+def build_optimizer_user_prompt(
+    segment: dict[str, Any],
+    index: int,
+    total: int,
+    previous_prompt: str = "",
+    next_prompt: str = "",
+) -> str:
+    direction = clean_prompt_text(segment.get("direction") or segment.get("prompt"))
+    cut = segment_requests_cut(segment)
+    previous_prompt = "" if cut else clean_prompt_text(previous_prompt)
+    next_prompt = "" if cut else clean_prompt_text(next_prompt)
+    parts = [
+        f"Timeline segment {index + 1} of {total}.",
+        f"Segment type: {segment_type(segment)}.",
+        f"User direction: {direction or 'none'}.",
+        visual_context_instruction(segment, cut),
+    ]
+    text_instruction = text_segment_instruction(segment)
+    if text_instruction:
+        parts.append(text_instruction)
+    if cut:
+        parts.append("This segment is a new cut; do not bridge motion from adjacent segments.")
+    else:
+        parts.append(f"Previous segment motion context: {previous_prompt or 'none'}.")
+        parts.append(f"Next segment motion hint: {next_prompt or 'none'}.")
+    parts.append("Return only the optimized prompt text.")
+    return "\n".join(parts)
+
+
+def build_reference_caption_user_prompt(reference: dict[str, Any]) -> str:
+    direction = reference_direction_text(reference)
+    label = clean_prompt_text(reference.get("label") or reference.get("id")) or "reference"
+    return "\n".join(
+        [
+            f"Reference label: {label}.",
+            f"User description: {direction or 'none'}.",
+            "Return only the optimized reference caption text.",
+        ]
+    )
+
+
+def _generate_ollama(
+    spec: OptimizerModelSpec,
+    images: list[tuple[str, Image.Image]],
+    system_prompt: str,
+    user_prompt: str,
+    status_cb: Any = None,
+    *,
+    final_request: bool = False,
+) -> str:
+    status = status_cb or _noop_status
+    settings = configured_ollama_settings()
+    model = _ollama_active_model(settings)
+    if images:
+        capability = _ollama_capability_status(model, settings["base_url"])
+        if capability.get("supports_vision") is False:
+            raise PromptOptimizerError(_ollama_vision_required_message(model))
+    keep_alive = _ollama_keep_alive_value(settings, final_request)
+    payload: dict[str, Any] = {
+        "model": model,
+        "system": clean_prompt_text(system_prompt),
+        "prompt": _ollama_prompt(images, user_prompt),
+        "stream": False,
+        "think": False,
+        "options": _ollama_generation_options(settings),
+    }
+    if images:
+        payload["images"] = [_ollama_image_base64(image) for _label, image in images]
+    if keep_alive is not None:
+        payload["keep_alive"] = keep_alive
+    status(f"Generating with Ollama model '{model}' through {settings['base_url']}...")
+    try:
+        response = _ollama_request_json(
+            "/api/generate",
+            payload,
+            base_url=settings["base_url"],
+            timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
+        )
+    except PromptOptimizerError as exc:
+        if images and _ollama_error_is_image_rejection(str(exc)):
+            raise PromptOptimizerError(_ollama_image_rejection_message(model, str(exc))) from exc
+        raise
+    return str(response.get("response") or "")
+
+
+def _unload_ollama_model(settings: dict[str, Any] | None = None) -> bool:
+    ollama_settings = normalize_ollama_settings(settings or configured_ollama_settings())
+    model = _ollama_active_model(ollama_settings)
+    _ollama_request_json(
+        "/api/generate",
+        {"model": model, "keep_alive": 0, "stream": False},
+        base_url=ollama_settings["base_url"],
+        timeout=OLLAMA_TAGS_TIMEOUT_SECONDS,
+    )
+    return True
+
+
 def parse_hf_file_url(url: str) -> OptimizerModelFile:
     parsed = urlparse(str(url or "").strip())
     parts = [unquote(part) for part in parsed.path.split("/") if part]
@@ -524,7 +986,7 @@ def _transformers_snapshot_downloaded(path: Path) -> bool:
 
 
 def model_path_for(spec: OptimizerModelSpec) -> Path | None:
-    if spec.backend == "fallback":
+    if spec.backend in {"fallback", "ollama"}:
         return None
     if spec.file_urls:
         paths = model_file_paths_for(spec)
@@ -537,6 +999,8 @@ def model_path_for(spec: OptimizerModelSpec) -> Path | None:
 def model_downloaded(spec: OptimizerModelSpec) -> bool:
     if spec.backend == "fallback":
         return True
+    if spec.backend == "ollama":
+        return ollama_connection_status(configured_ollama_settings())["status"] == "ready"
     if spec.file_urls:
         paths = model_file_paths_for(spec)
         return bool(paths) and all(_nonempty_file(path) for path in paths)
@@ -558,6 +1022,29 @@ def resolve_model(alias: str | None) -> OptimizerModelSpec:
 def get_model_statuses() -> dict[str, Any]:
     models = []
     for spec in MODEL_REGISTRY.values():
+        if spec.backend == "ollama":
+            settings = configured_ollama_settings()
+            ollama_status = ollama_connection_status(settings)
+            downloaded = ollama_status["status"] == "ready"
+            active_model = str(ollama_status.get("active_model") or "")
+            models.append(
+                {
+                    "alias": spec.alias,
+                    "display_name": "Ollama local",
+                    "repo_id": spec.repo_id,
+                    "backend": spec.backend,
+                    "downloaded": downloaded,
+                    "local_path": "",
+                    "file_urls": [],
+                    "local_files": [],
+                    "missing_dependencies": [],
+                    "status": "ready" if downloaded else ollama_status["status"],
+                    "ollama": ollama_status,
+                    "ollama_settings": settings,
+                    "active_model": active_model,
+                }
+            )
+            continue
         path = model_path_for(spec)
         missing = missing_dependencies(spec)
         downloaded = model_downloaded(spec)
@@ -588,9 +1075,14 @@ def get_model_statuses() -> dict[str, Any]:
 def unload_optimizer_model(alias: str | None = None) -> dict[str, Any]:
     unloaded = []
     torch_modules = []
+    if alias:
+        spec = resolve_model(alias)
+        if spec.backend == "ollama":
+            _unload_ollama_model()
+            return {"ok": True, "unloaded": [spec.alias]}
+
     with _LOADED_MODELS_LOCK:
         if alias:
-            spec = resolve_model(alias)
             keys = [spec.alias]
         else:
             keys = list(_LOADED_MODELS.keys())
@@ -1710,6 +2202,16 @@ def optimize_segments(payload: dict[str, Any], status_cb: Any = None) -> dict[st
 
 
 def _release_optimizer_model_after_run(spec: OptimizerModelSpec, status_cb: Any = None) -> None:
+    if spec.backend == "ollama":
+        settings = configured_ollama_settings()
+        if _coerce_int(settings.get("keep_alive_seconds"), DEFAULT_OLLAMA_KEEP_ALIVE_SECONDS, 0) <= 0:
+            status = status_cb or _noop_status
+            try:
+                status("Releasing Ollama optimizer model...")
+                _unload_ollama_model(settings)
+            except Exception:
+                pass
+        return
     # There is no keep-alive daemon for the optimizer models, so the VRAM must
     # be handed back to the rest of the workflow as soon as the job is done.
     if spec.alias not in _LOADED_MODELS:
@@ -1720,6 +2222,14 @@ def _release_optimizer_model_after_run(spec: OptimizerModelSpec, status_cb: Any 
 
 
 def _cleanup_optimizer_model_after_exception(spec: OptimizerModelSpec) -> None:
+    if spec.backend == "ollama":
+        settings = configured_ollama_settings()
+        if _coerce_int(settings.get("keep_alive_seconds"), DEFAULT_OLLAMA_KEEP_ALIVE_SECONDS, 0) <= 0:
+            try:
+                _unload_ollama_model(settings)
+            except Exception:
+                pass
+        return
     try:
         if spec.alias in _LOADED_MODELS:
             unload_optimizer_model(spec.alias)
@@ -1764,6 +2274,7 @@ def _optimize_segments_with_model(spec: OptimizerModelSpec, payload: dict[str, A
         if not segment.get("selected", True):
             continue
         generated_count += 1
+        final_request = generated_count == selected_total
         cut = segment_requests_cut(segment)
         previous_prompt = "" if cut else _previous_context(segments, index, generated_by_id)
         next_prompt = "" if cut else _next_context(segments, index)
@@ -1801,6 +2312,12 @@ def _optimize_segments_with_model(spec: OptimizerModelSpec, payload: dict[str, A
                 loaded = _load_llama_cpp_vision_model(spec, path, status)  # type: ignore[arg-type]
                 status(f"Generating prompt {generated_count} of {selected_total}...", generated_count, selected_total)
                 optimized = _generate_llama_cpp_vision(spec, path, images, instruction, _noop_status, loaded=loaded)  # type: ignore[arg-type]
+            elif spec.backend == "ollama":
+                images = _qwen_context_images(segments, index, not cut)
+                user_prompt = build_optimizer_user_prompt(segment, index, total, previous_prompt, next_prompt)
+                prompt_optimizer_vram_preflight(status)
+                status(f"Generating prompt {generated_count} of {selected_total}...", generated_count, selected_total)
+                optimized = _generate_ollama(spec, images, instruction, user_prompt, _noop_status, final_request=final_request)
             elif spec.backend == "gemma_safetensors":
                 status(f"Generating prompt {generated_count} of {selected_total}...", generated_count, selected_total)
                 optimized = _generate_gemma_safetensors(spec, path, instruction, _noop_status)  # type: ignore[arg-type]
@@ -1820,6 +2337,7 @@ def _optimize_segments_with_model(spec: OptimizerModelSpec, payload: dict[str, A
             continue
         ref_id = str(reference.get("id") or reference.get("label") or "")
         generated_count += 1
+        final_request = generated_count == selected_total
         instruction = build_reference_caption_instruction(reference, reference_prompt_template)
 
         if spec.backend == "fallback":
@@ -1859,6 +2377,15 @@ def _optimize_segments_with_model(spec: OptimizerModelSpec, payload: dict[str, A
                     loaded = _load_llama_cpp_vision_model(spec, path, status)  # type: ignore[arg-type]
                     status(f"Generating reference caption {generated_count} of {selected_total}...", generated_count, selected_total)
                     optimized = _generate_llama_cpp_vision(spec, path, images, instruction, _noop_status, loaded=loaded)  # type: ignore[arg-type]
+            elif spec.backend == "ollama":
+                images = _reference_context_images(reference)
+                if not images and not reference_direction_text(reference):
+                    optimized = fallback_reference_caption(reference)
+                else:
+                    user_prompt = build_reference_caption_user_prompt(reference)
+                    prompt_optimizer_vram_preflight(status)
+                    status(f"Generating reference caption {generated_count} of {selected_total}...", generated_count, selected_total)
+                    optimized = _generate_ollama(spec, images, instruction, user_prompt, _noop_status, final_request=final_request)
             elif spec.backend == "gemma_safetensors":
                 status(f"Generating reference caption {generated_count} of {selected_total}...", generated_count, selected_total)
                 optimized = _generate_gemma_safetensors(spec, path, instruction, _noop_status)  # type: ignore[arg-type]

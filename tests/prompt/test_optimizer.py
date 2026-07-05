@@ -96,6 +96,25 @@ def test_settings_save_clear_template_and_token(tmp_path):
     assert reset["promptTemplateConfigured"] is False
     assert reset["promptTemplate"] == optimizer.DEFAULT_OPTIMIZER_PROMPT_TEMPLATE
 
+    ollama = optimizer.save_ollama_settings(
+        {
+            "base_url": "http://127.0.0.1:11434/",
+            "model": "llava:latest",
+            "keep_alive_seconds": "0",
+            "temperature": "0.15",
+            "top_p": "0.8",
+            "top_k": "30",
+            "repeat_penalty": "1.1",
+            "num_ctx": "2048",
+            "num_predict": "64",
+        },
+        tmp_path,
+    )
+    assert ollama["ollamaSettings"]["base_url"] == "http://127.0.0.1:11434"
+    assert ollama["ollamaSettings"]["model"] == "llava:latest"
+    assert ollama["ollamaSettings"]["keep_alive_seconds"] == 0
+    assert ollama["ollamaSettings"]["num_predict"] == 64
+
 
 def test_timing_profile_records_average(tmp_path):
     spec = optimizer.resolve_model("fallback_text_backend")
@@ -108,6 +127,240 @@ def test_timing_profile_records_average(tmp_path):
     assert second["sample_count"] == 2
     assert stored["average_seconds"] == pytest.approx(15.0)
     assert stored["last_seconds"] == pytest.approx(20.0)
+
+
+def test_ollama_status_uses_single_local_model_without_pulling(monkeypatch):
+    def fake_request(endpoint, payload=None, **kwargs):
+        if endpoint == "/api/tags":
+            assert payload is None
+            return {"models": [{"name": "llava:latest"}]}
+        if endpoint == "/api/show":
+            assert payload == {"model": "llava:latest"}
+            return {"capabilities": ["completion", "vision"]}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(optimizer, "_ollama_request_json", fake_request)
+
+    status = optimizer.ollama_connection_status({"base_url": optimizer.DEFAULT_OLLAMA_BASE_URL, "model": ""})
+
+    assert status["status"] == "ready"
+    assert status["active_model"] == "llava:latest"
+    assert status["capabilities"] == ["completion", "vision"]
+    assert status["supports_vision"] is True
+
+
+def test_ollama_status_reports_non_vision_capability(monkeypatch):
+    def fake_request(endpoint, payload=None, **kwargs):
+        if endpoint == "/api/tags":
+            return {"models": [{"name": "mistral:latest"}]}
+        if endpoint == "/api/show":
+            assert payload == {"model": "mistral:latest"}
+            return {"capabilities": ["completion"]}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(optimizer, "_ollama_request_json", fake_request)
+
+    status = optimizer.ollama_connection_status({"base_url": optimizer.DEFAULT_OLLAMA_BASE_URL, "model": "mistral:latest"})
+
+    assert status["status"] == "ready"
+    assert status["active_model"] == "mistral:latest"
+    assert status["supports_vision"] is False
+    assert status["vision_status"] == "unsupported"
+
+
+def test_ollama_status_requires_choice_when_multiple_local_models(monkeypatch):
+    monkeypatch.setattr(
+        optimizer,
+        "_ollama_request_json",
+        lambda *args, **kwargs: {"models": [{"name": "llava:latest"}, {"name": "mistral:latest"}]},
+    )
+
+    status = optimizer.ollama_connection_status({"base_url": optimizer.DEFAULT_OLLAMA_BASE_URL, "model": ""})
+
+    assert status["status"] == "choose_model"
+    assert status["active_model"] == ""
+
+
+def test_generate_ollama_sends_images_and_final_keep_alive(monkeypatch):
+    calls = []
+
+    def fake_request(endpoint, payload=None, **kwargs):
+        if endpoint == "/api/tags":
+            return {"models": [{"name": "llava:latest"}]}
+        if endpoint == "/api/show":
+            return {"capabilities": ["completion", "vision"]}
+        if endpoint == "/api/generate":
+            calls.append(payload)
+            return {"response": "visual optimized prompt"}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(optimizer, "_ollama_request_json", fake_request)
+    monkeypatch.setattr(
+        optimizer,
+        "configured_ollama_settings",
+        lambda base_dir=None: optimizer.normalize_ollama_settings(
+            {"model": "llava:latest", "keep_alive_seconds": 0, "num_predict": 33}
+        ),
+    )
+    image = Image.new("RGB", (8, 8), color=(10, 20, 30))
+    spec = optimizer.resolve_model(optimizer.OLLAMA_LOCAL_ALIAS)
+
+    response = optimizer._generate_ollama(
+        spec,
+        [("Current", image)],
+        "System optimizer instructions.",
+        "Write the motion prompt.",
+        final_request=True,
+    )
+
+    assert response == "visual optimized prompt"
+    assert calls[0]["model"] == "llava:latest"
+    assert calls[0]["system"] == "System optimizer instructions."
+    assert calls[0]["prompt"].endswith("Write the motion prompt.")
+    assert calls[0]["think"] is False
+    assert calls[0]["keep_alive"] == 0
+    assert calls[0]["options"]["num_predict"] == 33
+    assert calls[0]["images"]
+    assert "Current image is attached." in calls[0]["prompt"]
+
+
+def test_generate_ollama_keeps_intermediate_zero_keep_alive_loaded(monkeypatch):
+    calls = []
+
+    def fake_request(endpoint, payload=None, **kwargs):
+        if endpoint == "/api/tags":
+            return {"models": [{"name": "llava:latest"}]}
+        if endpoint == "/api/show":
+            return {"capabilities": ["completion", "vision"]}
+        if endpoint == "/api/generate":
+            calls.append(payload)
+            return {"response": "intermediate prompt"}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(optimizer, "_ollama_request_json", fake_request)
+    monkeypatch.setattr(
+        optimizer,
+        "configured_ollama_settings",
+        lambda base_dir=None: optimizer.normalize_ollama_settings(
+            {"model": "llava:latest", "keep_alive_seconds": 0}
+        ),
+    )
+
+    optimizer._generate_ollama(
+        optimizer.resolve_model(optimizer.OLLAMA_LOCAL_ALIAS),
+        [],
+        "System optimizer instructions.",
+        "Write the motion prompt.",
+        final_request=False,
+    )
+
+    assert "keep_alive" not in calls[0]
+
+
+def test_generate_ollama_rejects_image_for_model_without_vision(monkeypatch):
+    calls = []
+
+    def fake_request(endpoint, payload=None, **kwargs):
+        if endpoint == "/api/tags":
+            return {"models": [{"name": "mistral:latest"}]}
+        if endpoint == "/api/show":
+            return {"capabilities": ["completion"]}
+        if endpoint == "/api/generate":
+            calls.append(payload)
+            return {"response": "should not generate"}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(optimizer, "_ollama_request_json", fake_request)
+    monkeypatch.setattr(
+        optimizer,
+        "configured_ollama_settings",
+        lambda base_dir=None: optimizer.normalize_ollama_settings({"model": "mistral:latest"}),
+    )
+    image = Image.new("RGB", (8, 8), color=(10, 20, 30))
+
+    with pytest.raises(optimizer.PromptOptimizerError, match="does not advertise vision support"):
+        optimizer._generate_ollama(
+            optimizer.resolve_model(optimizer.OLLAMA_LOCAL_ALIAS),
+            [("Current", image)],
+            "System optimizer instructions.",
+            "Write the motion prompt.",
+        )
+
+    assert calls == []
+
+
+def test_generate_ollama_wraps_image_rejection_when_capability_is_unknown(monkeypatch):
+    def fake_request(endpoint, payload=None, **kwargs):
+        if endpoint == "/api/tags":
+            return {"models": [{"name": "custom-vl:latest"}]}
+        if endpoint == "/api/show":
+            return {}
+        if endpoint == "/api/generate":
+            raise optimizer.PromptOptimizerError("Ollama request failed: image input is not supported")
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(optimizer, "_ollama_request_json", fake_request)
+    monkeypatch.setattr(
+        optimizer,
+        "configured_ollama_settings",
+        lambda base_dir=None: optimizer.normalize_ollama_settings({"model": "custom-vl:latest"}),
+    )
+    image = Image.new("RGB", (8, 8), color=(10, 20, 30))
+
+    with pytest.raises(optimizer.PromptOptimizerError, match="rejected image input"):
+        optimizer._generate_ollama(
+            optimizer.resolve_model(optimizer.OLLAMA_LOCAL_ALIAS),
+            [("Current", image)],
+            "System optimizer instructions.",
+            "Write the motion prompt.",
+        )
+
+
+def test_optimize_segments_ollama_uses_timeline_images(monkeypatch):
+    monkeypatch.setattr(optimizer, "ensure_model_downloaded", lambda spec, status_cb=None: None)
+    monkeypatch.setattr(optimizer, "prompt_optimizer_vram_preflight", lambda status_cb=None: {"ok": True})
+    monkeypatch.setattr(optimizer, "_unload_ollama_model", lambda settings=None: True)
+    calls = []
+
+    def fake_generate(spec, images, system_prompt, user_prompt, status_cb=None, final_request=False):
+        calls.append(
+            {
+                "images": images,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "final_request": final_request,
+            }
+        )
+        return "visual timeline prompt"
+
+    monkeypatch.setattr(optimizer, "_generate_ollama", fake_generate)
+
+    result = optimizer.optimize_segments(
+        {
+            "model": optimizer.OLLAMA_LOCAL_ALIAS,
+            "mode": "sfw",
+            "segments": [
+                {
+                    "id": "section_image",
+                    "type": "Image",
+                    "selected": True,
+                    "direction": "The character turns toward the camera",
+                    "image_data": data_url_image(),
+                    "start": 0,
+                    "length": 24,
+                }
+            ],
+            "references": [],
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["prompt"] == "visual timeline prompt"
+    assert calls[0]["final_request"] is True
+    assert calls[0]["images"][0][0] == "Current"
+    assert calls[0]["images"][0][1].size == (16, 16)
+    assert "User direction to preserve: The character turns toward the camera." in calls[0]["system_prompt"]
+    assert "User direction: The character turns toward the camera." in calls[0]["user_prompt"]
 
 
 def test_download_progress_bar_supports_thread_map():

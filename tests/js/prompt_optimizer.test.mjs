@@ -51,6 +51,13 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
   assert.equal(optimizerSource.includes('body: JSON.stringify({'), true);
   assert.equal(optimizerSource.includes("segments,"), true);
   assert.equal(optimizerSource.includes("references: []"), true);
+  assert.equal(optimizerSource.includes('button class="edit-ollama icon"'), true);
+  assert.equal(optimizerSource.includes("settings: `<svg viewBox=\"0 0 24 24\"><path d=\"M12 15.5a3.5"), true);
+  assert.equal(optimizerSource.includes('select class="ollama-model"'), true);
+  assert.equal(optimizerSource.includes("currentOllamaSettingsPayload"), true);
+  assert.equal(optimizerSource.includes('loadedModelBackend !== "ollama"'), true);
+  assert.equal(optimizerSource.includes("does not advertise vision support"), true);
+  assert.equal(optimizerSource.includes("ollamaVisionLabel"), true);
   assert.equal(optimizerSource.includes("mediaPath: item.mediaPath ||"), true);
   assert.equal(optimizerSource.includes("img.src = item.thumbnailUrl"), true);
   assert.equal(optimizerSource.includes("showMediaPreview(documentRef"), true);

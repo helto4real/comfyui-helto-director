@@ -17,7 +17,9 @@ try:
             get_optimizer_settings_status,
             optimize_segments,
             reset_prompt_template,
+            reset_ollama_settings,
             save_hf_token,
+            save_ollama_settings,
             save_prompt_template,
             start_optimizer_job,
             unload_optimizer_model,
@@ -31,7 +33,9 @@ try:
             get_optimizer_settings_status,
             optimize_segments,
             reset_prompt_template,
+            reset_ollama_settings,
             save_hf_token,
+            save_ollama_settings,
             save_prompt_template,
             start_optimizer_job,
             unload_optimizer_model,
@@ -84,6 +88,10 @@ def register_prompt_optimizer_routes() -> bool:
     async def post_prompt_optimizer_settings(request):
         try:
             payload = await request.json()
+            if payload.get("reset_ollama_settings"):
+                return web.json_response(reset_ollama_settings())
+            if "ollama" in payload:
+                return web.json_response(save_ollama_settings(payload.get("ollama")))
             if payload.get("reset_prompt_template"):
                 return web.json_response(reset_prompt_template())
             if "prompt_template" in payload:
