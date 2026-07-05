@@ -1,6 +1,6 @@
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
-import { htdScrollbarBlock, htdTokenBlock } from "./timeline/design_tokens.js";
+import { applyHtdNodeTheme, HTD, htdScrollbarBlock, htdTokenBlock } from "./timeline/design_tokens.js";
 import { setupOverlayDialog } from "./timeline/dialog.js";
 
 const NODE_NAME = "HeltoTimelineLoraConfiguration";
@@ -133,11 +133,11 @@ function drawTogglePart(ctx, { posX, posY, height, value }) {
     ctx.beginPath();
     ctx.roundRect(posX + 4, posY + 4, toggleBgWidth - 8, height - 8, [height * 0.5]);
     ctx.globalAlpha = app.canvas.editor_alpha * 0.25;
-    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.fillStyle = HTD.controlWash;
     ctx.fill();
     ctx.globalAlpha = app.canvas.editor_alpha;
   }
-  ctx.fillStyle = value === true ? "#89B" : "#888";
+  ctx.fillStyle = value === true ? HTD.accent : HTD.textFaint;
   const toggleX =
     lowQuality || value === false ? posX + height * 0.5 : value === true ? posX + height : posX + height * 0.75;
   ctx.beginPath();
@@ -181,14 +181,14 @@ function drawInfoIcon(ctx, x, y, size, treatment = "GRAYED") {
   ctx.save();
   ctx.beginPath();
   ctx.roundRect(x, y, size, size, [size * 0.1]);
-  ctx.fillStyle = treatment === "GRAYED" ? "#aaa" : "#2f82ec";
+  ctx.fillStyle = treatment === "GRAYED" ? HTD.textFaint : HTD.accent;
   ctx.strokeStyle = ctx.fillStyle;
   if (treatment === "FILLED") {
     ctx.fill();
   } else {
     ctx.stroke();
   }
-  ctx.strokeStyle = "#fff";
+  ctx.strokeStyle = HTD.text;
   ctx.lineWidth = 2;
   const midX = x + size / 2;
   const serif = size * 0.175;
@@ -455,7 +455,7 @@ function ensureDialogStyles() {
       z-index: 10000;
       display: grid;
       place-items: center;
-      background: rgba(6, 9, 15, 0.72);
+      background: var(--htd-overlay);
       backdrop-filter: blur(4px);
     }
     .rgthree-info-dialog {
@@ -465,10 +465,10 @@ function ensureDialogStyles() {
       overflow: hidden;
       border: 1px solid var(--htd-border-strong);
       border-radius: var(--htd-radius-lg);
-      background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96));
+      background: linear-gradient(135deg, var(--htd-modal-from), var(--htd-modal-to));
       color: var(--htd-text);
       box-shadow: var(--htd-shadow-pop);
-      font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      font: 13px/1.4 var(--htd-font-sans);
       -webkit-font-smoothing: antialiased;
     }
     .aio-rgthree-dialog-title {
@@ -498,10 +498,10 @@ function ensureDialogStyles() {
       font-size: 30px;
       line-height: 1;
       cursor: pointer;
-      transition: color .12s ease;
+      transition: color var(--htd-transition);
     }
     .helto-lora-close:hover {
-      color: #fff;
+      color: var(--htd-text);
     }
     .aio-rgthree-dialog-content {
       padding: 12px 16px 16px;
@@ -528,12 +528,12 @@ function ensureDialogStyles() {
       color: var(--htd-text);
       padding: 6px 16px;
       cursor: pointer;
-      transition: background .12s ease, border-color .12s ease, color .12s ease;
+      transition: background var(--htd-transition), border-color var(--htd-transition), color var(--htd-transition);
     }
     .rgthree-button:hover {
       background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3));
       border-color: var(--htd-border-hover);
-      color: #fff;
+      color: var(--htd-text);
     }
     .rgthree-button:focus-visible {
       outline: none;
@@ -582,9 +582,9 @@ function ensureDialogStyles() {
       display: none;
     }
     .rgthree-info-dialog .rgthree-info-area > li.-type > * {
-      border-color: #355f8f;
-      background: #14273d;
-      color: var(--htd-info, #b9dafc);
+      border-color: var(--htd-info-border);
+      background: var(--htd-info-bg);
+      color: var(--htd-info);
     }
     .rgthree-info-dialog .rgthree-info-area > li.rgthree-info-menu {
       margin-left: auto;
@@ -722,12 +722,12 @@ function ensureDialogStyles() {
       cursor: pointer;
       white-space: nowrap;
       max-width: 183px;
-      transition: background .12s ease, border-color .12s ease, color .12s ease;
+      transition: background var(--htd-transition), border-color var(--htd-transition), color var(--htd-transition);
     }
     .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list > li:hover {
       background: var(--htd-surface-hover);
       border-color: var(--htd-border-hover);
-      color: #fff;
+      color: var(--htd-text);
     }
     .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list > li > svg {
       width: auto;
@@ -746,13 +746,13 @@ function ensureDialogStyles() {
       align-items: center;
       justify-content: center;
       padding: 0 0.5em;
-      background: rgba(0, 0, 0, 0.2);
+      background: color-mix(in srgb, var(--htd-bg) 20%, transparent);
     }
     .rgthree-info-dialog .rgthree-info-table td > ul.rgthree-info-trained-words-list > li.-rgthree-is-selected {
       background: var(--htd-accent-bg);
       border-color: var(--htd-accent-border);
       color: var(--htd-accent-strong);
-      box-shadow: var(--htd-shadow-glow, 0 0 10px rgba(241,199,92,0.35));
+      box-shadow: var(--htd-shadow-glow);
     }
     .rgthree-info-dialog .rgthree-info-images {
       list-style: none;
@@ -793,7 +793,7 @@ function ensureDialogStyles() {
       bottom: 0;
       padding: 12px;
       font-size: 12px;
-      background: rgba(0, 0, 0, 0.85);
+      background: color-mix(in srgb, var(--htd-bg) 85%, transparent);
       opacity: 0;
       transform: translateY(50px);
       transition: all 0.25s ease-in-out;
@@ -1298,10 +1298,10 @@ class LoraRowWidget {
 
   strengthTextColor(value) {
     if (this.loraInfo?.strengthMax != null && value > this.loraInfo.strengthMax) {
-      return "#c66";
+      return HTD.danger;
     }
     if (this.loraInfo?.strengthMin != null && value < this.loraInfo.strengthMin) {
-      return "#c66";
+      return HTD.danger;
     }
     return undefined;
   }
@@ -1501,6 +1501,7 @@ function ensureLoraUi(node) {
   if (!isAioLoraNode(node)) {
     return;
   }
+  applyHtdNodeTheme(node, { appRef: app });
   node.serialize_widgets = true;
   const hasHeader = node.widgets?.some((widget) => widget.name === HEADER_NAME);
   const hasButton = node.widgets?.some((widget) => widget._heltoLoraAddButton === true);
@@ -1523,6 +1524,7 @@ function patchLoraNodeType(nodeType) {
   const originalCreated = nodeType.prototype.onNodeCreated;
   nodeType.prototype.onNodeCreated = function () {
     originalCreated?.apply(this, arguments);
+    applyHtdNodeTheme(this, { appRef: app });
     this.serialize_widgets = true;
     removeDynamicWidgets(this);
     addHeader(this);
@@ -1534,6 +1536,7 @@ function patchLoraNodeType(nodeType) {
   const originalConfigure = nodeType.prototype.configure;
   nodeType.prototype.configure = function (info) {
     originalConfigure?.apply(this, arguments);
+    applyHtdNodeTheme(this, { appRef: app });
     this.serialize_widgets = true;
     restoreRows(this, info);
   };

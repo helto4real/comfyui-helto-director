@@ -1,4 +1,4 @@
-import { htdTokenBlock } from "./design_tokens.js";
+import { applyHtdNodeTheme, htdTokenBlock } from "./design_tokens.js";
 import {
   generatedTakePayloadAlreadyApplied,
   registerGeneratedTakePayload,
@@ -57,6 +57,7 @@ export function installTakeCapturePreview(nodeType, appRef, apiRef) {
   const onNodeCreated = nodeType.prototype.onNodeCreated;
   nodeType.prototype.onNodeCreated = function () {
     const result = onNodeCreated?.apply(this, arguments);
+    applyHtdNodeTheme(this, { appRef });
     if (repairTakeCaptureShiftedSocketlessWidgetValues(this)) {
       setCanvasDirty(this, appRef);
     }
@@ -595,9 +596,9 @@ function installTakeCapturePreviewStyles(documentRef) {
   style.id = STYLE_ID;
   style.textContent = `
     ${htdTokenBlock(".helto-take-capture-preview")}
-    /* Near-black covers (#060a10 / #050505) are intentional privacy concealment — keep them opaque and dark. */
-    .helto-take-capture-preview { width: 100%; height: ${PREVIEW_HEIGHT}px; box-sizing: border-box; background: #060a10; border: 1px solid var(--htd-border); border-radius: var(--htd-radius); overflow: hidden; display: flex; align-items: center; justify-content: center; }
-    .helto-take-capture-preview video { width: 100%; height: 100%; object-fit: contain; background: #050505; opacity: 0; transition: opacity 120ms ease; }
+    /* Near-black covers are intentional privacy concealment — keep them opaque and dark. */
+    .helto-take-capture-preview { width: 100%; height: ${PREVIEW_HEIGHT}px; box-sizing: border-box; background: var(--htd-privacy-cover); border: 1px solid var(--htd-border); border-radius: var(--htd-radius); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .helto-take-capture-preview video { width: 100%; height: 100%; object-fit: contain; background: var(--htd-privacy-cover-strong); opacity: 0; transition: opacity 120ms ease; }
     .helto-take-capture-preview:hover video,
     .helto-take-capture-preview.is-revealed video { opacity: 1; }
   `;

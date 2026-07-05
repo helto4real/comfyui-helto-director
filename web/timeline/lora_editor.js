@@ -492,8 +492,7 @@ function installLoraEditorStyles(documentRef) {
   style.id = STYLE_ID;
   style.textContent = `
     ${htdTokenBlock(".htd-lora-editor-dialog, .htd-lora-info-dialog")}
-    .htd-lora-editor-dialog, .htd-lora-info-dialog { position: fixed; inset: 0; z-index: 10080; display: flex; align-items: center; justify-content: center; padding: 18px; box-sizing: border-box; background: rgba(6, 9, 15, 0.74); backdrop-filter: blur(3px); color: var(--htd-text); font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
-      --htd-shadow-pop: 0 18px 48px rgba(0,0,0,0.55); }
+    .htd-lora-editor-dialog, .htd-lora-info-dialog { position: fixed; inset: 0; z-index: 10080; display: flex; align-items: center; justify-content: center; padding: 18px; box-sizing: border-box; background: var(--htd-overlay); backdrop-filter: blur(3px); color: var(--htd-text); font: var(--htd-font-size) / var(--htd-line) var(--htd-font-sans); -webkit-font-smoothing: antialiased; }
     .htd-lora-editor-panel, .htd-lora-info-panel { width: min(920px, 100%); max-height: min(760px, 96vh); min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); background: var(--htd-surface); box-shadow: var(--htd-shadow-pop); overflow: hidden; }
     .htd-lora-info-panel { width: min(560px, 100%); padding: 12px; gap: 8px; }
     .htd-lora-editor-header, .htd-lora-editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--htd-border); }
@@ -509,17 +508,17 @@ function installLoraEditorStyles(documentRef) {
     .htd-lora-editor-row.has-clip-strength { grid-template-columns: 22px minmax(180px, 1fr) 74px 74px auto auto auto auto; }
     .htd-lora-editor-name { width: 100%; min-width: 0; }
     .htd-lora-editor-strength { width: 74px; }
-    .htd-lora-editor-button { min-width: 26px; height: 24px; padding: 0 8px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); cursor: pointer; white-space: nowrap; font: inherit; transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, transform .03s ease; }
-    .htd-lora-editor-button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: #fff; }
+    .htd-lora-editor-button { min-width: 26px; height: 24px; padding: 0 8px; border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); cursor: pointer; white-space: nowrap; font: inherit; transition: background var(--htd-transition), border-color var(--htd-transition), color var(--htd-transition), box-shadow var(--htd-transition), transform .03s ease; }
+    .htd-lora-editor-button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: var(--htd-text); }
     .htd-lora-editor-button:active:not(:disabled) { transform: translateY(1px); }
     .htd-lora-editor-button:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
-    .htd-lora-editor-button.is-primary { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); }
-    .htd-lora-editor-button.is-primary:hover:not(:disabled) { background: linear-gradient(180deg, #5b4d27, #46391b); color: #fff3cf; }
-    .htd-lora-editor-button.is-danger { border-color: var(--htd-danger-border); background: linear-gradient(180deg, #5a2330, #471b25); color: #ffd6dc; }
-    .htd-lora-editor-button.is-danger:hover:not(:disabled) { border-color: #d0505f; background: linear-gradient(180deg, #6e2937, #57212c); color: #fff3f5; }
+    .htd-lora-editor-button.is-primary { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f3a2a, #3d2d20); color: var(--htd-accent-strong); }
+    .htd-lora-editor-button.is-primary:hover:not(:disabled) { background: linear-gradient(180deg, #5d4531, #493626); color: var(--htd-accent-strong); }
+    .htd-lora-editor-button.is-danger { border-color: var(--htd-danger-border); background: linear-gradient(180deg, #5c2c3d, #482331); color: var(--htd-danger-text); }
+    .htd-lora-editor-button.is-danger:hover:not(:disabled) { border-color: var(--htd-danger); background: linear-gradient(180deg, #6e3549, #5a2a3c); color: var(--htd-danger-text-strong); }
     .htd-lora-editor-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .htd-lora-editor-empty, .htd-lora-editor-error, .htd-lora-info-empty { color: var(--htd-text-dim); padding: 10px 2px; }
-    .htd-lora-editor-error { color: #ffd8c2; }
+    .htd-lora-editor-error { color: var(--htd-danger-text); }
     .htd-lora-info-body { display: grid; gap: 5px; }
     .htd-lora-info-row { min-width: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; }
     .htd-lora-info-key { color: var(--htd-text-dim); }

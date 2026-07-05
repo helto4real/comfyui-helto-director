@@ -41,6 +41,7 @@ import {
   takeCapturePreviewRequiredNodeHeight,
   takeCapturePreviewUrl,
 } from "../../web/timeline/take_capture_preview.js";
+import { HTD, applyHtdNodeTheme, isHtdThemedNode } from "../../web/timeline/design_tokens.js";
 
 function testTimelineHeightIsTripled() {
   const timeline = createDefaultVideoTimeline();
@@ -1072,6 +1073,7 @@ function testTakeCapturePreviewExtensionIsInstalled() {
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
 
   assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), true);
+  assert.equal(extensionSource.includes('import { applyHtdNodeTheme } from "./timeline/design_tokens.js";'), true);
   assert.equal(extensionSource.includes('} from "./timeline/take_capture_preview.js";'), true);
   assert.equal(extensionSource.includes('nodeData?.name === "HeltoTimelineTakeCapture"'), true);
   assert.equal(extensionSource.includes("installTakeCapturePreview(nodeType, app, api)"), true);
@@ -1089,6 +1091,100 @@ function testTakeCapturePreviewExtensionIsInstalled() {
   assert.equal(previewSource.includes("getHeight: widgetHeight"), true);
   assert.equal(previewSource.includes("onMouseEnter"), true);
   assert.equal(previewSource.includes("onMouseLeave"), true);
+  assert.equal(previewSource.includes("applyHtdNodeTheme(this, { appRef })"), true);
+}
+
+function testHeltoNodeThemeAppliesScopedLiteGraphColors() {
+  const previousLiteGraph = globalThis.LiteGraph;
+  const previousLGraphCanvas = globalThis.LGraphCanvas;
+  try {
+    const originalColors = {
+      WIDGET_BGCOLOR: "#000000",
+      WIDGET_OUTLINE_COLOR: "#111111",
+      WIDGET_PROMOTED_OUTLINE_COLOR: "#222222",
+      WIDGET_ADVANCED_OUTLINE_COLOR: "#333333",
+      WIDGET_TEXT_COLOR: "#444444",
+      WIDGET_SECONDARY_TEXT_COLOR: "#555555",
+      WIDGET_DISABLED_TEXT_COLOR: "#666666",
+    };
+    class FakeCanvas {}
+    const themedNode = {
+      graph: { dirty: [], setDirtyCanvas(...args) { this.dirty.push(args); } },
+      dirty: [],
+      setDirtyCanvas(...args) {
+        this.dirty.push(args);
+      },
+    };
+    FakeCanvas.prototype.drawNodeWidgets = (node) => {
+      if (node === themedNode) {
+        assert.equal(globalThis.LiteGraph.WIDGET_BGCOLOR, HTD.bg);
+        assert.equal(globalThis.LiteGraph.WIDGET_OUTLINE_COLOR, HTD.borderStrong);
+        assert.equal(globalThis.LiteGraph.WIDGET_TEXT_COLOR, HTD.text);
+        return "themed";
+      }
+      assert.equal(globalThis.LiteGraph.WIDGET_BGCOLOR, originalColors.WIDGET_BGCOLOR);
+      return "plain";
+    };
+    globalThis.LiteGraph = { ...originalColors, LGraphCanvas: FakeCanvas };
+    globalThis.LGraphCanvas = FakeCanvas;
+
+    assert.equal(applyHtdNodeTheme(themedNode), true);
+    assert.equal(isHtdThemedNode(themedNode), true);
+    assert.equal(themedNode.color, HTD.surface3);
+    assert.equal(themedNode.bgcolor, HTD.surface);
+    assert.deepEqual(themedNode.dirty, [[true, true]]);
+    assert.deepEqual(themedNode.graph.dirty, [[true, true]]);
+
+    const canvas = new FakeCanvas();
+    assert.equal(canvas.drawNodeWidgets(themedNode), "themed");
+    assert.deepEqual(
+      Object.fromEntries(Object.keys(originalColors).map((key) => [key, globalThis.LiteGraph[key]])),
+      originalColors,
+    );
+    assert.equal(canvas.drawNodeWidgets({}), "plain");
+  } finally {
+    globalThis.LiteGraph = previousLiteGraph;
+    globalThis.LGraphCanvas = previousLGraphCanvas;
+  }
+}
+
+function testHeltoDirectorNodesUseActualNodeTheme() {
+  const designSource = readFileSync(new URL("../../web/timeline/design_tokens.js", import.meta.url), "utf8");
+  const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
+  const loraSource = readFileSync(new URL("../../web/timeline_lora_configuration.js", import.meta.url), "utf8");
+
+  assert.equal(designSource.includes("export const HTD = {"), true);
+  assert.equal(designSource.includes("WIDGET_BGCOLOR: HTD.bg"), true);
+  assert.equal(designSource.includes("node.color = HTD.surface3"), true);
+  assert.equal(designSource.includes("node.bgcolor = HTD.surface"), true);
+  assert.equal(designSource.includes("drawNodeWidgets = function (node)"), true);
+  assert.equal(designSource.includes("isHtdThemedNode(node)"), true);
+  assert.equal(extensionSource.includes("const HELTO_DIRECTOR_THEME_NODE_TYPES = new Set(["), true);
+  assert.equal(extensionSource.includes('"HeltoVideoTimelineDirector"'), true);
+  assert.equal(extensionSource.includes('"HeltoLTX23TimelineConfig"'), true);
+  assert.equal(extensionSource.includes('"HeltoWAN22TimelineRuntime"'), true);
+  assert.equal(extensionSource.includes('"HeltoTimelineSequenceAssembler"'), true);
+  assert.equal(extensionSource.includes('"HeltoLTX23TimelineIdentityAnchorFace"'), true);
+  assert.equal(extensionSource.includes("patchHeltoDirectorThemeNodeType(nodeType)"), true);
+  assert.equal(extensionSource.includes("applyHtdNodeTheme(node, { appRef: app })"), true);
+  assert.equal(extensionSource.includes("nodeCreated(node)"), true);
+  assert.equal(extensionSource.includes("loadedGraphNode(node)"), true);
+  assert.equal(loraSource.includes("import { applyHtdNodeTheme, HTD,"), true);
+  assert.equal(loraSource.includes("HTD_CANVAS"), false);
+  assert.equal(loraSource.includes("applyHtdNodeTheme(node, { appRef: app })"), true);
+  assert.equal(loraSource.includes("applyHtdNodeTheme(this, { appRef: app })"), true);
+}
+
+function testTimelineEndTickUsesHeltoAccentTheme() {
+  const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
+
+  assert.equal(rendererSource.includes('second === range.end ? "htd-tick htd-end-tick" : "htd-tick"'), true);
+  assert.equal(rendererSource.includes(".htd-tick {"), true);
+  assert.equal(rendererSource.includes("color: var(--htd-text-dim);"), true);
+  assert.equal(rendererSource.includes(".htd-tick.htd-end-tick {"), true);
+  assert.equal(rendererSource.includes("border-left-color: var(--htd-accent-border);"), true);
+  assert.equal(rendererSource.includes("color: var(--htd-accent-strong);"), true);
+  assert.equal(rendererSource.includes("font-weight: 700;"), true);
 }
 
 function testDeleteContextMenuIsAvailableOnTimelineItems() {
@@ -1138,11 +1234,12 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes(".htd-context-menu { position: fixed;"), true);
   assert.equal(rendererSource.includes("width: 150px;"), true);
   assert.equal(rendererSource.includes("max-width: calc(100vw - 8px);"), true);
-  assert.equal(rendererSource.includes("background: linear-gradient(180deg, var(--htd-surface-2, #1b2333), var(--htd-surface, #151c2a));"), true);
-  assert.equal(rendererSource.includes("border: 1px solid var(--htd-border-strong, #3a465c);"), true);
-  assert.equal(rendererSource.includes("color: var(--htd-text, #e7ebf3);"), true);
+  assert.equal(rendererSource.includes('htdTokenBlock(".helto-timeline-director, .htd-context-menu")'), true);
+  assert.equal(rendererSource.includes("background: var(--htd-surface);"), true);
+  assert.equal(rendererSource.includes("border: 1px solid var(--htd-border-strong);"), true);
+  assert.equal(rendererSource.includes("color: var(--htd-text);"), true);
   assert.equal(rendererSource.includes("text-overflow: ellipsis;"), true);
-  assert.equal(rendererSource.includes(".htd-context-menu-item:hover { background: var(--htd-surface-hover, #2c3850);"), true);
+  assert.equal(rendererSource.includes(".htd-context-menu-item:hover { background: var(--htd-surface-hover);"), true);
 }
 
 function testToolbarUsesGroupedIconControls() {
@@ -1386,6 +1483,9 @@ testTakeCapturePreviewPreservesSocketlessWidgetOrder();
 testTakeCapturePreviewRepairsPreviouslyShiftedSocketlessValues();
 testTakeCapturePreviewMaintainsNodeGrowthDuringDraw();
 testTakeCapturePreviewExtensionIsInstalled();
+testHeltoNodeThemeAppliesScopedLiteGraphColors();
+testHeltoDirectorNodesUseActualNodeTheme();
+testTimelineEndTickUsesHeltoAccentTheme();
 testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
 testWanSegmentedExecutorSplitStepWidgetSync();

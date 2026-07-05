@@ -546,13 +546,13 @@ function installPromptOptimizerStyles(documentRef) {
   style.id = "helto-director-prompt-optimizer-styles";
   style.textContent = `
     ${htdTokenBlock(".htd-prompt-optimizer-dialog")}
-    .htd-prompt-optimizer-dialog { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(6,9,15,0.72); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: 12px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
-    .htd-prompt-optimizer-panel { width: min(980px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 28px)); display: flex; flex-direction: column; gap: 8px; background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); padding: 10px; box-shadow: var(--htd-shadow-pop); box-sizing: border-box; }
+    .htd-prompt-optimizer-dialog { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: var(--htd-overlay); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: var(--htd-font-size) / var(--htd-line) var(--htd-font-sans); -webkit-font-smoothing: antialiased; }
+    .htd-prompt-optimizer-panel { width: min(980px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 28px)); display: flex; flex-direction: column; gap: 8px; background: linear-gradient(135deg, var(--htd-modal-from), var(--htd-modal-to)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); padding: 10px; box-shadow: var(--htd-shadow-pop); box-sizing: border-box; }
     .htd-prompt-optimizer-panel h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--htd-text); }
     .htd-prompt-optimizer-controls { display: grid; grid-template-columns: minmax(180px, 1fr) 150px repeat(2, 32px); gap: 8px; align-items: center; }
     .htd-prompt-optimizer-panel button, .htd-prompt-optimizer-panel select, .htd-prompt-optimizer-panel input, .htd-prompt-optimizer-panel textarea { background: var(--htd-surface-2); color: var(--htd-text); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); box-sizing: border-box; font: inherit; }
-    .htd-prompt-optimizer-panel button { cursor: pointer; background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); transition: background .12s ease, border-color .12s ease, color .12s ease; }
-    .htd-prompt-optimizer-panel button:hover { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: #fff; }
+    .htd-prompt-optimizer-panel button { cursor: pointer; background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); transition: background var(--htd-transition), border-color var(--htd-transition), color var(--htd-transition); }
+    .htd-prompt-optimizer-panel button:hover { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: var(--htd-text); }
     .htd-prompt-optimizer-panel button:focus-visible, .htd-prompt-optimizer-panel select:focus-visible, .htd-prompt-optimizer-panel input:focus-visible, .htd-prompt-optimizer-panel textarea:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
     .htd-prompt-optimizer-panel button:disabled, .htd-prompt-optimizer-panel select:disabled, .htd-prompt-optimizer-panel input:disabled, .htd-prompt-optimizer-panel textarea:disabled { opacity: .48; cursor: not-allowed; }
     .htd-prompt-optimizer-panel select, .htd-prompt-optimizer-panel input { height: 32px; min-width: 0; padding: 0 8px; }
@@ -561,7 +561,7 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-panel .mode { display: flex; padding: 2px; background: var(--htd-bg); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); }
     .htd-prompt-optimizer-panel .mode button { flex: 1; height: 26px; border: 0; background: transparent; color: var(--htd-text-dim); border-radius: 3px; }
     .htd-prompt-optimizer-panel .mode button:hover { background: transparent; color: var(--htd-text); }
-    .htd-prompt-optimizer-panel .mode button.active { background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); box-shadow: inset 0 0 0 1px rgba(241,199,92,0.18); }
+    .htd-prompt-optimizer-panel .mode button.active { background: linear-gradient(180deg, #4f3a2a, #3d2d20); color: var(--htd-accent-strong); box-shadow: inset 0 0 0 1px var(--htd-accent-hairline); }
     .htd-prompt-auth-row { display: grid; grid-template-columns: auto minmax(170px, 1fr) auto auto; gap: 8px; align-items: center; padding: 7px; background: var(--htd-surface-2); border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); }
     .htd-prompt-auth-row span, .htd-prompt-template-toolbar span, .htd-prompt-optimizer-panel .status, .htd-prompt-optimizer-panel .progress-text { color: var(--htd-text-dim); font-size: 11px; }
     .htd-prompt-template-editor { display: none; padding: 8px; background: var(--htd-surface-2); border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); }
@@ -576,13 +576,13 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-panel .grid { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
     ${htdScrollbarBlock(".htd-prompt-optimizer-panel .grid")}
     .htd-prompt-optimizer-panel .row { display: grid; grid-template-columns: 28px 96px minmax(210px, 1fr) minmax(260px, 1.25fr); gap: 8px; align-items: start; padding: 8px; background: var(--htd-surface-2); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); }
-    .htd-prompt-optimizer-panel .thumb { width: 96px; height: 96px; min-width: 96px; align-self: center; display: flex; align-items: center; justify-content: center; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); color: var(--htd-text-dim); background: #0a0e16; overflow: hidden; }
+    .htd-prompt-optimizer-panel .thumb { width: 96px; height: 96px; min-width: 96px; align-self: center; display: flex; align-items: center; justify-content: center; border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); color: var(--htd-text-dim); background: var(--htd-media-bg); overflow: hidden; }
     .htd-prompt-optimizer-panel .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .htd-prompt-optimizer-panel .field { display: grid; gap: 4px; min-width: 0; }
     .htd-prompt-optimizer-panel .field span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--htd-text-dim); font-size: 11px; }
     .htd-prompt-optimizer-panel .field textarea { width: 100%; height: 96px; min-height: 72px; resize: vertical; padding: 7px; line-height: 1.35; }
     /* Privacy mask: keep the thumb cover opaque/dark and field text unreadable until the panel is hovered. */
-    .htd-prompt-optimizer-dialog.privacy-mode .thumb { color: transparent; background: #0a0e16; }
+    .htd-prompt-optimizer-dialog.privacy-mode .thumb { color: transparent; background: var(--htd-media-bg); }
     .htd-prompt-optimizer-dialog.privacy-mode .thumb img { opacity: 0; }
     .htd-prompt-optimizer-dialog.privacy-mode .grid .field span,
     .htd-prompt-optimizer-dialog.privacy-mode .grid .field textarea,
@@ -599,8 +599,8 @@ function installPromptOptimizerStyles(documentRef) {
     .htd-prompt-optimizer-panel .empty { padding: 12px; color: var(--htd-text-dim); background: var(--htd-surface-2); border: 1px solid var(--htd-border); border-radius: var(--htd-radius-sm); }
     .htd-prompt-optimizer-panel .actions { display: flex; justify-content: flex-end; gap: 8px; }
     .htd-prompt-optimizer-panel .actions button { min-width: 82px; height: 32px; padding: 0 12px; }
-    .htd-prompt-optimizer-panel .actions button.apply { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); }
-    .htd-prompt-optimizer-panel .actions button.apply:hover { background: linear-gradient(180deg, #5b4d27, #46391b); color: #fff3cf; }
+    .htd-prompt-optimizer-panel .actions button.apply { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f3a2a, #3d2d20); color: var(--htd-accent-strong); }
+    .htd-prompt-optimizer-panel .actions button.apply:hover { background: linear-gradient(180deg, #5d4531, #493626); color: var(--htd-accent-strong); }
   `;
   documentRef.head.append(style);
 }

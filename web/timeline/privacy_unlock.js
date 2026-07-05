@@ -152,8 +152,8 @@ function installPrivacyKeystoreStyles(documentRef) {
   style.id = STYLE_ID;
   style.textContent = `
     ${htdTokenBlock(`.${DIALOG_CLASS}`)}
-    .${DIALOG_CLASS} { position: fixed; inset: 0; z-index: 10090; display: flex; align-items: center; justify-content: center; background: rgba(6,9,15,0.72); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
-    .htd-privacy-keystore-panel { width: min(380px, calc(100vw - 28px)); display: flex; flex-direction: column; gap: 10px; background: linear-gradient(135deg, rgba(27,35,51,0.92), rgba(13,19,32,0.96)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); box-shadow: var(--htd-shadow-pop); padding: 16px; box-sizing: border-box; }
+    .${DIALOG_CLASS} { position: fixed; inset: 0; z-index: 10090; display: flex; align-items: center; justify-content: center; background: var(--htd-overlay); backdrop-filter: blur(4px); color: var(--htd-text-dim); font: var(--htd-font-size) / var(--htd-line) var(--htd-font-sans); -webkit-font-smoothing: antialiased; }
+    .htd-privacy-keystore-panel { width: min(380px, calc(100vw - 28px)); display: flex; flex-direction: column; gap: 10px; background: linear-gradient(135deg, var(--htd-modal-from), var(--htd-modal-to)); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); box-shadow: var(--htd-shadow-pop); padding: 16px; box-sizing: border-box; }
     .htd-privacy-keystore-panel h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--htd-text); }
     .htd-privacy-keystore-hint { margin: 0; color: var(--htd-text-dim); }
     .htd-privacy-keystore-field { display: grid; gap: 4px; color: var(--htd-text-faint); }
@@ -161,12 +161,12 @@ function installPrivacyKeystoreStyles(documentRef) {
     .htd-privacy-keystore-field input:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
     .htd-privacy-keystore-status { min-height: 16px; color: var(--htd-danger); }
     .htd-privacy-keystore-actions { display: flex; justify-content: flex-end; gap: 8px; }
-    .htd-privacy-keystore-actions button { min-width: 88px; padding: 7px 14px; cursor: pointer; background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); font: inherit; transition: background .12s ease, border-color .12s ease, color .12s ease; }
-    .htd-privacy-keystore-actions button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: #fff; }
+    .htd-privacy-keystore-actions button { min-width: 88px; padding: 7px 14px; cursor: pointer; background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); font: inherit; transition: background var(--htd-transition), border-color var(--htd-transition), color var(--htd-transition); }
+    .htd-privacy-keystore-actions button:hover:not(:disabled) { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); color: var(--htd-text); }
     .htd-privacy-keystore-actions button:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
     .htd-privacy-keystore-actions button:disabled { opacity: .48; cursor: not-allowed; }
-    .htd-privacy-keystore-actions button.primary { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f4322, #3c3318); color: var(--htd-accent-strong); }
-    .htd-privacy-keystore-actions button.primary:hover:not(:disabled) { background: linear-gradient(180deg, #5b4d27, #46391b); color: #fff3cf; }
+    .htd-privacy-keystore-actions button.primary { border-color: var(--htd-accent-border); background: linear-gradient(180deg, #4f3a2a, #3d2d20); color: var(--htd-accent-strong); }
+    .htd-privacy-keystore-actions button.primary:hover:not(:disabled) { background: linear-gradient(180deg, #5d4531, #493626); color: var(--htd-accent-strong); }
   `;
   documentRef.head?.append(style);
 }

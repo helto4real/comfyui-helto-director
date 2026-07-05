@@ -2,6 +2,7 @@ import {
   ASSET_TYPE_IMAGE,
   ASSET_TYPE_VIDEO,
 } from "./schema.js";
+import { htdTokenBlock } from "./design_tokens.js";
 
 const PREVIEW_CLASS = "pr-image-large-preview";
 const STYLE_ID = "helto-media-preview-style";
@@ -150,19 +151,22 @@ function installMediaPreviewStyles(documentRef) {
   const style = documentRef.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-    .pr-image-large-preview { position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; }
-    .pr-image-large-preview-panel { position: relative; max-width: calc(100vw - 64px); max-height: calc(100vh - 64px); background: #111; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-    .pr-image-large-preview-panel img, .pr-image-large-preview-panel video { max-width: 100%; max-height: calc(100vh - 132px); object-fit: contain; background: #050505; }
+    ${htdTokenBlock(".pr-image-large-preview")}
+    .pr-image-large-preview { position: fixed; inset: 0; z-index: 10050; background: var(--htd-overlay-strong); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; color: var(--htd-text); font: var(--htd-font-size) / var(--htd-line) var(--htd-font-sans); -webkit-font-smoothing: antialiased; }
+    .pr-image-large-preview-panel { position: relative; max-width: calc(100vw - 64px); max-height: calc(100vh - 64px); background: var(--htd-surface); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-lg); padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--htd-shadow-pop); }
+    .pr-image-large-preview-panel img, .pr-image-large-preview-panel video { max-width: 100%; max-height: calc(100vh - 132px); object-fit: contain; background: var(--htd-privacy-cover-strong); }
     .pr-image-large-preview-panel video { min-width: min(720px, calc(100vw - 96px)); }
     .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel img,
     .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel video { opacity: 0; transition: opacity 120ms ease; }
     .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover img,
     .pr-image-large-preview.privacy-mode .pr-image-large-preview-panel:hover video { opacity: 1; }
-    .pr-image-large-preview-close { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #555; background: #1e1e1e; color: #eee; cursor: pointer; z-index: 1; }
-    .pr-image-large-preview-caption { color: #ddd; font-size: 12px; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pr-image-large-preview-close { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: var(--htd-radius-sm); border: 1px solid var(--htd-border-strong); background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); cursor: pointer; z-index: 1; }
+    .pr-image-large-preview-close:hover { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); }
+    .pr-image-large-preview-close:focus-visible, .pr-image-large-preview-control:focus-visible { outline: none; border-color: var(--htd-focus); box-shadow: var(--htd-ring); }
+    .pr-image-large-preview-caption { color: var(--htd-text-dim); font-size: 12px; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pr-image-large-preview-controls { display: flex; justify-content: center; gap: 8px; }
-    .pr-image-large-preview-control { min-width: 68px; background: #252525; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
-    .pr-image-large-preview-control:hover { background: #333; }
+    .pr-image-large-preview-control { min-width: 68px; height: 24px; background: linear-gradient(180deg, var(--htd-surface-3), var(--htd-surface-2)); color: var(--htd-text); border: 1px solid var(--htd-border-strong); border-radius: var(--htd-radius-sm); padding: 0 10px; cursor: pointer; font: inherit; }
+    .pr-image-large-preview-control:hover { background: linear-gradient(180deg, var(--htd-surface-hover), var(--htd-surface-3)); border-color: var(--htd-border-hover); }
   `;
   documentRef.head.append(style);
 }
