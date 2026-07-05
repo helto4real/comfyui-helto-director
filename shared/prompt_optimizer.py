@@ -14,6 +14,7 @@ import re
 import struct
 import threading
 import time
+import traceback
 from typing import Any
 from urllib.parse import unquote, urlparse
 import uuid
@@ -185,6 +186,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
 }
 
 _LOADED_MODELS: dict[str, dict[str, Any]] = {}
+_LOADED_MODELS_LOCK = threading.RLock()
 _OPTIMIZER_JOBS: dict[str, dict[str, Any]] = {}
 _OPTIMIZER_JOBS_LOCK = threading.Lock()
 _FINISHED_JOB_TTL_SECONDS = 30 * 60
@@ -585,28 +587,42 @@ def get_model_statuses() -> dict[str, Any]:
 
 def unload_optimizer_model(alias: str | None = None) -> dict[str, Any]:
     unloaded = []
-    if alias:
-        spec = resolve_model(alias)
-        keys = [spec.alias]
-    else:
-        keys = list(_LOADED_MODELS.keys())
-
     torch_modules = []
-    for key in keys:
-        loaded = _LOADED_MODELS.pop(key, None)
-        if not loaded:
-            continue
-        unloaded.append(key)
-        torch_module = loaded.get("torch")
-        if torch_module is not None:
-            torch_modules.append(torch_module)
-        loaded.clear()
+    with _LOADED_MODELS_LOCK:
+        if alias:
+            spec = resolve_model(alias)
+            keys = [spec.alias]
+        else:
+            keys = list(_LOADED_MODELS.keys())
+
+        for key in keys:
+            loaded = _LOADED_MODELS.pop(key, None)
+            if not loaded:
+                continue
+            unloaded.append(key)
+            torch_module = loaded.get("torch")
+            if torch_module is not None:
+                torch_modules.append(torch_module)
+            _close_loaded_resources(loaded)
+            loaded.clear()
 
     gc.collect()
     for torch_module in torch_modules:
         _clear_torch_cuda_cache(torch_module)
 
     return {"ok": True, "unloaded": unloaded}
+
+
+def _close_loaded_resources(loaded: dict[str, Any]) -> None:
+    # llama.cpp objects only give their CUDA buffers back in close(); waiting
+    # for the GC to finalize them leaves the VRAM held for an unbounded time.
+    for key in ("model", "chat_handler"):
+        close = getattr(loaded.get(key), "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
 
 def _clear_torch_cuda_cache(torch_module: Any) -> list[str]:
@@ -1223,33 +1239,34 @@ def build_optimizer_instruction(
 def _load_qwen_model(spec: OptimizerModelSpec, path: Path, status_cb: Any = None) -> dict[str, Any]:
     status = status_cb or _noop_status
     cache_key = spec.alias
-    if cache_key in _LOADED_MODELS:
-        status(f"Using loaded Qwen model '{spec.alias}'.")
-        return _LOADED_MODELS[cache_key]
-    status(f"Loading Qwen model from {path}...")
-    import torch
-    from transformers import AutoProcessor
+    with _LOADED_MODELS_LOCK:
+        if cache_key in _LOADED_MODELS:
+            status(f"Using loaded Qwen model '{spec.alias}'.")
+            return _LOADED_MODELS[cache_key]
+        status(f"Loading Qwen model from {path}...")
+        import torch
+        from transformers import AutoProcessor
 
-    try:
-        from transformers import Qwen3VLForConditionalGeneration
-        model_cls = Qwen3VLForConditionalGeneration if "Qwen3-VL" in spec.repo_id else None
-    except Exception:  # noqa: BLE001
-        model_cls = None
-    if model_cls is None:
-        from transformers import AutoModelForVision2Seq
-        model_cls = AutoModelForVision2Seq
+        try:
+            from transformers import Qwen3VLForConditionalGeneration
+            model_cls = Qwen3VLForConditionalGeneration if "Qwen3-VL" in spec.repo_id else None
+        except Exception:  # noqa: BLE001
+            model_cls = None
+        if model_cls is None:
+            from transformers import AutoModelForVision2Seq
+            model_cls = AutoModelForVision2Seq
 
-    model = model_cls.from_pretrained(
-        str(path),
-        torch_dtype="auto",
-        device_map="auto",
-        attn_implementation="sdpa",
-    ).eval()
-    processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
-    loaded = {"model": model, "processor": processor, "torch": torch}
-    _LOADED_MODELS[cache_key] = loaded
-    status(f"Loaded Qwen model '{spec.alias}'.")
-    return loaded
+        model = model_cls.from_pretrained(
+            str(path),
+            torch_dtype="auto",
+            device_map="auto",
+            attn_implementation="sdpa",
+        ).eval()
+        processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
+        loaded = {"model": model, "processor": processor, "torch": torch}
+        _LOADED_MODELS[cache_key] = loaded
+        status(f"Loaded Qwen model '{spec.alias}'.")
+        return loaded
 
 
 def _generate_qwen(
@@ -1283,25 +1300,26 @@ def _generate_qwen(
 def _load_florence_model(spec: OptimizerModelSpec, path: Path, status_cb: Any = None) -> dict[str, Any]:
     status = status_cb or _noop_status
     cache_key = spec.alias
-    if cache_key in _LOADED_MODELS:
-        status(f"Using loaded Florence model '{spec.alias}'.")
-        return _LOADED_MODELS[cache_key]
-    status(f"Loading Florence model from {path}...")
-    import torch
-    from transformers import AutoModelForCausalLM, AutoProcessor
+    with _LOADED_MODELS_LOCK:
+        if cache_key in _LOADED_MODELS:
+            status(f"Using loaded Florence model '{spec.alias}'.")
+            return _LOADED_MODELS[cache_key]
+        status(f"Loading Florence model from {path}...")
+        import torch
+        from transformers import AutoModelForCausalLM, AutoProcessor
 
-    model = AutoModelForCausalLM.from_pretrained(
-        str(path),
-        trust_remote_code=True,
-        torch_dtype="auto",
-    ).eval()
-    if torch.cuda.is_available():
-        model = model.to("cuda")
-    processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
-    loaded = {"model": model, "processor": processor, "torch": torch}
-    _LOADED_MODELS[cache_key] = loaded
-    status(f"Loaded Florence model '{spec.alias}'.")
-    return loaded
+        model = AutoModelForCausalLM.from_pretrained(
+            str(path),
+            trust_remote_code=True,
+            torch_dtype="auto",
+        ).eval()
+        if torch.cuda.is_available():
+            model = model.to("cuda")
+        processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
+        loaded = {"model": model, "processor": processor, "torch": torch}
+        _LOADED_MODELS[cache_key] = loaded
+        status(f"Loaded Florence model '{spec.alias}'.")
+        return loaded
 
 
 def _generate_florence(
@@ -1488,44 +1506,45 @@ def _llama_cpp_model_paths(spec: OptimizerModelSpec, path: Path) -> tuple[Path, 
 def _load_llama_cpp_vision_model(spec: OptimizerModelSpec, path: Path, status_cb: Any = None) -> dict[str, Any]:
     status = status_cb or _noop_status
     cache_key = spec.alias
-    if cache_key in _LOADED_MODELS:
-        status(f"Using loaded llama.cpp model '{spec.alias}'.")
-        return _LOADED_MODELS[cache_key]
-    model_path, mmproj_path = _llama_cpp_model_paths(spec, path)
-    status(f"Loading llama.cpp model from {model_path} with {mmproj_path}...")
-    try:
-        from llama_cpp import Llama
-        from llama_cpp.llama_chat_format import Llava15ChatHandler
-    except Exception as exc:  # noqa: BLE001
-        raise PromptOptimizerError(
-            "Model 'gemma4_e4b_uncensored_gguf_q8' requires optional package: llama-cpp-python"
-        ) from exc
+    with _LOADED_MODELS_LOCK:
+        if cache_key in _LOADED_MODELS:
+            status(f"Using loaded llama.cpp model '{spec.alias}'.")
+            return _LOADED_MODELS[cache_key]
+        model_path, mmproj_path = _llama_cpp_model_paths(spec, path)
+        status(f"Loading llama.cpp model from {model_path} with {mmproj_path}...")
+        try:
+            from llama_cpp import Llama
+            from llama_cpp.llama_chat_format import Llava15ChatHandler
+        except Exception as exc:  # noqa: BLE001
+            raise PromptOptimizerError(
+                "Model 'gemma4_e4b_uncensored_gguf_q8' requires optional package: llama-cpp-python"
+            ) from exc
 
-    try:
-        chat_handler = Llava15ChatHandler(clip_model_path=str(mmproj_path))
-        model = Llama(
-            model_path=str(model_path),
-            chat_handler=chat_handler,
-            n_ctx=8192,
-            n_gpu_layers=-1,
-            verbose=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        architecture = gguf_architecture(model_path)
-        compatibility_hint = ""
-        if architecture == "gemma4" or "_K_P" in model_path.name:
-            compatibility_hint = (
-                " The file appears to be a valid Gemma 4/K_P GGUF, so this usually means the installed "
-                "llama-cpp-python/llama.cpp runtime is too old or was built without Gemma 4/K_P support. "
-                "Upgrade or reinstall llama-cpp-python, then try again."
+        try:
+            chat_handler = Llava15ChatHandler(clip_model_path=str(mmproj_path))
+            model = Llama(
+                model_path=str(model_path),
+                chat_handler=chat_handler,
+                n_ctx=8192,
+                n_gpu_layers=-1,
+                verbose=False,
             )
-        raise PromptOptimizerError(
-            f"Could not load llama.cpp optimizer model '{spec.alias}' from {model_path}: {exc}.{compatibility_hint}"
-        ) from exc
-    loaded = {"model": model, "chat_handler": chat_handler, "mmproj_path": mmproj_path, "model_path": model_path}
-    _LOADED_MODELS[cache_key] = loaded
-    status(f"Loaded llama.cpp model '{spec.alias}'.")
-    return loaded
+        except Exception as exc:  # noqa: BLE001
+            architecture = gguf_architecture(model_path)
+            compatibility_hint = ""
+            if architecture == "gemma4" or "_K_P" in model_path.name:
+                compatibility_hint = (
+                    " The file appears to be a valid Gemma 4/K_P GGUF, so this usually means the installed "
+                    "llama-cpp-python/llama.cpp runtime is too old or was built without Gemma 4/K_P support. "
+                    "Upgrade or reinstall llama-cpp-python, then try again."
+                )
+            raise PromptOptimizerError(
+                f"Could not load llama.cpp optimizer model '{spec.alias}' from {model_path}: {exc}.{compatibility_hint}"
+            ) from exc
+        loaded = {"model": model, "chat_handler": chat_handler, "mmproj_path": mmproj_path, "model_path": model_path}
+        _LOADED_MODELS[cache_key] = loaded
+        status(f"Loaded llama.cpp model '{spec.alias}'.")
+        return loaded
 
 
 def _generate_llama_cpp_vision(
@@ -1676,6 +1695,46 @@ def optimize_segments(payload: dict[str, Any], status_cb: Any = None) -> dict[st
     status = status_cb or _noop_status
     status("Checking selected model...")
     spec = resolve_model(payload.get("model"))
+    try:
+        result = _optimize_segments_with_model(spec, payload, status)
+    except BaseException as exc:
+        # The in-flight traceback pins the generation frames, whose locals
+        # reference the model weights and GPU tensors; clear them so the
+        # cleanup can actually free the VRAM (still-executing frames are
+        # skipped by clear_frames).
+        traceback.clear_frames(exc.__traceback__)
+        _cleanup_optimizer_model_after_exception(spec)
+        raise
+    _release_optimizer_model_after_run(spec, status)
+    return result
+
+
+def _release_optimizer_model_after_run(spec: OptimizerModelSpec, status_cb: Any = None) -> None:
+    # There is no keep-alive daemon for the optimizer models, so the VRAM must
+    # be handed back to the rest of the workflow as soon as the job is done.
+    if spec.alias not in _LOADED_MODELS:
+        return
+    status = status_cb or _noop_status
+    status(f"Releasing optimizer model '{spec.alias}'...")
+    unload_optimizer_model(spec.alias)
+
+
+def _cleanup_optimizer_model_after_exception(spec: OptimizerModelSpec) -> None:
+    try:
+        if spec.alias in _LOADED_MODELS:
+            unload_optimizer_model(spec.alias)
+    except Exception:
+        pass
+    gc.collect()
+    try:
+        import torch
+
+        _clear_torch_cuda_cache(torch)
+    except Exception:
+        pass
+
+
+def _optimize_segments_with_model(spec: OptimizerModelSpec, payload: dict[str, Any], status: Any) -> dict[str, Any]:
     mode = str(payload.get("mode") or "sfw").lower()
     if mode not in {"sfw", "nsfw"}:
         raise PromptOptimizerError("mode must be 'sfw' or 'nsfw'")

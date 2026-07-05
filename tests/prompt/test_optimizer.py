@@ -207,6 +207,94 @@ def test_optimizer_job_completes(monkeypatch, tmp_path):
             optimizer._OPTIMIZER_JOBS.pop(job_id, None)
 
 
+def test_optimize_segments_releases_local_model_after_run(monkeypatch):
+    alias = "qwen3_vl_4b_fast"
+    loaded = {"model": object(), "processor": object(), "torch": None}
+    monkeypatch.setattr(optimizer, "ensure_model_downloaded", lambda spec, status_cb=None: Path("/tmp/model"))
+    monkeypatch.setattr(optimizer, "prompt_optimizer_vram_preflight", lambda status_cb=None: {"ok": True})
+    monkeypatch.setattr(optimizer, "_load_qwen_model", lambda spec, path, status_cb=None: loaded)
+    monkeypatch.setattr(optimizer, "_generate_qwen", lambda *args, **kwargs: "optimized prompt")
+    unloads = []
+    monkeypatch.setattr(
+        optimizer,
+        "unload_optimizer_model",
+        lambda unload_alias=None: unloads.append(unload_alias) or {"ok": True, "unloaded": [unload_alias]},
+    )
+    optimizer._LOADED_MODELS[alias] = loaded
+    try:
+        result = optimizer.optimize_segments(
+            {
+                "model": alias,
+                "mode": "sfw",
+                "segments": [{"id": "section_001", "type": "Text", "selected": True, "direction": "walk forward"}],
+                "references": [],
+            }
+        )
+    finally:
+        optimizer._LOADED_MODELS.clear()
+
+    assert result["ok"] is True
+    assert result["results"][0]["prompt"] == "optimized prompt"
+    assert unloads == [alias]
+
+
+def test_optimize_segments_unloads_model_when_generation_fails(monkeypatch):
+    alias = "qwen3_vl_4b_fast"
+    loaded = {"model": object(), "processor": object(), "torch": None}
+    monkeypatch.setattr(optimizer, "ensure_model_downloaded", lambda spec, status_cb=None: Path("/tmp/model"))
+    monkeypatch.setattr(optimizer, "prompt_optimizer_vram_preflight", lambda status_cb=None: {"ok": True})
+    monkeypatch.setattr(optimizer, "_load_qwen_model", lambda spec, path, status_cb=None: loaded)
+
+    def failing_generate(*args, **kwargs):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(optimizer, "_generate_qwen", failing_generate)
+    unloads = []
+    monkeypatch.setattr(
+        optimizer,
+        "unload_optimizer_model",
+        lambda unload_alias=None: unloads.append(unload_alias) or {"ok": True, "unloaded": [unload_alias]},
+    )
+    optimizer._LOADED_MODELS[alias] = loaded
+    try:
+        with pytest.raises(RuntimeError, match="CUDA out of memory"):
+            optimizer.optimize_segments(
+                {
+                    "model": alias,
+                    "mode": "sfw",
+                    "segments": [{"id": "section_001", "type": "Text", "selected": True, "direction": "walk forward"}],
+                    "references": [],
+                }
+            )
+    finally:
+        optimizer._LOADED_MODELS.clear()
+
+    assert unloads == [alias]
+
+
+def test_unload_optimizer_model_closes_closeable_resources():
+    closed = []
+
+    class FakeCloseable:
+        def __init__(self, name):
+            self.name = name
+
+        def close(self):
+            closed.append(self.name)
+
+    alias = "gemma4_e4b_uncensored_gguf_q8"
+    loaded = {"model": FakeCloseable("model"), "chat_handler": FakeCloseable("chat_handler")}
+    optimizer._LOADED_MODELS[alias] = loaded
+    try:
+        result = optimizer.unload_optimizer_model(alias)
+    finally:
+        optimizer._LOADED_MODELS.clear()
+
+    assert result["unloaded"] == [alias]
+    assert closed == ["model", "chat_handler"]
+    assert loaded == {}
+
+
 def test_unload_optimizer_model_removes_loaded_alias_and_clears_cuda():
     class FakeCuda:
         def __init__(self):
