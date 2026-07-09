@@ -2,7 +2,9 @@ import asyncio
 import json
 import math
 import sys
+import threading
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +15,7 @@ from PIL import Image
 from routes import global_settings as global_settings_routes
 from routes import media_cache as media_cache_routes
 from shared import media_browser
+from shared import media_cache as media_cache_module
 from shared.media_cache import (
     MAX_WAVEFORM_PEAKS,
     MEDIA_PATH_SECURITY_ERROR,
@@ -206,12 +209,16 @@ def test_enabling_global_privacy_purges_only_plaintext_preview_caches(tmp_path):
         public_files = [
             root / "thumbnails" / "public.webp",
             root / "thumbnails" / "interrupted.webp.tmp",
+            root / "thumbnails" / ".interrupted.webp.unique.tmp",
             root / "waveforms" / "public.json",
             root / "waveforms" / "interrupted.json.tmp",
+            root / "waveforms" / ".interrupted.json.unique.tmp",
         ]
         encrypted_files = [
             root / "thumbnails" / "private.webp.enc",
+            root / "thumbnails" / ".private.webp.enc.unique.tmp",
             root / "waveforms" / "private.json.enc",
+            root / "waveforms" / ".private.json.enc.unique.tmp",
         ]
         for path in [*public_files, *encrypted_files]:
             path.write_text("cache", encoding="utf-8")
@@ -255,15 +262,138 @@ def test_clear_public_media_cache_preserves_encrypted_cache_files(tmp_path):
         root = cache_root()
         public_thumbnail = root / "thumbnails" / "public.webp"
         encrypted_thumbnail = root / "thumbnails" / "private.webp.enc"
+        interrupted_public = root / "thumbnails" / ".public.webp.unique.tmp"
+        interrupted_encrypted = root / "thumbnails" / ".private.webp.enc.unique.tmp"
         public_thumbnail.write_bytes(b"public")
         encrypted_thumbnail.write_bytes(b"encrypted")
+        interrupted_public.write_bytes(b"public")
+        interrupted_encrypted.write_bytes(b"encrypted")
 
         clear_public_media_cache()
 
         assert not public_thumbnail.exists()
+        assert not interrupted_public.exists()
         assert encrypted_thumbnail.exists()
+        assert interrupted_encrypted.exists()
     finally:
         folder_paths.set_temp_directory(original_temp)
+
+
+@pytest.mark.parametrize("privacy_mode", [False, True])
+def test_simultaneous_identical_thumbnail_writes_are_atomic(
+    tmp_path,
+    monkeypatch,
+    privacy_mode,
+):
+    if privacy_mode and not CRYPTO_AVAILABLE:
+        pytest.skip("cryptography package is required for encrypted preview tests")
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        image_path = tmp_path / "reference.png"
+        Image.new("RGB", (64, 32), color=(32, 96, 160)).save(image_path)
+        barrier = threading.Barrier(2)
+
+        def synchronized_thumbnail(*_args):
+            barrier.wait(timeout=5)
+            return Image.new("RGB", (32, 16), color=(32, 96, 160))
+
+        monkeypatch.setattr(media_cache_module, "_load_image_thumbnail", synchronized_thumbnail)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(make_thumbnail, image_path, 128, privacy_mode)
+                for _index in range(2)
+            ]
+            results = [future.result(timeout=5) for future in futures]
+
+        if privacy_mode:
+            assert all(isinstance(result, bytes) and result.startswith(b"RIFF") for result in results)
+            cache_directory = cache_root() / "thumbnails"
+            cache_files = list(cache_directory.glob("*.webp.enc"))
+            assert len(cache_files) == 1
+            encrypted = json.loads(cache_files[0].read_text(encoding="utf-8"))
+            assert decrypt_bytes(encrypted, THUMBNAIL_CACHE_PURPOSE).startswith(b"RIFF")
+        else:
+            assert results[0] == results[1]
+            assert results[0].is_file()
+            cache_directory = cache_root() / "thumbnails"
+            assert len(list(cache_directory.glob("*.webp"))) == 1
+            with Image.open(results[0]) as cached_image:
+                assert cached_image.size == (32, 16)
+        assert not [path for path in cache_directory.iterdir() if path.name.endswith(".tmp")]
+    finally:
+        folder_paths.set_temp_directory(original_temp)
+
+
+@pytest.mark.parametrize("privacy_mode", [False, True])
+def test_simultaneous_identical_waveform_writes_are_atomic(
+    tmp_path,
+    monkeypatch,
+    privacy_mode,
+):
+    if privacy_mode and not CRYPTO_AVAILABLE:
+        pytest.skip("cryptography package is required for encrypted preview tests")
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        audio_path = tmp_path / "tone.wav"
+        audio_path.write_bytes(b"synthetic audio")
+        barrier = threading.Barrier(2)
+
+        def synchronized_waveform(*_args):
+            barrier.wait(timeout=5)
+            return {
+                "duration_seconds": 1.0,
+                "sample_rate": 8_000,
+                "channels": 1,
+                "peaks": [0.5] * 32,
+            }
+
+        monkeypatch.setattr(media_cache_module, "_decode_audio_waveform", synchronized_waveform)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(make_waveform, audio_path, 32, privacy_mode)
+                for _index in range(2)
+            ]
+            results = [future.result(timeout=5) for future in futures]
+
+        assert results[0] == results[1]
+        cache_directory = cache_root() / "waveforms"
+        pattern = "*.json.enc" if privacy_mode else "*.json"
+        cache_files = list(cache_directory.glob(pattern))
+        assert len(cache_files) == 1
+        if privacy_mode:
+            encrypted = json.loads(cache_files[0].read_text(encoding="utf-8"))
+            decoded = decrypt_bytes(encrypted, WAVEFORM_CACHE_PURPOSE)
+            assert json.loads(decoded.decode("utf-8")) == results[0]
+        else:
+            assert json.loads(cache_files[0].read_text(encoding="utf-8")) == results[0]
+        assert not [path for path in cache_directory.iterdir() if path.name.endswith(".tmp")]
+    finally:
+        folder_paths.set_temp_directory(original_temp)
+
+
+def test_atomic_write_removes_unique_temp_files_after_failures(tmp_path, monkeypatch):
+    target = tmp_path / "cache" / "result.json"
+
+    def failed_writer(temp_path):
+        temp_path.write_bytes(b"partial")
+        raise RuntimeError("writer failed")
+
+    with pytest.raises(RuntimeError, match="writer failed"):
+        media_cache_module._atomic_write(target, failed_writer)
+    assert not target.exists()
+    assert not list(target.parent.iterdir())
+
+    def failed_replace(*_args):
+        raise OSError("replace failed")
+
+    with monkeypatch.context() as patch_context:
+        patch_context.setattr(media_cache_module.os, "replace", failed_replace)
+        with pytest.raises(OSError, match="replace failed"):
+            media_cache_module._atomic_write(target, lambda temp_path: temp_path.write_bytes(b"complete"))
+    assert not target.exists()
+    assert not list(target.parent.iterdir())
 
 
 def test_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):

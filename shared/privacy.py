@@ -8,6 +8,8 @@ import json
 import math
 import os
 import secrets
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -32,6 +34,7 @@ ENVELOPE_VERSION = 1
 ALGORITHM = "AES-256-GCM"
 KEY_FILE_NAME = "privacy_key.json"
 BYTE_CHUNK_SIZE = 64 * 1024 * 1024
+_LEGACY_KEY_LOCK = threading.Lock()
 
 
 class PrivacyError(RuntimeError):
@@ -183,30 +186,47 @@ def _load_or_create_key(base_dir: str | os.PathLike[str] | None = None, create: 
 
     path = key_path(base_dir)
     if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            key = _b64url_decode(str(payload.get("key", "")))
-            key_id = str(payload.get("keyId", "")).strip()
-        except Exception as exc:  # noqa: BLE001 - bad local key should become a readable privacy error.
-            raise PrivacyError(f"Could not read privacy key file '{path}': {exc}") from exc
-        if len(key) != 32 or not key_id:
-            raise PrivacyError(f"Privacy key file '{path}' is malformed.")
+        return _read_legacy_key(path)
+
+    with _LEGACY_KEY_LOCK:
+        # A keystore may have been initialized while this caller waited.
+        if base_dir is None and privacy_keystore.keystore_exists():
+            try:
+                return privacy_keystore.primary_session_key()
+            except PrivacyKeystoreError as exc:
+                raise PrivacyError(str(exc)) from exc
+
+        # Another thread may have created the legacy key while this caller
+        # waited. Reuse that persisted key so every concurrent envelope stays
+        # decryptable.
+        if path.exists():
+            return _read_legacy_key(path)
+        if not create:
+            raise PrivacyError(f"Privacy key file is missing: {path}")
+
+        key = secrets.token_bytes(32)
+        key_id = _b64url_encode(hashlib.sha256(key).digest()[:12])
+        _write_private_json(
+            path,
+            {
+                "version": 1,
+                "algorithm": ALGORITHM,
+                "keyId": key_id,
+                "key": _b64url_encode(key),
+            },
+        )
         return key, key_id
 
-    if not create:
-        raise PrivacyError(f"Privacy key file is missing: {path}")
 
-    key = secrets.token_bytes(32)
-    key_id = _b64url_encode(hashlib.sha256(key).digest()[:12])
-    _write_private_json(
-        path,
-        {
-            "version": 1,
-            "algorithm": ALGORITHM,
-            "keyId": key_id,
-            "key": _b64url_encode(key),
-        },
-    )
+def _read_legacy_key(path: Path) -> tuple[bytes, str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        key = _b64url_decode(str(payload.get("key", "")))
+        key_id = str(payload.get("keyId", "")).strip()
+    except Exception as exc:  # noqa: BLE001 - bad local key should become a readable privacy error.
+        raise PrivacyError(f"Could not read privacy key file '{path}': {exc}") from exc
+    if len(key) != 32 or not key_id:
+        raise PrivacyError(f"Privacy key file '{path}' is malformed.")
     return key, key_id
 
 
@@ -265,13 +285,23 @@ def _write_private_json(path: Path, payload: Mapping[str, Any]) -> None:
     except OSError:
         pass
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(text, encoding="utf-8")
+    file_descriptor, temp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    os.close(file_descriptor)
+    temp_path = Path(temp_name)
     try:
-        os.chmod(tmp_path, 0o600)
-    except OSError:
-        pass
-    tmp_path.replace(path)
+        temp_path.write_text(text, encoding="utf-8")
+        _chmod_private(temp_path)
+        os.replace(temp_path, path)
+        _chmod_private(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _chmod_private(path: Path) -> None:
     try:
         os.chmod(path, 0o600)
     except OSError:

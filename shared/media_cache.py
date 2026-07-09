@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 import io
 import json
 import math
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -184,9 +186,7 @@ def make_thumbnail(media_path: Path, max_size: int = DEFAULT_THUMBNAIL_SIZE, pri
         _write_private_json(out, encrypt_bytes(thumbnail, THUMBNAIL_CACHE_PURPOSE))
         return thumbnail
 
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    image.save(tmp, "WEBP", quality=90, method=4)
-    tmp.replace(out)
+    _atomic_write(out, lambda tmp_path: image.save(tmp_path, "WEBP", quality=90, method=4))
     return out
 
 
@@ -206,9 +206,7 @@ def make_waveform(media_path: Path, peaks: int = DEFAULT_WAVEFORM_PEAKS, privacy
         _write_private_json(out, encrypt_bytes(payload_bytes, WAVEFORM_CACHE_PURPOSE))
         return payload
 
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    tmp.write_bytes(payload_bytes)
-    tmp.replace(out)
+    _atomic_write(out, lambda tmp_path: tmp_path.write_bytes(payload_bytes))
     return payload
 
 
@@ -223,13 +221,13 @@ def clear_public_media_cache() -> None:
     """Remove plaintext preview caches while preserving encrypted previews."""
     root = cache_root()
     public_suffixes = {
-        "thumbnails": (".webp", ".webp.tmp"),
-        "waveforms": (".json", ".json.tmp"),
+        "thumbnails": ".webp",
+        "waveforms": ".json",
     }
-    for directory_name, suffixes in public_suffixes.items():
+    for directory_name, suffix in public_suffixes.items():
         directory = root / directory_name
         for child in directory.iterdir():
-            if child.is_file() and child.name.endswith(suffixes):
+            if child.is_file() and _is_public_cache_artifact(child.name, suffix):
                 child.unlink(missing_ok=True)
 
 
@@ -257,18 +255,56 @@ def _image_to_webp_bytes(image: Image.Image) -> bytes:
 
 
 def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    _atomic_write(
+        path,
+        lambda tmp_path: tmp_path.write_text(encoded, encoding="utf-8"),
+        private=True,
+    )
+
+
+def _atomic_write(
+    path: Path,
+    writer: Callable[[Path], object],
+    *,
+    private: bool = False,
+) -> None:
+    """Write through a unique sibling temp file, then atomically install it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    file_descriptor, temp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    os.close(file_descriptor)
+    temp_path = Path(temp_name)
     try:
-        os.chmod(tmp_path, 0o600)
-    except OSError:
-        pass
-    tmp_path.replace(path)
+        writer(temp_path)
+        if private:
+            _chmod_private(temp_path)
+        os.replace(temp_path, path)
+        if private:
+            _chmod_private(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _chmod_private(path: Path) -> None:
     try:
         os.chmod(path, 0o600)
     except OSError:
         pass
+
+
+def _is_public_cache_artifact(name: str, suffix: str) -> bool:
+    if name.endswith(suffix) or name.endswith(f"{suffix}.tmp"):
+        return True
+    return (
+        name.startswith(".")
+        and name.endswith(".tmp")
+        and f"{suffix}." in name
+        and f"{suffix}.enc." not in name
+    )
 
 
 def _decode_audio_waveform(path: Path, peaks: int) -> dict[str, Any]:
