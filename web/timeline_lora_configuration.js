@@ -2,6 +2,7 @@ import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 import { applyHtdNodeTheme, HTD, htdScrollbarBlock, htdTokenBlock } from "./timeline/design_tokens.js";
 import { setupOverlayDialog } from "./timeline/dialog.js";
+import { buildLoraInfoDialogMarkup } from "./timeline/lora_info_markup.js";
 
 const NODE_NAME = "HeltoTimelineLoraConfiguration";
 const NODE_DISPLAY_NAME = "Timeline LoRA Configuration";
@@ -236,15 +237,6 @@ async function getLoras(force = false) {
   return loraListPromise;
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
 async function fetchLoraInfo(file, { refresh = false, light = false } = {}) {
   const endpoint = refresh ? "/helto_director/api/loras/info/refresh" : "/helto_director/api/loras/info";
   const params = new URLSearchParams({ files: file });
@@ -316,11 +308,6 @@ function showFallbackInfo(file, error = null) {
   console.info(`[Timeline LoRA Configuration] ${message}`);
 }
 
-const CIVITAI_LOGO = `<svg class="logo-civitai" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7.2 3.8 12 1l4.8 2.8v5.5l4.8 2.7v5.6L12 23l-9.6-5.4V12l4.8-2.7V3.8Zm1.6 1v5.4L4 13v3.6l8 4.5 8-4.5V13l-4.8-2.8V4.8L12 3 8.8 4.8Zm1.6 7.3L12 11l1.6 1.1v2.1L12 15.2l-1.6-1v-2.1Z"/></svg>`;
-const EXTERNAL_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M10 2h4v4h-1.5V4.6L7 10.1 5.9 9 11.4 3.5H10V2ZM3.5 4h4v1.5h-4v7h7v-4H12v4.5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h.5Z"/></svg>`;
-const EDIT_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M11.9 1.7 14.3 4 5.5 12.8 2.6 13.4l.6-2.9 8.7-8.8Zm-.9 2.1-6.4 6.4-.2.9.9-.2 6.4-6.4-.7-.7Z"/></svg>`;
-const SAVE_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 2h10.5L14 3.5V14H2V2Zm2 1.5v3h7v-3H4Zm0 9h8v-4H4v4Z"/></svg>`;
-
 async function saveLoraInfoPartial(file, partial) {
   const body = new FormData();
   body.append("json", JSON.stringify(partial));
@@ -335,110 +322,8 @@ async function saveLoraInfoPartial(file, partial) {
   return payload?.data ?? null;
 }
 
-function infoTableRow(label, value, help = "", editableFieldName = "") {
-  if (value == null || value === "") {
-    return "";
-  }
-  return `
-    <tr class="${editableFieldName ? "editable" : ""}" ${editableFieldName ? `data-field-name="${editableFieldName}"` : ""}>
-      <td><span>${escapeHtml(label)} ${help ? `<span class="-help" title="${escapeHtml(help)}"></span>` : ""}<span></td>
-      <td ${editableFieldName ? "" : 'colspan="2"'}>${String(value).startsWith("<") ? value : `<span>${escapeHtml(value)}<span>`}</td>
-      ${
-        editableFieldName
-          ? `<td style="width: 24px;"><button class="rgthree-button-reset rgthree-button-edit" data-action="edit-row">${EDIT_ICON}${SAVE_ICON}</button></td>`
-          : ""
-      }
-    </tr>`;
-}
-
-function trainedWordsMarkup(words) {
-  if (!words?.length) {
-    return "";
-  }
-  return `<ul class="rgthree-info-trained-words-list">${words
-    .map((item) => {
-      const word = item.word ?? item;
-      return `<li title="${escapeHtml(word)}" data-word="${escapeHtml(word)}" class="rgthree-info-trained-words-list-item" data-action="toggle-trained-word">
-        <span>${escapeHtml(word)}</span>
-        ${item.civitai ? CIVITAI_LOGO : ""}
-        ${item.count != null ? `<small>${escapeHtml(item.count)}</small>` : ""}
-      </li>`;
-    })
-    .join("")}</ul>`;
-}
-
-function imagesMarkup(images) {
-  if (!images?.length) {
-    return "";
-  }
-  return `<ul class="rgthree-info-images">${images
-    .map((image) => {
-      const media =
-        image.type === "video"
-          ? `<video src="${escapeHtml(image.url)}" autoplay loop muted></video>`
-          : `<img src="${escapeHtml(image.url)}" alt="">`;
-      return `<li><figure>${media}<figcaption>
-        ${imgInfoField("", image.civitaiUrl ? `<a href="${escapeHtml(image.civitaiUrl)}" target="_blank" rel="noreferrer">civitai${EXTERNAL_ICON}</a>` : undefined)}
-        ${imgInfoField("seed", image.seed)}
-        ${imgInfoField("steps", image.steps)}
-        ${imgInfoField("cfg", image.cfg)}
-        ${imgInfoField("sampler", image.sampler)}
-        ${imgInfoField("model", image.model)}
-        ${imgInfoField("positive", image.positive)}
-        ${imgInfoField("negative", image.negative)}
-      </figcaption></figure></li>`;
-    })
-    .join("")}</ul>`;
-}
-
-function imgInfoField(label, value) {
-  return value != null ? `<span>${label ? `<label>${escapeHtml(label)} </label>` : ""}${String(value).startsWith("<") ? value : escapeHtml(value)}</span>` : "";
-}
-
 function renderInfoDialogContent(container, info, file, isLoading = false) {
-  const civitaiLink = info?.links?.find((link) => String(link).includes("civitai.com/models"));
-  const civitaiError = info?.raw?.civitai?.error;
-  const civitaiValue = civitaiLink
-    ? `<a href="${escapeHtml(civitaiLink)}" target="_blank" rel="noreferrer">${CIVITAI_LOGO}View on Civitai</a>`
-    : civitaiError
-      ? String(civitaiError) === "Model not found"
-        ? `<i>Model not found</i> <span class="-help" title="The model was not found on civitai with the sha256 hash. It is possible the model was removed, re-uploaded, or was never on civitai to begin with."></span>`
-        : escapeHtml(civitaiError)
-      : !info?.raw?.civitai
-        ? `<button type="button" class="rgthree-button" data-action="fetch-civitai">Fetch info from civitai</button>`
-        : "";
-  const trainedWords = trainedWordsMarkup(info?.trainedWords);
-  const metadata = info?.raw?.metadata || {};
-  const title = info?.name || info?.file || file || "Unknown";
-  container.innerHTML = `
-    <div class="rgthree-info-dialog">
-      <div class="aio-rgthree-dialog-title">
-        <h2>${escapeHtml(title)}</h2>
-        <button type="button" class="helto-lora-close" aria-label="Close">x</button>
-      </div>
-      <div class="aio-rgthree-dialog-content">
-        ${isLoading ? `<div class="helto-lora-loading">Loading...</div>` : ""}
-        <ul class="rgthree-info-area">
-          <li title="Type" class="rgthree-info-tag -type -type-${escapeHtml((info?.type || "").toLowerCase())}"><span>${escapeHtml(info?.type || "")}</span></li>
-          <li title="Base Model" class="rgthree-info-tag -basemodel -basemodel-${escapeHtml((info?.baseModel || "").toLowerCase())}"><span>${escapeHtml(info?.baseModel || "")}</span></li>
-          <li class="rgthree-info-menu"></li>
-        </ul>
-        <table class="rgthree-info-table">
-          ${infoTableRow("File", info?.file || file)}
-          ${infoTableRow("Hash (sha256)", info?.sha256)}
-          ${infoTableRow("Civitai", civitaiValue)}
-          ${infoTableRow("Name", info?.name || metadata.ss_output_name || "", "The name for display.", "name")}
-          ${!info?.baseModelFile && !info?.baseModel ? "" : infoTableRow("Base Model", `${info?.baseModel || ""}${info?.baseModelFile ? ` (${info.baseModelFile})` : ""}`)}
-          ${trainedWords ? infoTableRow("Trained Words", trainedWords, "Trained words from the metadata and/or civitai. Click to select for copy.") : ""}
-          ${!metadata.ss_clip_skip || metadata.ss_clip_skip === "None" ? "" : infoTableRow("Clip Skip", metadata.ss_clip_skip)}
-          ${infoTableRow("Strength Min", info?.strengthMin ?? "", "The recommended minimum strength. In the Power Lora Loader node, strength will signal when it is below this threshold.", "strengthMin")}
-          ${infoTableRow("Strength Max", info?.strengthMax ?? "", "The recommended maximum strength. In the Power Lora Loader node, strength will signal when it is above this threshold.", "strengthMax")}
-          ${infoTableRow("Additional Notes", info?.userNote ?? "", "Additional notes you'd like to keep and reference in the info dialog.", "userNote")}
-        </table>
-        ${imagesMarkup(info?.images)}
-      </div>
-    </div>
-  `;
+  container.innerHTML = buildLoraInfoDialogMarkup(info, file, { isLoading });
 }
 
 function ensureDialogStyles() {
