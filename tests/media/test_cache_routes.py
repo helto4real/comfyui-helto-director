@@ -1,13 +1,16 @@
 import asyncio
 import json
 import math
+import sys
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import folder_paths
 import pytest
 from PIL import Image
 
+from routes import global_settings as global_settings_routes
 from routes import media_cache as media_cache_routes
 from shared import media_browser
 from shared.media_cache import (
@@ -17,12 +20,250 @@ from shared.media_cache import (
     THUMBNAIL_CACHE_PURPOSE,
     WAVEFORM_CACHE_PURPOSE,
     cache_root,
+    clear_public_media_cache,
+    effective_media_privacy_mode,
     make_thumbnail,
     make_waveform,
     resolve_media_path,
 )
 from shared.privacy import CRYPTO_AVAILABLE, decrypt_bytes
 import shared.timeline.global_settings as timeline_global_settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_global_settings(tmp_path, monkeypatch):
+    config_dir = tmp_path / "timeline_global_config"
+    monkeypatch.setattr(timeline_global_settings, "CONFIG_DIR", config_dir)
+    timeline_global_settings.save_global_settings({"privacy": {"mode": False}})
+
+
+class _FakeRequest:
+    def __init__(self, query=None, payload=None):
+        self.rel_url = SimpleNamespace(query=query or {})
+        self._payload = payload
+        self.headers = {}
+        self.cookies = {}
+
+    async def json(self):
+        return self._payload
+
+
+class _RecordingRoutes:
+    def __init__(self):
+        self.handlers = {}
+
+    def _record(self, method, path):
+        def decorator(handler):
+            self.handlers[(method, path)] = handler
+            return handler
+
+        return decorator
+
+    def get(self, path):
+        return self._record("GET", path)
+
+    def post(self, path):
+        return self._record("POST", path)
+
+
+def _register_media_cache_test_routes(monkeypatch):
+    routes = _RecordingRoutes()
+    server = SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(routes=routes)))
+    monkeypatch.setitem(sys.modules, "server", server)
+    monkeypatch.setattr(media_cache_routes, "_ROUTES_REGISTERED", False)
+    assert media_cache_routes.register_media_cache_routes() is True
+    return routes
+
+
+def test_media_request_privacy_can_upgrade_but_not_downgrade_global_setting():
+    assert effective_media_privacy_mode(False) is False
+    assert effective_media_privacy_mode(True) is True
+    assert media_cache_routes.requested_privacy_mode(None) is False
+
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+
+    assert effective_media_privacy_mode(False) is True
+    assert media_cache_routes.requested_privacy_mode(None) is True
+    assert media_cache_routes.requested_privacy_mode("false") is True
+
+
+@pytest.mark.parametrize("privacy_value", [None, "false"])
+def test_thumbnail_route_uses_global_privacy_when_request_omits_or_disables_it(
+    privacy_value,
+    monkeypatch,
+):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_cache_test_routes(monkeypatch)
+    checked_requests = []
+    preview_kwargs = {}
+
+    monkeypatch.setattr(
+        media_cache_routes,
+        "check_privacy_token",
+        lambda request: checked_requests.append(request) or None,
+    )
+    monkeypatch.setattr(media_cache_routes, "resolve_media_path", lambda *_args: Path("/synthetic/private.png"))
+
+    async def fake_preview_job(_fn, *_args, **kwargs):
+        preview_kwargs.update(kwargs)
+        return b"RIFFsyntheticWEBP"
+
+    monkeypatch.setattr(media_cache_routes, "_run_preview_job", fake_preview_job)
+    query = {"path": "ignored.png"}
+    if privacy_value is not None:
+        query["privacy"] = privacy_value
+    request = _FakeRequest(query=query)
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_cache_routes.ROUTE_PREFIX}/thumbnail")](request)
+    )
+
+    assert response.status == 200
+    assert response.body == b"RIFFsyntheticWEBP"
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert preview_kwargs["privacy_mode"] is True
+    assert checked_requests == [request]
+
+
+def test_waveform_route_uses_global_privacy_when_request_disables_it(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_cache_test_routes(monkeypatch)
+    checked_requests = []
+    preview_kwargs = {}
+
+    monkeypatch.setattr(
+        media_cache_routes,
+        "check_privacy_token",
+        lambda request: checked_requests.append(request) or None,
+    )
+    monkeypatch.setattr(media_cache_routes, "resolve_media_path", lambda *_args: Path("/synthetic/private.wav"))
+
+    async def fake_preview_job(_fn, *_args, **kwargs):
+        preview_kwargs.update(kwargs)
+        return {"sample_rate": 8_000, "peaks": [0.5], "cache_key": "private"}
+
+    monkeypatch.setattr(media_cache_routes, "_run_preview_job", fake_preview_job)
+    request = _FakeRequest(query={"path": "ignored.wav", "privacy": "false"})
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_cache_routes.ROUTE_PREFIX}/waveform")](request)
+    )
+
+    assert response.status == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert preview_kwargs["privacy_mode"] is True
+    assert checked_requests == [request]
+
+
+def test_private_media_errors_do_not_expose_sensitive_paths():
+    response = media_cache_routes._media_error_response(
+        ValueError("Media file not found: /private/project/secret.mp4"),
+        True,
+    )
+
+    payload = json.loads(response.body)
+    assert response.status == 400
+    assert payload == {"error": "PRIVATE_MEDIA_REQUEST_FAILED: Private media request failed."}
+    assert "/private/project" not in response.text
+
+
+def test_disabling_global_privacy_requires_authorization(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    denied = media_cache_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(global_settings_routes, "check_privacy_token", lambda _request: denied)
+
+    response = global_settings_routes.apply_global_settings_patch(
+        _FakeRequest(),
+        {"privacy": {"mode": False}},
+    )
+
+    assert response is denied
+    assert response.status == 401
+    assert timeline_global_settings.global_privacy_mode() is True
+
+
+def test_authorized_global_privacy_disable_is_saved(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    monkeypatch.setattr(global_settings_routes, "check_privacy_token", lambda _request: None)
+
+    response = global_settings_routes.apply_global_settings_patch(
+        _FakeRequest(),
+        {"privacy": {"mode": False}},
+    )
+
+    assert response is None
+    assert timeline_global_settings.global_privacy_mode() is False
+
+
+def test_enabling_global_privacy_purges_only_plaintext_preview_caches(tmp_path):
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        root = cache_root()
+        public_files = [
+            root / "thumbnails" / "public.webp",
+            root / "thumbnails" / "interrupted.webp.tmp",
+            root / "waveforms" / "public.json",
+            root / "waveforms" / "interrupted.json.tmp",
+        ]
+        encrypted_files = [
+            root / "thumbnails" / "private.webp.enc",
+            root / "waveforms" / "private.json.enc",
+        ]
+        for path in [*public_files, *encrypted_files]:
+            path.write_text("cache", encoding="utf-8")
+
+        response = global_settings_routes.apply_global_settings_patch(
+            _FakeRequest(),
+            {"privacy": {"mode": True}},
+        )
+
+        assert response is None
+        assert timeline_global_settings.global_privacy_mode() is True
+        assert all(not path.exists() for path in public_files)
+        assert all(path.exists() for path in encrypted_files)
+    finally:
+        folder_paths.set_temp_directory(original_temp)
+
+
+def test_enabling_global_privacy_aborts_when_plaintext_cache_purge_fails(monkeypatch):
+    def fail_purge():
+        raise OSError("/private/cache/path")
+
+    monkeypatch.setattr(global_settings_routes, "clear_public_media_cache", fail_purge)
+
+    with pytest.raises(
+        timeline_global_settings.GlobalSettingsError,
+        match="PRIVACY_CACHE_PURGE_FAILED",
+    ) as exc_info:
+        global_settings_routes.apply_global_settings_patch(
+            _FakeRequest(),
+            {"privacy": {"mode": True}},
+        )
+
+    assert "/private/cache/path" not in str(exc_info.value)
+    assert timeline_global_settings.global_privacy_mode() is False
+
+
+def test_clear_public_media_cache_preserves_encrypted_cache_files(tmp_path):
+    original_temp = folder_paths.get_temp_directory()
+    folder_paths.set_temp_directory(str(tmp_path / "temp"))
+    try:
+        root = cache_root()
+        public_thumbnail = root / "thumbnails" / "public.webp"
+        encrypted_thumbnail = root / "thumbnails" / "private.webp.enc"
+        public_thumbnail.write_bytes(b"public")
+        encrypted_thumbnail.write_bytes(b"encrypted")
+
+        clear_public_media_cache()
+
+        assert not public_thumbnail.exists()
+        assert encrypted_thumbnail.exists()
+    finally:
+        folder_paths.set_temp_directory(original_temp)
 
 
 def test_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):

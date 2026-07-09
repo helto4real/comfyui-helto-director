@@ -19,8 +19,11 @@ with a single password-protected key file shared by all Helto node packs.
   `/media/waveform?privacy=1`, media-browser `/thumb?privacy=1`) require the
   same token. The Director UI stores it in `localStorage` for fetch calls and
   in a `helto_privacy_token` cookie for `<img>`/media elements, which cannot
-  send custom headers. A browser that never unlocked (or any other client on
-  the network) cannot use these routes.
+  send custom headers. Global Privacy Mode is enforced server-side, so omitting
+  or falsifying a route's `privacy` parameter cannot create a public preview.
+  A browser that never unlocked (or any other client on the network) cannot use
+  these routes. When a keystore exists, turning global Privacy Mode off also
+  requires the current session token.
 
 ## Using it
 

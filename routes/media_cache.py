@@ -12,6 +12,7 @@ try:
         IMAGE_EXTENSIONS,
         VIDEO_EXTENSIONS,
         clear_media_cache,
+        effective_media_privacy_mode,
         make_thumbnail,
         make_waveform,
         resolve_media_path,
@@ -22,6 +23,7 @@ except Exception:
         IMAGE_EXTENSIONS,
         VIDEO_EXTENSIONS,
         clear_media_cache,
+        effective_media_privacy_mode,
         make_thumbnail,
         make_waveform,
         resolve_media_path,
@@ -42,6 +44,15 @@ _ROUTES_REGISTERED = False
 
 def query_bool(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def requested_privacy_mode(value: str | None) -> bool:
+    return effective_media_privacy_mode(query_bool(value))
+
+
+def _media_error_response(exc: Exception, privacy_mode: bool) -> web.Response:
+    error = "PRIVATE_MEDIA_REQUEST_FAILED: Private media request failed." if privacy_mode else str(exc)
+    return web.json_response({"error": error}, status=400)
 
 
 async def _run_preview_job(fn, *args, **kwargs):
@@ -69,8 +80,9 @@ def register_media_cache_routes() -> bool:
 
     @routes.get(f"{ROUTE_PREFIX}/thumbnail")
     async def get_thumbnail(request):
+        privacy_mode = True
         try:
-            privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
             if privacy_mode:
                 denied = check_privacy_token(request)
                 if denied is not None:
@@ -101,12 +113,13 @@ def register_media_cache_routes() -> bool:
                 },
             )
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _media_error_response(exc, privacy_mode)
 
     @routes.get(f"{ROUTE_PREFIX}/waveform")
     async def get_waveform(request):
+        privacy_mode = True
         try:
-            privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
             if privacy_mode:
                 denied = check_privacy_token(request)
                 if denied is not None:
@@ -124,7 +137,7 @@ def register_media_cache_routes() -> bool:
             cache_control = "private, no-store" if privacy_mode else "private, max-age=86400"
             return web.json_response(waveform, headers={"Cache-Control": cache_control})
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _media_error_response(exc, privacy_mode)
 
     @routes.get(f"{ROUTE_PREFIX}/view")
     async def get_view(request):

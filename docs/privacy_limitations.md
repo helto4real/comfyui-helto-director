@@ -8,7 +8,8 @@ Privacy Mode is enabled by default for new Director projects. It is a local work
 - Timeline prompts, media references, filenames, assets, and picker-derived timeline metadata are inside that encrypted payload.
 - Director timeline content is visually masked when the cursor is outside the node.
 - Picker and prompt optimizer media/text content is visually masked outside their panels.
-- Director-generated thumbnails and waveforms are stored encrypted in ComfyUI temp under `helto_timeline_director`.
+- When global Privacy Mode is enabled, Director-generated thumbnails and waveforms are stored encrypted in ComfyUI temp under `helto_timeline_director`. Media requests may opt into this protection, but cannot opt out of the global setting.
+- Enabling global Privacy Mode removes existing plaintext Director thumbnail and waveform caches before the setting is saved. If cleanup fails, Privacy Mode is not changed.
 
 ## Not Protected
 

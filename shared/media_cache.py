@@ -36,6 +36,21 @@ def cache_root() -> Path:
     return root
 
 
+def effective_media_privacy_mode(requested_privacy: bool = False) -> bool:
+    """Return the server-authoritative privacy mode for media operations.
+
+    Callers may request stronger protection, but a request cannot disable the
+    global setting. Import lazily so media-path bootstrap remains usable while
+    the nodepack is being loaded.
+    """
+    try:
+        from .timeline.global_settings import global_privacy_mode
+    except Exception:
+        from shared.timeline.global_settings import global_privacy_mode
+
+    return global_privacy_mode() or bool(requested_privacy)
+
+
 def resolve_media_path(path_value: str, source_type: str | None = None) -> Path:
     if not path_value or not str(path_value).strip():
         raise ValueError("Media path is required.")
@@ -202,6 +217,20 @@ def clear_media_cache() -> None:
     for child in root.rglob("*"):
         if child.is_file():
             child.unlink(missing_ok=True)
+
+
+def clear_public_media_cache() -> None:
+    """Remove plaintext preview caches while preserving encrypted previews."""
+    root = cache_root()
+    public_suffixes = {
+        "thumbnails": (".webp", ".webp.tmp"),
+        "waveforms": (".json", ".json.tmp"),
+    }
+    for directory_name, suffixes in public_suffixes.items():
+        directory = root / directory_name
+        for child in directory.iterdir():
+            if child.is_file() and child.name.endswith(suffixes):
+                child.unlink(missing_ok=True)
 
 
 def _load_image_thumbnail(path: Path, max_size: int) -> Image.Image:

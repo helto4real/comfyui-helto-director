@@ -20,7 +20,7 @@ try:
         remove_folder,
         resolve_browser_media_path,
     )
-    from ..shared.media_cache import make_thumbnail
+    from ..shared.media_cache import effective_media_privacy_mode, make_thumbnail
 except Exception:
     from shared.media_browser import (
         add_folder,
@@ -34,7 +34,7 @@ except Exception:
         remove_folder,
         resolve_browser_media_path,
     )
-    from shared.media_cache import make_thumbnail
+    from shared.media_cache import effective_media_privacy_mode, make_thumbnail
 
 try:
     from .privacy import check_privacy_token
@@ -51,6 +51,24 @@ _ROUTES_REGISTERED = False
 
 def query_bool(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def requested_privacy_mode(value) -> bool:
+    requested = value if isinstance(value, bool) else query_bool(str(value or ""))
+    return effective_media_privacy_mode(requested)
+
+
+def _browser_error_response(exc: Exception, privacy_mode: bool) -> web.Response:
+    error = "PRIVATE_MEDIA_BROWSER_REQUEST_FAILED: Private media request failed." if privacy_mode else str(exc)
+    return web.json_response({"error": error}, status=400)
+
+
+def redact_project_take_payload(payload: dict, privacy_mode: bool) -> dict:
+    if privacy_mode:
+        payload["take_directory"] = "Private path"
+        payload["storage"]["asset_root_directory"] = "Private path"
+        payload["storage"]["project_directory"] = "Private path"
+    return payload
 
 
 async def _run_preview_job(fn, *args, **kwargs):
@@ -108,14 +126,18 @@ def register_media_browser_routes() -> bool:
 
     @routes.get(f"{ROUTE_PREFIX}" + "/{media_type}/items")
     async def get_items(request):
+        privacy_mode = True
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
             alias = request.rel_url.query.get("alias", "")
             recursive = request.rel_url.query.get("recursive", "1").lower() not in {"0", "false", "no"}
-            privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
             folder = folder_by_alias(media_type, alias)
             if not folder.enabled:
-                return web.json_response({"error": f"Folder alias is disabled: {alias}"}, status=400)
+                return _browser_error_response(
+                    ValueError(f"Folder alias is disabled: {alias}"),
+                    privacy_mode,
+                )
             items_key = media_definition(media_type)["items_key"]
             items = await asyncio.to_thread(
                 list_media, media_type, folder.path, recursive=recursive, privacy_mode=privacy_mode
@@ -135,14 +157,14 @@ def register_media_browser_routes() -> bool:
                     item["thumb_url"] = f"{ROUTE_PREFIX}/{media_type}/thumb?{urllib.parse.urlencode(thumb_params)}"
             return web.json_response({items_key: items})
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _browser_error_response(exc, privacy_mode)
 
     @routes.post(f"{ROUTE_PREFIX}/project_takes")
     async def post_project_takes(request):
+        privacy_mode = True
         try:
             data = await request.json()
-            privacy_value = data.get("privacy")
-            privacy_mode = privacy_value if isinstance(privacy_value, bool) else query_bool(str(privacy_value or ""))
+            privacy_mode = requested_privacy_mode(data.get("privacy"))
             payload = await asyncio.to_thread(
                 list_project_take_captures,
                 data.get("project") if isinstance(data.get("project"), dict) else {},
@@ -161,20 +183,16 @@ def register_media_browser_routes() -> bool:
                 if privacy_mode:
                     thumb_params["privacy"] = "1"
                 item["thumb_url"] = f"{MEDIA_ROUTE_PREFIX}/thumbnail?{urllib.parse.urlencode(thumb_params)}"
-            if privacy_mode:
-                payload["take_directory"] = "Private path"
-                payload["storage"]["asset_root_directory"] = "Private path"
-                payload["storage"]["project_directory"] = "Private path"
-            return web.json_response(payload)
+            return web.json_response(redact_project_take_payload(payload, privacy_mode))
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _browser_error_response(exc, privacy_mode)
 
     @routes.post(f"{ROUTE_PREFIX}/project_takes/delete")
     async def post_project_take_delete(request):
+        privacy_mode = True
         try:
             data = await request.json()
-            privacy_value = data.get("privacy")
-            privacy_mode = privacy_value if isinstance(privacy_value, bool) else query_bool(str(privacy_value or ""))
+            privacy_mode = requested_privacy_mode(data.get("privacy"))
             payload = await asyncio.to_thread(
                 delete_project_take_capture,
                 data.get("project") if isinstance(data.get("project"), dict) else {},
@@ -185,14 +203,15 @@ def register_media_browser_routes() -> bool:
             )
             return web.json_response(payload)
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _browser_error_response(exc, privacy_mode)
 
     @routes.get(f"{ROUTE_PREFIX}" + "/{media_type}/thumb")
     async def get_thumb(request):
+        privacy_mode = True
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
             filename = urllib.parse.unquote(request.rel_url.query.get("filename", ""))
-            privacy_mode = query_bool(request.rel_url.query.get("privacy"))
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
             if privacy_mode:
                 denied = check_privacy_token(request)
                 if denied is not None:
@@ -224,7 +243,7 @@ def register_media_browser_routes() -> bool:
                 },
             )
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _browser_error_response(exc, privacy_mode)
 
     @routes.get(f"{ROUTE_PREFIX}" + "/{media_type}/view")
     async def get_view(request):

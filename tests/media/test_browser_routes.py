@@ -1,7 +1,10 @@
 import asyncio
 import json
 import math
+import sys
 import wave
+from pathlib import Path
+from types import SimpleNamespace
 
 import av
 import folder_paths
@@ -51,6 +54,173 @@ def test_media_browser_preview_route_jobs_are_awaited_and_concurrency_limited(mo
 
     assert results == ["thumb-0", "thumb-1", "thumb-2", "thumb-3", "thumb-4", "thumb-5"]
     assert max_active <= media_browser_routes.PREVIEW_JOB_CONCURRENCY
+
+
+class _FakeRequest:
+    def __init__(self, *, media_type="image", query=None, payload=None):
+        self.match_info = {"media_type": media_type}
+        self.rel_url = SimpleNamespace(query=query or {})
+        self._payload = payload
+        self.headers = {}
+        self.cookies = {}
+
+    async def json(self):
+        return self._payload
+
+
+class _RecordingRoutes:
+    def __init__(self):
+        self.handlers = {}
+
+    def _record(self, method, path):
+        def decorator(handler):
+            self.handlers[(method, path)] = handler
+            return handler
+
+        return decorator
+
+    def get(self, path):
+        return self._record("GET", path)
+
+    def post(self, path):
+        return self._record("POST", path)
+
+    def delete(self, path):
+        return self._record("DELETE", path)
+
+
+def _register_media_browser_test_routes(monkeypatch):
+    routes = _RecordingRoutes()
+    server = SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(routes=routes)))
+    monkeypatch.setitem(sys.modules, "server", server)
+    monkeypatch.setattr(media_browser_routes, "_ROUTES_REGISTERED", False)
+    assert media_browser_routes.register_media_browser_routes() is True
+    return routes
+
+
+def test_media_browser_privacy_can_upgrade_but_not_downgrade_global_setting():
+    assert media_browser_routes.requested_privacy_mode(None) is False
+    assert media_browser_routes.requested_privacy_mode(True) is True
+
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+
+    assert media_browser_routes.requested_privacy_mode(None) is True
+    assert media_browser_routes.requested_privacy_mode(False) is True
+    assert media_browser_routes.requested_privacy_mode("false") is True
+
+
+@pytest.mark.parametrize("privacy_value", [None, "false"])
+def test_browser_thumbnail_route_uses_global_privacy_when_request_omits_or_disables_it(
+    privacy_value,
+    monkeypatch,
+):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_browser_test_routes(monkeypatch)
+    checked_requests = []
+    preview_kwargs = {}
+
+    monkeypatch.setattr(
+        media_browser_routes,
+        "check_privacy_token",
+        lambda request: checked_requests.append(request) or None,
+    )
+    monkeypatch.setattr(
+        media_browser_routes,
+        "resolve_browser_media_path",
+        lambda *_args: Path("/synthetic/private.png"),
+    )
+
+    async def fake_preview_job(_fn, *_args, **kwargs):
+        preview_kwargs.update(kwargs)
+        return b"RIFFsyntheticWEBP"
+
+    monkeypatch.setattr(media_browser_routes, "_run_preview_job", fake_preview_job)
+    query = {"alias": "input", "filename": "ignored.png"}
+    if privacy_value is not None:
+        query["privacy"] = privacy_value
+    request = _FakeRequest(query=query)
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_browser_routes.ROUTE_PREFIX}/{{media_type}}/thumb")](request)
+    )
+
+    assert response.status == 200
+    assert response.body == b"RIFFsyntheticWEBP"
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert preview_kwargs["privacy_mode"] is True
+    assert checked_requests == [request]
+
+
+def test_project_take_route_uses_global_privacy_for_redaction(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_browser_test_routes(monkeypatch)
+    observed = {}
+
+    def fake_list_project_take_captures(_project, _shot_id, *, privacy_mode):
+        observed["privacy_mode"] = privacy_mode
+        return {
+            "take_directory": "/private/project/takes",
+            "storage": {
+                "asset_root_directory": "/private/assets",
+                "project_directory": "/private/project",
+            },
+            "captures": [],
+        }
+
+    async def direct_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(media_browser_routes, "list_project_take_captures", fake_list_project_take_captures)
+    monkeypatch.setattr(media_browser_routes.asyncio, "to_thread", direct_to_thread)
+    request = _FakeRequest(
+        payload={"project": {}, "shot_id": "shot_001", "privacy": False},
+    )
+
+    response = asyncio.run(
+        routes.handlers[("POST", f"{media_browser_routes.ROUTE_PREFIX}/project_takes")](request)
+    )
+    payload = json.loads(response.body)
+
+    assert response.status == 200
+    assert observed["privacy_mode"] is True
+    assert payload["take_directory"] == "Private path"
+    assert payload["storage"] == {
+        "asset_root_directory": "Private path",
+        "project_directory": "Private path",
+    }
+
+
+def test_global_privacy_redacts_project_take_route_paths():
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    privacy_mode = media_browser_routes.requested_privacy_mode(False)
+    payload = {
+        "take_directory": "/private/project/takes",
+        "storage": {
+            "asset_root_directory": "/private/assets",
+            "project_directory": "/private/project",
+        },
+        "captures": [],
+    }
+
+    redacted = media_browser_routes.redact_project_take_payload(payload, privacy_mode)
+
+    assert redacted["take_directory"] == "Private path"
+    assert redacted["storage"] == {
+        "asset_root_directory": "Private path",
+        "project_directory": "Private path",
+    }
+
+
+def test_private_media_browser_errors_do_not_expose_sensitive_paths():
+    response = media_browser_routes._browser_error_response(
+        ValueError("Media file not found: /private/project/secret.mp4"),
+        True,
+    )
+
+    payload = json.loads(response.body)
+    assert response.status == 400
+    assert payload == {"error": "PRIVATE_MEDIA_BROWSER_REQUEST_FAILED: Private media request failed."}
+    assert "/private/project" not in response.text
 
 
 def test_media_browser_folder_config_defaults_adds_removes_and_rejects_invalid(tmp_path, monkeypatch):
