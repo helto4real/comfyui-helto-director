@@ -12,7 +12,6 @@ try:
         IMAGE_EXTENSIONS,
         VIDEO_EXTENSIONS,
         clear_media_cache,
-        effective_media_privacy_mode,
         make_thumbnail,
         make_waveform,
         resolve_media_path,
@@ -23,7 +22,6 @@ except Exception:
         IMAGE_EXTENSIONS,
         VIDEO_EXTENSIONS,
         clear_media_cache,
-        effective_media_privacy_mode,
         make_thumbnail,
         make_waveform,
         resolve_media_path,
@@ -34,6 +32,11 @@ try:
 except Exception:
     from routes.privacy import check_privacy_token
 
+try:
+    from .media_privacy import media_error_response, requested_privacy_mode
+except Exception:
+    from routes.media_privacy import media_error_response, requested_privacy_mode
+
 
 ROUTE_PREFIX = "/helto_director/media"
 SERVABLE_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
@@ -41,18 +44,11 @@ PREVIEW_JOB_CONCURRENCY = 2
 _PREVIEW_JOB_SEMAPHORE = asyncio.Semaphore(PREVIEW_JOB_CONCURRENCY)
 _ROUTES_REGISTERED = False
 
-
-def query_bool(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def requested_privacy_mode(value: str | None) -> bool:
-    return effective_media_privacy_mode(query_bool(value))
+PRIVATE_MEDIA_ERROR = "PRIVATE_MEDIA_REQUEST_FAILED: Private media request failed."
 
 
 def _media_error_response(exc: Exception, privacy_mode: bool) -> web.Response:
-    error = "PRIVATE_MEDIA_REQUEST_FAILED: Private media request failed." if privacy_mode else str(exc)
-    return web.json_response({"error": error}, status=400)
+    return media_error_response(exc, privacy_mode, private_error=PRIVATE_MEDIA_ERROR)
 
 
 async def _run_preview_job(fn, *args, **kwargs):

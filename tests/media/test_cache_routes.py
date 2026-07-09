@@ -15,6 +15,7 @@ from PIL import Image
 from routes import global_settings as global_settings_routes
 from routes import media_cache as media_cache_routes
 from shared import media_browser
+from shared import atomic_write as atomic_write_module
 from shared import media_cache as media_cache_module
 from shared.media_cache import (
     MAX_WAVEFORM_PEAKS,
@@ -389,7 +390,7 @@ def test_atomic_write_removes_unique_temp_files_after_failures(tmp_path, monkeyp
         raise OSError("replace failed")
 
     with monkeypatch.context() as patch_context:
-        patch_context.setattr(media_cache_module.os, "replace", failed_replace)
+        patch_context.setattr(atomic_write_module.os, "replace", failed_replace)
         with pytest.raises(OSError, match="replace failed"):
             media_cache_module._atomic_write(target, lambda temp_path: temp_path.write_bytes(b"complete"))
     assert not target.exists()

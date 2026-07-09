@@ -20,7 +20,7 @@ try:
         remove_folder,
         resolve_browser_media_path,
     )
-    from ..shared.media_cache import effective_media_privacy_mode, make_thumbnail
+    from ..shared.media_cache import make_thumbnail
 except Exception:
     from shared.media_browser import (
         add_folder,
@@ -34,12 +34,17 @@ except Exception:
         remove_folder,
         resolve_browser_media_path,
     )
-    from shared.media_cache import effective_media_privacy_mode, make_thumbnail
+    from shared.media_cache import make_thumbnail
 
 try:
     from .privacy import check_privacy_token
 except Exception:
     from routes.privacy import check_privacy_token
+
+try:
+    from .media_privacy import media_error_response, requested_privacy_mode
+except Exception:
+    from routes.media_privacy import media_error_response, requested_privacy_mode
 
 
 ROUTE_PREFIX = "/helto_director/media_browser"
@@ -48,19 +53,11 @@ PREVIEW_JOB_CONCURRENCY = 2
 _PREVIEW_JOB_SEMAPHORE = asyncio.Semaphore(PREVIEW_JOB_CONCURRENCY)
 _ROUTES_REGISTERED = False
 
-
-def query_bool(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def requested_privacy_mode(value) -> bool:
-    requested = value if isinstance(value, bool) else query_bool(str(value or ""))
-    return effective_media_privacy_mode(requested)
+PRIVATE_MEDIA_BROWSER_ERROR = "PRIVATE_MEDIA_BROWSER_REQUEST_FAILED: Private media request failed."
 
 
 def _browser_error_response(exc: Exception, privacy_mode: bool) -> web.Response:
-    error = "PRIVATE_MEDIA_BROWSER_REQUEST_FAILED: Private media request failed." if privacy_mode else str(exc)
-    return web.json_response({"error": error}, status=400)
+    return media_error_response(exc, privacy_mode, private_error=PRIVATE_MEDIA_BROWSER_ERROR)
 
 
 def redact_project_take_payload(payload: dict, privacy_mode: bool) -> dict:

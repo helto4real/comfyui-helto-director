@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import shared.privacy as privacy
+from shared import atomic_write as atomic_write_module
 from shared.privacy import (
     BYTE_CHUNKED_ENVELOPE_SCHEMA,
     CRYPTO_AVAILABLE,
@@ -129,7 +130,7 @@ def test_private_json_writer_removes_unique_temp_after_replace_failure(monkeypat
     def failed_replace(*_args):
         raise OSError("replace failed")
 
-    monkeypatch.setattr(privacy.os, "replace", failed_replace)
+    monkeypatch.setattr(atomic_write_module.os, "replace", failed_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         privacy._write_private_json(target, {"key": "synthetic"})

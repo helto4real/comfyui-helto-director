@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import hashlib
 import io
 import json
 import math
 import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +12,7 @@ import av
 import folder_paths
 from PIL import Image, ImageOps
 
+from .atomic_write import atomic_write as _atomic_write
 from .privacy import decrypt_bytes, encrypt_bytes
 
 
@@ -259,41 +258,8 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
     _atomic_write(
         path,
         lambda tmp_path: tmp_path.write_text(encoded, encoding="utf-8"),
-        private=True,
+        mode=0o600,
     )
-
-
-def _atomic_write(
-    path: Path,
-    writer: Callable[[Path], object],
-    *,
-    private: bool = False,
-) -> None:
-    """Write through a unique sibling temp file, then atomically install it."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    file_descriptor, temp_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    os.close(file_descriptor)
-    temp_path = Path(temp_name)
-    try:
-        writer(temp_path)
-        if private:
-            _chmod_private(temp_path)
-        os.replace(temp_path, path)
-        if private:
-            _chmod_private(path)
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
-def _chmod_private(path: Path) -> None:
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
 
 
 def _is_public_cache_artifact(name: str, suffix: str) -> bool:

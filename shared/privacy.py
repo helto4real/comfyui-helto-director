@@ -8,7 +8,6 @@ import json
 import math
 import os
 import secrets
-import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Mapping
@@ -24,6 +23,7 @@ except Exception as exc:  # noqa: BLE001 - dependency may be absent in ComfyUI i
     CRYPTO_IMPORT_ERROR = str(exc)
 
 from . import privacy_keystore
+from .atomic_write import atomic_write
 from .privacy_keystore import PrivacyKeystoreError
 
 
@@ -285,27 +285,11 @@ def _write_private_json(path: Path, payload: Mapping[str, Any]) -> None:
     except OSError:
         pass
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-    file_descriptor, temp_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
+    atomic_write(
+        path,
+        lambda temp_path: temp_path.write_text(text, encoding="utf-8"),
+        mode=0o600,
     )
-    os.close(file_descriptor)
-    temp_path = Path(temp_name)
-    try:
-        temp_path.write_text(text, encoding="utf-8")
-        _chmod_private(temp_path)
-        os.replace(temp_path, path)
-        _chmod_private(path)
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
-def _chmod_private(path: Path) -> None:
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
 
 
 def _aad(key_id: str) -> bytes:
