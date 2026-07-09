@@ -1,29 +1,23 @@
 from __future__ import annotations
 
-import math
 from typing import Any
 
-import av
 import torch
 
 from ...contracts.video_timeline import SECTION_TYPE_VIDEO
-from ...media_cache import resolve_media_path
+from ... import audio as shared_audio
 from ...timeline.global_settings import global_always_normalize_audio
 
 
-TARGET_SAMPLE_RATE = 44100
-AUDIO_NORMALIZE_TARGET_RMS = 10 ** (-18.0 / 20.0)
-AUDIO_NORMALIZE_PEAK_CEILING = 10 ** (-1.0 / 20.0)
-AUDIO_NORMALIZE_MAX_GAIN = 2.0
-AUDIO_NORMALIZE_EPSILON = 1e-8
-
-
-def empty_audio(duration_seconds: float, sample_rate: int = TARGET_SAMPLE_RATE, channels: int = 2) -> dict[str, Any]:
-    total_samples = max(1, int(math.ceil(max(0.0, float(duration_seconds or 0.0)) * sample_rate)))
-    return {
-        "waveform": torch.zeros((1, channels, total_samples), dtype=torch.float32),
-        "sample_rate": sample_rate,
-    }
+# Keep the established internal imports available while shared.audio owns the
+# implementation. New callers should import shared.audio directly.
+TARGET_SAMPLE_RATE = shared_audio.TARGET_SAMPLE_RATE
+apply_gain_and_fades = shared_audio.apply_gain_and_fades
+decode_audio_file = shared_audio.decode_audio_file
+decode_source_video_audio = shared_audio.decode_source_video_audio
+empty_audio = shared_audio.empty_audio
+normalize_audio_waveform = shared_audio.normalize_audio_waveform
+trim_audio = shared_audio.trim_audio
 
 
 def mix_timeline_audio(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -34,43 +28,11 @@ def mix_timeline_audio(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]
     duration = max(duration, frame_count / frame_rate if frame_rate > 0 else duration)
     if config.get("audio_mode") == "Ignore Timeline Audio":
         return empty_audio(duration), ["Timeline audio was ignored by LTX audio mode."]
-
-    total_samples = max(1, int(math.ceil(duration * TARGET_SAMPLE_RATE)))
-    output = torch.zeros((2, total_samples), dtype=torch.float32)
-    diagnostics: list[str] = []
-
-    for entry in plan.get("audio_plan", []):
-        if entry.get("enabled") is False:
-            continue
-        path = entry.get("path")
-        if not path:
-            raise ValueError(f"LTX runtime audio clip {entry.get('item_id')} is missing a path.")
-        clip_waveform = decode_audio_file(path)
-        clip_waveform = trim_audio(
-            clip_waveform,
-            float(entry.get("source_in") or 0.0),
-            entry.get("source_out"),
-            float(entry.get("end_time") or 0.0) - float(entry.get("start_time") or 0.0),
-        )
-        if clip_waveform.shape[-1] <= 0:
-            continue
-        clip_waveform = apply_gain_and_fades(
-            clip_waveform,
-            _volume_to_gain(entry.get("volume")),
-            float(entry.get("fade_in") or 0.0),
-            float(entry.get("fade_out") or 0.0),
-        )
-        start_sample = max(0, int(round(float(entry.get("start_time") or 0.0) * TARGET_SAMPLE_RATE)))
-        if start_sample >= output.shape[-1]:
-            continue
-        end_sample = min(output.shape[-1], start_sample + clip_waveform.shape[-1])
-        length = end_sample - start_sample
-        if length <= 0:
-            continue
-        output[:, start_sample:end_sample] += clip_waveform[:, :length]
-
-    output = normalize_audio_waveform(output, enabled=global_always_normalize_audio())
-    return {"waveform": output.unsqueeze(0), "sample_rate": TARGET_SAMPLE_RATE}, diagnostics
+    return shared_audio.mix_audio_clips(
+        plan.get("audio_plan", []),
+        duration,
+        normalize=global_always_normalize_audio(),
+    )
 
 
 def apply_native_source_video_audio_fallback(plan: dict[str, Any], timeline_audio: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -93,8 +55,6 @@ def apply_native_source_video_audio_fallback(plan: dict[str, Any], timeline_audi
 
 def build_native_source_video_audio_fallback(plan: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
     duration = _plan_duration_seconds(plan)
-    total_samples = max(1, int(math.ceil(duration * TARGET_SAMPLE_RATE)))
-    output = torch.zeros((2, total_samples), dtype=torch.float32)
     frame_rate = float(plan.get("resolved_output", {}).get("frame_rate") or 24.0)
     sections_by_id = {entry.get("item_id"): entry for entry in plan.get("section_plan", [])}
     video_media = [
@@ -105,7 +65,7 @@ def build_native_source_video_audio_fallback(plan: dict[str, Any]) -> tuple[dict
     if not video_media:
         return None, ["Native source-video audio fallback unavailable; no video media with paths was found."]
 
-    applied_count = 0
+    audio_plan: list[dict[str, Any]] = []
     diagnostics: list[str] = []
     for media in video_media:
         section = sections_by_id.get(media.get("item_id"), {})
@@ -113,42 +73,45 @@ def build_native_source_video_audio_fallback(plan: dict[str, Any]) -> tuple[dict
         end_frame = int(section.get("end_frame_exclusive") or start_frame)
         if end_frame <= start_frame or frame_rate <= 0:
             continue
-        section_duration = (end_frame - start_frame) / frame_rate
         try:
-            waveform = decode_audio_file(str(media.get("path")))
+            waveform = shared_audio.decode_audio_file(str(media.get("path")))
         except Exception:
             diagnostics.append(
                 f"Native source-video audio fallback skipped {media.get('item_id') or 'video media'}; no decodable audio stream was found."
             )
             continue
 
-        clip_waveform = trim_audio(
-            waveform,
-            float(media.get("source_in") or 0.0),
-            media.get("source_out"),
-            section_duration,
+        section_duration = (end_frame - start_frame) / frame_rate
+        source_in = float(media.get("source_in") or 0.0)
+        source_out = media.get("source_out")
+        if source_out is not None and source_out != "":
+            source_out = min(float(source_out), source_in + section_duration)
+        audio_plan.append(
+            {
+                "item_id": media.get("item_id"),
+                "waveform": waveform,
+                "start_time": start_frame / frame_rate,
+                "end_time": end_frame / frame_rate,
+                "source_in": source_in,
+                "source_out": source_out,
+                "volume": 100.0,
+                "fade_in": 0.0,
+                "fade_out": 0.0,
+                "enabled": True,
+            }
         )
-        max_clip_samples = max(1, int(math.ceil(section_duration * TARGET_SAMPLE_RATE)))
-        clip_waveform = clip_waveform[:, :max_clip_samples]
-        if clip_waveform.shape[-1] <= 0:
-            continue
-        start_sample = max(0, int(round((start_frame / frame_rate) * TARGET_SAMPLE_RATE)))
-        if start_sample >= output.shape[-1]:
-            continue
-        end_sample = min(output.shape[-1], start_sample + clip_waveform.shape[-1])
-        length = end_sample - start_sample
-        if length <= 0:
-            continue
-        output[:, start_sample:end_sample] += clip_waveform[:, :length]
-        applied_count += 1
 
-    if applied_count <= 0:
+    if not audio_plan:
         if not diagnostics:
             diagnostics.append("Native source-video audio fallback unavailable; no decodable source-video audio was found.")
         return None, diagnostics
 
-    output = normalize_audio_waveform(output, enabled=global_always_normalize_audio())
-    return {"waveform": output.unsqueeze(0), "sample_rate": TARGET_SAMPLE_RATE}, diagnostics
+    audio, mix_diagnostics = shared_audio.mix_audio_clips(
+        audio_plan,
+        duration,
+        normalize=global_always_normalize_audio(),
+    )
+    return audio, [*diagnostics, *mix_diagnostics]
 
 
 def build_native_av_sampling_latent(video_latent: dict[str, Any], audio_latent: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -284,86 +247,6 @@ def stitch_native_generated_audio(
     return {"waveform": output, "sample_rate": sample_rate}, debug
 
 
-def decode_audio_file(path_value: str) -> torch.Tensor:
-    path = resolve_media_path(path_value)
-    frames: list[torch.Tensor] = []
-    with av.open(str(path)) as container:
-        stream = next((stream for stream in container.streams if stream.type == "audio"), None)
-        if stream is None:
-            raise ValueError(f"Audio media has no audio stream: {path}")
-        resampler = av.AudioResampler(format="fltp", layout="stereo", rate=TARGET_SAMPLE_RATE)
-        for frame in container.decode(stream):
-            frames.extend(_resampled_tensors(resampler.resample(frame)))
-        frames.extend(_resampled_tensors(resampler.resample(None)))
-    if not frames:
-        raise ValueError(f"Could not decode audio media: {path}")
-    waveform = torch.cat(frames, dim=1).to(torch.float32)
-    if waveform.shape[0] == 1:
-        waveform = waveform.repeat(2, 1)
-    elif waveform.shape[0] > 2:
-        waveform = waveform[:2]
-    return waveform.contiguous()
-
-
-def decode_source_video_audio(path_value: str, duration_seconds: float, source_in: float = 0.0, source_out: Any = None) -> dict[str, Any]:
-    try:
-        waveform = decode_audio_file(path_value)
-    except Exception:
-        return empty_audio(duration_seconds)
-    waveform = trim_audio(waveform, source_in, source_out, duration_seconds)
-    expected_samples = max(1, int(math.ceil(max(0.0, duration_seconds) * TARGET_SAMPLE_RATE)))
-    if waveform.shape[-1] < expected_samples:
-        pad = torch.zeros((waveform.shape[0], expected_samples - waveform.shape[-1]), dtype=waveform.dtype)
-        waveform = torch.cat((waveform, pad), dim=1)
-    elif waveform.shape[-1] > expected_samples:
-        waveform = waveform[:, :expected_samples]
-    return {"waveform": waveform.unsqueeze(0), "sample_rate": TARGET_SAMPLE_RATE}
-
-
-def trim_audio(waveform: torch.Tensor, source_in: float, source_out: Any, clip_duration: float) -> torch.Tensor:
-    start = max(0, int(round(max(0.0, source_in) * TARGET_SAMPLE_RATE)))
-    if source_out is None or source_out == "":
-        end = start + int(round(max(0.0, clip_duration) * TARGET_SAMPLE_RATE))
-    else:
-        end = int(round(max(0.0, float(source_out)) * TARGET_SAMPLE_RATE))
-    end = min(max(start, end), waveform.shape[-1])
-    return waveform[:, start:end]
-
-
-def apply_gain_and_fades(waveform: torch.Tensor, gain: float, fade_in: float, fade_out: float) -> torch.Tensor:
-    result = waveform * float(gain)
-    sample_count = result.shape[-1]
-    fade_in_samples = min(sample_count, max(0, int(round(fade_in * TARGET_SAMPLE_RATE))))
-    fade_out_samples = min(sample_count, max(0, int(round(fade_out * TARGET_SAMPLE_RATE))))
-    if fade_in_samples > 0:
-        ramp = torch.linspace(0.0, 1.0, fade_in_samples, dtype=result.dtype, device=result.device)
-        result[:, :fade_in_samples] *= ramp
-    if fade_out_samples > 0:
-        ramp = torch.linspace(1.0, 0.0, fade_out_samples, dtype=result.dtype, device=result.device)
-        result[:, sample_count - fade_out_samples:] *= ramp
-    return result
-
-
-def normalize_audio_waveform(waveform: torch.Tensor, enabled: bool = True) -> torch.Tensor:
-    if not enabled or not torch.is_tensor(waveform) or waveform.numel() == 0:
-        return waveform
-    values = torch.nan_to_num(waveform.detach().float(), nan=0.0, posinf=0.0, neginf=0.0)
-    peak = float(values.abs().max())
-    if peak <= AUDIO_NORMALIZE_EPSILON:
-        return waveform
-    rms = float(torch.sqrt(torch.mean(values * values)))
-    if rms <= AUDIO_NORMALIZE_EPSILON:
-        return waveform
-    rms_gain = AUDIO_NORMALIZE_TARGET_RMS / rms
-    peak_gain = AUDIO_NORMALIZE_PEAK_CEILING / peak
-    gain = min(rms_gain, peak_gain, AUDIO_NORMALIZE_MAX_GAIN)
-    normalized = waveform * gain
-    final_peak = float(normalized.detach().float().abs().max())
-    if final_peak > AUDIO_NORMALIZE_PEAK_CEILING:
-        normalized = normalized * (AUDIO_NORMALIZE_PEAK_CEILING / final_peak)
-    return normalized
-
-
 def build_audio_latent(audio: dict[str, Any], audio_vae, frame_count: int, frame_rate: float) -> tuple[dict[str, Any], list[str]]:
     diagnostics: list[str] = []
     if audio_vae is None:
@@ -471,24 +354,3 @@ def _plan_duration_seconds(plan: dict[str, Any]) -> float:
     frame_count = int(resolved.get("frame_count") or 1)
     frame_rate = float(resolved.get("frame_rate") or 24.0)
     return max(duration, frame_count / frame_rate if frame_rate > 0 else duration)
-
-
-def _volume_to_gain(value: Any) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        number = 100.0
-    return max(0.0, number / 100.0)
-
-
-def _resampled_tensors(value) -> list[torch.Tensor]:
-    if value is None:
-        return []
-    if not isinstance(value, (list, tuple)):
-        value = [value]
-    tensors = []
-    for frame in value:
-        if frame is None:
-            continue
-        tensors.append(torch.from_numpy(frame.to_ndarray()).to(torch.float32))
-    return tensors

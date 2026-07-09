@@ -11,10 +11,14 @@ from ..contracts.video_timeline import (
     BOUNDARY_MODE_CONTINUOUS_SHOT,
     BOUNDARY_MODE_HARD_CUT,
     BOUNDARY_MODE_TRANSITION,
+    CROP_MODE_PAD,
     SHOT_TYPE_IMPORTED,
 )
+from .. import audio as shared_audio
+from .. import media as shared_media
 from .normalize import normalize_video_timeline
 from .time_mapping import time_range_to_frames
+from .global_settings import global_always_normalize_audio
 from ..timeline_status import TimelineStatusReporter
 
 
@@ -139,8 +143,6 @@ def _empty_sequence_result(
     frame_rate: float,
     debug: dict[str, Any],
 ) -> tuple[torch.Tensor, dict[str, Any], float, dict[str, Any]]:
-    from ..ltx.runtime.audio import empty_audio
-
     frames = torch.zeros((1, 16, 16, 3), dtype=torch.float32)
     duration = 1.0 / frame_rate if frame_rate > 0 else 0.0
     debug["summary"]["status"] = "not_built"
@@ -159,7 +161,7 @@ def _empty_sequence_result(
     )
     debug["summary"]["warning_count"] = len(debug["warnings"])
     debug["summary"]["error_count"] = len(debug["errors"])
-    return frames, empty_audio(duration), frame_rate, debug
+    return frames, shared_audio.empty_audio(duration), frame_rate, debug
 
 
 def _decode_sequence_clips(
@@ -172,8 +174,6 @@ def _decode_sequence_clips(
     shots: list[dict[str, Any]] | None = None,
     status_reporter: TimelineStatusReporter | None = None,
 ) -> list[dict[str, Any]]:
-    from ..ltx.runtime.media import decode_video_frames, trim_video_source_frames
-
     shots = _sequence_shots(timeline) if shots is None else shots
     debug["summary"]["shot_count"] = len(shots)
     clip_entries = []
@@ -219,7 +219,7 @@ def _decode_sequence_clips(
             debug["shots"].append(shot_debug)
             raise SequenceAssemblyError(f"SEQUENCE_ASSEMBLY_ASSET_PATH_MISSING: Shot {shot_id} asset {asset_id} has no path.")
         try:
-            decoded, source_fps, decoded_count = decode_video_frames(str(path))
+            decoded, source_fps, decoded_count = shared_media.decode_video_frames(str(path))
         except FileNotFoundError:
             details = {
                 "shot_id": shot_id,
@@ -269,7 +269,11 @@ def _decode_sequence_clips(
             "source_in": source["clip_instance"].get("source_in"),
             "source_out": source["clip_instance"].get("source_out"),
         }
-        trimmed, trim_debug = trim_video_source_frames(decoded, source_fps, media)
+        trimmed, trim_debug = shared_media.trim_video_source_frames(
+            decoded,
+            source_fps,
+            media,
+        )
         target_frame_count = _shot_target_frame_count(shot, frame_rate, trimmed, source_fps)
         fitted = _fit_frames_to_count(trimmed, target_frame_count)
         clip_entry = {
@@ -468,9 +472,6 @@ def _assemble_clip_frames(
     timeline: dict[str, Any],
     debug: dict[str, Any],
 ) -> torch.Tensor:
-    from ..contracts.video_timeline import CROP_MODE_PAD
-    from ..ltx.runtime.media import resize_image_frames
-
     target_height = int(clip_entries[0]["frames"].shape[1])
     target_width = int(clip_entries[0]["frames"].shape[2])
     debug["resolution"]["width"] = target_width
@@ -479,7 +480,7 @@ def _assemble_clip_frames(
         frames = entry["frames"]
         if int(frames.shape[1]) == target_height and int(frames.shape[2]) == target_width:
             continue
-        entry["frames"] = resize_image_frames(
+        entry["frames"] = shared_media.resize_image_frames(
             frames,
             target_width,
             target_height,
@@ -580,8 +581,6 @@ def _assemble_audio(
     frame_rate: float,
     debug: dict[str, Any],
 ) -> dict[str, Any]:
-    from ..ltx.runtime.audio import empty_audio, mix_timeline_audio
-
     duration = max(0.0, int(frames.shape[0]) / frame_rate if frame_rate > 0 else 0.0)
     source_audio_plan = _build_source_audio_plan(clip_entries, frame_rate, debug)
     timeline_audio_plan = _build_audio_plan(timeline, frame_rate)
@@ -594,19 +593,13 @@ def _assemble_audio(
             debug["audio"]["diagnostics"].append("No decodable source video audio or timeline audio clips were present; returned silent audio.")
         else:
             debug["audio"]["diagnostics"].append("No timeline audio clips were present; returned silent audio.")
-        return empty_audio(duration)
-    mix_plan = {
-        "project": deepcopy(timeline.get("project") or {}),
-        "resolved_output": {
-            "duration_seconds": duration,
-            "frame_count": int(frames.shape[0]),
-            "frame_rate": frame_rate,
-        },
-        "audio_plan": audio_plan,
-        "model_specific": {"ltx": {"config": {}}},
-    }
+        return shared_audio.empty_audio(duration)
     try:
-        audio, diagnostics = mix_timeline_audio(mix_plan)
+        audio, diagnostics = shared_audio.mix_audio_clips(
+            audio_plan,
+            duration,
+            normalize=global_always_normalize_audio(),
+        )
     except Exception as exc:
         debug["audio"]["status"] = "unsupported"
         debug["audio"]["diagnostics"].append(f"Timeline audio mix failed; returned silent audio: {exc}.")
@@ -615,7 +608,7 @@ def _assemble_audio(
             "SEQUENCE_ASSEMBLY_AUDIO_MIX_FAILED",
             "Timeline audio mix failed; returned silent audio.",
         )
-        return empty_audio(duration)
+        return shared_audio.empty_audio(duration)
     debug["audio"]["status"] = "mixed"
     if debug["audio"]["source_mixed_clip_count"] > 0:
         debug["audio"]["diagnostics"].append(
@@ -871,21 +864,7 @@ def _blend_frames(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
 
 
 def _source_audio_is_decodable(path: str) -> bool:
-    import av
-
-    from ..media_cache import resolve_media_path
-
-    try:
-        resolved = resolve_media_path(path)
-        with av.open(str(resolved)) as container:
-            stream = next((stream for stream in container.streams if stream.type == "audio"), None)
-            if stream is None:
-                return False
-            for _frame in container.decode(stream):
-                return True
-    except Exception:
-        return False
-    return False
+    return shared_audio.audio_stream_is_decodable(path)
 
 
 def _add_warning(

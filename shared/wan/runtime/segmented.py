@@ -7,8 +7,11 @@ import torch
 
 from ..bernini import BERNINI_MODEL_MODE
 from ..planner import _build_prompt_relay, _latent_chunk_count
-from ...ltx.runtime.audio import mix_timeline_audio
-from ...timeline.global_settings import global_privacy_mode
+from ... import audio as shared_audio
+from ...timeline.global_settings import (
+    global_always_normalize_audio,
+    global_privacy_mode,
+)
 from ...segmented_executor import (
     SegmentSpillStore,
     blend_segment_seam,
@@ -287,7 +290,11 @@ def build_wan_segmented_executor_outputs(
         )
         cleanup_summary = cleanup_spill_store_once(store, cleanup_state)
         status_reporter.report("timeline.audio", "Timeline Executor: mixing audio")
-        combined_audio, audio_diagnostics = mix_timeline_audio(_wan_plan_as_audio_mix_plan(plan))
+        combined_audio, audio_diagnostics = shared_audio.mix_audio_clips(
+            plan.get("audio_plan", []),
+            _plan_duration_seconds(plan),
+            normalize=global_always_normalize_audio(),
+        )
         status_reporter.done("Timeline Executor: done")
         debug = {
             "enabled": bool(segmented.get("enabled")),
@@ -842,11 +849,12 @@ def _keyframe_role(index: int, count: int) -> str:
     return "Timed"
 
 
-def _wan_plan_as_audio_mix_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    # The LTX audio mixer is timeline-generic except for this config key.
-    output = deepcopy(plan)
-    output.setdefault("model_specific", {}).setdefault("ltx", {}).setdefault("config", {})["audio_mode"] = "Mix Timeline Audio"
-    return output
+def _plan_duration_seconds(plan: dict[str, Any]) -> float:
+    resolved = plan.get("resolved_output", {})
+    duration = float(resolved.get("duration_seconds") or 0.0)
+    frame_count = int(resolved.get("frame_count") or 1)
+    frame_rate = float(resolved.get("frame_rate") or 24.0)
+    return max(duration, frame_count / frame_rate if frame_rate > 0 else duration)
 
 
 def _runtime_boundary_conditioning_from_debug(runtime_context: dict[str, Any]) -> dict[str, Any]:

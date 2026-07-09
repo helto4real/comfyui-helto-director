@@ -37,6 +37,11 @@ from ...timeline.planner_context import (
 )
 from ...timeline.take_capture import build_take_capture_metadata
 from ...timeline import generation_policy_skips_generation
+from ...media import (
+    decode_video_frames,
+    select_video_guidance_range,
+    trim_video_source_frames,
+)
 
 
 def build_wan_runtime_outputs(
@@ -517,10 +522,6 @@ def _decode_wan_boundary_tail_frames(
     width: int,
     height: int,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
-    try:
-        from ...ltx.runtime.media import decode_video_frames, select_video_guidance_range, trim_video_source_frames
-    except Exception as exc:
-        raise ValueError("PyAV video decoding support is required for WAN boundary conditioning.") from exc
     media = {
         "item_id": _boundary_conditioning_media_item_id(boundary),
         "path": boundary.get("path"),

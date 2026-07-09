@@ -5,6 +5,11 @@ import importlib.util
 
 import torch
 
+from ...media import (
+    decode_video_frames,
+    select_video_guide_frames,
+    trim_video_source_frames,
+)
 from .visual import conditioning_set_values, load_keyframe_image
 
 
@@ -227,10 +232,6 @@ def _load_reference_image_tensors(
 
 
 def _load_video_source_frames(media: dict[str, Any], plan: dict[str, Any], frame_count: int):
-    try:
-        from ...ltx.runtime.media import decode_video_frames, select_video_guide_frames, trim_video_source_frames
-    except Exception as exc:
-        raise ValueError("BERNINI_VIDEO_RUNTIME_UNAVAILABLE: PyAV video decoding support is required for Bernini v2v source_video conditioning.") from exc
     decoded, fps, decoded_count = decode_video_frames(str(media.get("path") or ""))
     trimmed, trim_metadata = trim_video_source_frames(decoded, fps, media)
     selected = select_video_guide_frames(

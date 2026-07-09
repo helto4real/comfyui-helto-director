@@ -26,7 +26,7 @@ import shared.wan.runtime.runtime as wan_runtime
 import shared.wan.runtime.visual as wan_visual
 from shared.timeline import GENERATION_MODE_FORCE_FULL_TIMELINE
 from shared.wan import build_wan_timeline_plan, create_wan_timeline_config
-import shared.ltx.runtime.audio as ltx_audio
+import shared.audio as shared_audio
 import shared.ltx.runtime.segmented as ltx_segmented
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline.segmentation import build_generation_segments
@@ -792,7 +792,7 @@ def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", lambda **kwargs: (kwargs["latent"], {"sampling_policy": "two_phase", "unload_events": []}))
     monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
     monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
-    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
         "SegmentSpillStore",
@@ -1146,7 +1146,7 @@ def test_ltx_segmented_executor_guides_new_character_in_continuation(monkeypatch
 def test_ltx_segmented_executor_uses_native_source_video_audio_fallback(monkeypatch, tmp_path):
     _patch_ltx_executor_runtime(monkeypatch, tmp_path, lambda **_kwargs: _fake_ltx_runtime_result(hidden_reference_count=0))
     monkeypatch.setattr(
-        ltx_audio,
+        shared_audio,
         "decode_audio_file",
         lambda _path: torch.full((2, 44100), 0.25, dtype=torch.float32),
     )
@@ -1176,7 +1176,7 @@ def test_ltx_segmented_executor_keeps_timeline_audio_over_native_fallback(monkey
     timeline_audio = {"waveform": torch.full((1, 2, 1), 0.75, dtype=torch.float32), "sample_rate": 44100}
     monkeypatch.setattr(ltx_segmented, "mix_timeline_audio", lambda _plan: (timeline_audio, ["timeline audio mix"]))
     monkeypatch.setattr(
-        ltx_audio,
+        shared_audio,
         "decode_audio_file",
         lambda _path: torch.full((2, 44100), 0.25, dtype=torch.float32),
     )
@@ -1208,7 +1208,7 @@ def test_ltx_segmented_executor_keeps_timeline_mix_when_native_source_audio_unav
     def raise_no_audio(_path):
         raise ValueError("no audio stream")
 
-    monkeypatch.setattr(ltx_audio, "decode_audio_file", raise_no_audio)
+    monkeypatch.setattr(shared_audio, "decode_audio_file", raise_no_audio)
     plan = _ltx_native_video_audio_executor_plan()
 
     _images, audio, _fps, debug = ltx_segmented.build_ltx_segmented_executor_outputs(
@@ -1740,7 +1740,7 @@ def test_wan_segmented_executor_context_includes_status_events(monkeypatch, tmp_
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
     monkeypatch.setattr(wan_segmented, "decode_latent_images", lambda _vae, _latent: torch.ones((5, 2, 2, 3)))
     monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
-    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
         "SegmentSpillStore",
@@ -1886,7 +1886,7 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
     monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
     monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
-    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
         "SegmentSpillStore",
@@ -1982,7 +1982,7 @@ def test_wan_fmlf_svi_three_segment_plan_and_handoff_exclude_padded_tail(monkeyp
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
     monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
     monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
-    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
         "SegmentSpillStore",
@@ -2086,7 +2086,7 @@ def test_wan_fmlf_svi_10s_debug_shows_two_text_sections_in_second_generation(mon
     monkeypatch.setattr(wan_segmented, "sample_wan_segment_latent", fake_sample_wan_segment_latent)
     monkeypatch.setattr(wan_segmented, "decode_latent_images", fake_decode)
     monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda stage: {"stage": stage, "attempted": True, "success": True, "warnings": []})
-    monkeypatch.setattr(wan_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
+    monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
         "SegmentSpillStore",
