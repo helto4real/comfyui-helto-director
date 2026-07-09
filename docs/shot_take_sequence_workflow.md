@@ -17,17 +17,25 @@ To generate one shot:
 
 1. Create or select a compatible shot.
 2. Add Text, Image, or Video Sections while that shot is selected.
-3. Put the selected shot ID into the LTX or WAN planner `shot_id` field.
+3. Use the LTX or WAN planner's `Generation Mode` control to choose the target.
 4. Run the existing planner/runtime path for that model.
 5. Register the generated output as an asset and attach it as a take.
 6. Accept the best take when it is ready for assembly.
 
-Leaving planner `shot_id` empty keeps the existing full-timeline generation
-path.
+`Missing Only` is the default. It targets the selected shot when that shot is
+not assembly-ready, otherwise the earliest generatable shot that is not ready;
+it skips generation when every shot is ready. `Force Selected` regenerates the
+currently selected generatable shot, including one that is already ready.
+`Force Full Timeline` bypasses shot targeting and plans the complete timeline.
+
+The removed `shot_id` planner argument is accepted only for compatibility with
+older programmatic callers and saved widget values. A legacy ID takes
+precedence, produces `GENERATION_LEGACY_SHOT_ID_DEPRECATED`, and should not be
+used in new workflows.
 
 ## Shot-Local Extraction
 
-When a planner receives a non-empty `shot_id`, the shared shot extraction helper
+When generation policy targets one shot, the shared shot extraction helper
 builds a temporary shot-local timeline:
 
 - project duration becomes the selected shot duration;
@@ -38,9 +46,9 @@ builds a temporary shot-local timeline:
 - generic `shot_context` records the original time range, duration, section IDs,
   shot LoRA overrides, and boundary context.
 
-Invalid shot IDs do not crash the planner. They produce a normal-shaped
-full-timeline plan with a `SHOT_SELECTION_NOT_FOUND` validation error so the
-runtime can refuse the invalid plan through existing validation checks.
+Invalid legacy shot IDs do not crash the planner or silently fall back to
+another mode. They block generation with a normal-shaped empty generation plan
+and a `GENERATION_LEGACY_SHOT_NOT_FOUND` validation error.
 
 ## Boundary Context
 

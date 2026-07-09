@@ -11,6 +11,11 @@ Before queueing:
 2. Open the Director node and adjust timeline media through the pickers when needed.
 3. These examples intentionally keep Privacy Mode off so their timeline JSON stays inspectable; turn it on when adapting an example for private work.
 
+Planner examples use the default `Missing Only` generation mode. Change it to
+`Force Selected` to regenerate the selected Director shot or `Force Full
+Timeline` to plan the complete timeline. Legacy `shot_id` values are accepted
+only for compatibility and should not be used in new examples.
+
 Examples:
 
 - `ltx_text_only_workflow.json`: minimal Director -> LTX Config -> Planner -> Runtime -> sampler path.

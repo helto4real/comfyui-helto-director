@@ -56,8 +56,9 @@ Output:
 Category: `timeline/ltx`
 
 Converts generic `VIDEO_TIMELINE` plus `LTX_TIMELINE_CONFIG` into a serializable
-LTX plan. Use `shot_id` in planner workflows when generating one selected shot;
-leave it empty for full-timeline generation.
+LTX plan. `Generation Mode` offers `Missing Only`, `Force Selected`, and
+`Force Full Timeline`. The removed `shot_id` input remains supported only as a
+deprecated programmatic and saved-workflow compatibility value.
 
 Outputs:
 
@@ -146,7 +147,10 @@ Category: `timeline/wan`
 
 Converts generic `VIDEO_TIMELINE` plus `WAN_TIMELINE_CONFIG` into a serializable
 WAN plan. It preserves prompt relay, keyframe, audio, media, validation, and
-debug information for the selected backend path.
+debug information for the selected backend path. `Generation Mode` offers
+`Missing Only`, `Force Selected`, and `Force Full Timeline`. The removed
+`shot_id` input remains supported only as a deprecated programmatic and
+saved-workflow compatibility value.
 
 Outputs:
 

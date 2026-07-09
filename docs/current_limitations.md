@@ -31,9 +31,9 @@ For the current node list, see [Node Reference](node_reference.md).
 
 ## Shot Generation, Takes, And Assembly
 
-- Shot-based generation is additive. Leaving planner `shot_id` empty keeps the existing full-timeline workflow.
+- Planner `Generation Mode` supports `Missing Only`, `Force Selected`, and `Force Full Timeline`; `Missing Only` is the default and skips shots that are already assembly-ready.
 - Selecting a compatible shot in the timeline UI lets new Text/Image/Video Sections attach to that shot instead of creating a second wrapper shot.
-- The LTX and WAN planners can receive a selected `shot_id` and plan against a shot-local timeline with generic boundary context.
+- The LTX and WAN planners plan targeted shots against a shot-local timeline with generic boundary context. Deprecated programmatic `shot_id` values remain compatibility-only and produce a validation warning.
 - Take registration is currently manual or semi-automatic. Runtime/debug metadata can describe a take, but the Director timeline is not automatically mutated after graph execution.
 - Generated outputs are represented as `Generated` assets and nested shot takes. Workflow JSON stores asset references and metadata only.
 - Accepting a video take updates the shot's accepted take and clip-instance state without changing a generated shot into an imported shot.

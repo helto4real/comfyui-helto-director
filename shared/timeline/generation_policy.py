@@ -32,6 +32,7 @@ GENERATION_SKIP_NO_GENERATABLE_SHOTS = "no_generatable_pending_shots"
 GENERATION_SKIP_NO_SHOTS = "no_shots"
 GENERATION_BLOCK_SELECTED_REQUIRED = "selected_shot_required"
 GENERATION_BLOCK_SELECTED_NOT_GENERATABLE = "selected_shot_not_generatable"
+GENERATION_BLOCK_LEGACY_SHOT_NOT_FOUND = "legacy_shot_not_found"
 
 
 def normalize_generation_mode(value: Any) -> str:
@@ -39,11 +40,20 @@ def normalize_generation_mode(value: Any) -> str:
     return text if text in GENERATION_MODES else GENERATION_MODE_MISSING_ONLY
 
 
-def resolve_generation_policy(timeline: Any, generation_mode: Any = GENERATION_MODE_MISSING_ONLY) -> tuple[dict[str, Any], dict[str, Any]]:
+def resolve_generation_policy(
+    timeline: Any,
+    generation_mode: Any = GENERATION_MODE_MISSING_ONLY,
+    *,
+    legacy_shot_id: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve the Director-owned generation target for planner/runtime nodes."""
 
     normalized = normalize_video_timeline(timeline)
     mode = normalize_generation_mode(generation_mode)
+    requested_legacy_shot_id, legacy_source = _legacy_shot_target(
+        generation_mode,
+        legacy_shot_id,
+    )
     shots = _ordered_shots(normalized)
     assets_by_id = _assets_by_id(normalized)
     selected_shot_id = _selected_shot_id(normalized, shots)
@@ -81,8 +91,43 @@ def resolve_generation_policy(timeline: Any, generation_mode: Any = GENERATION_M
         "shot_states": shot_states,
         "skip_reason": None,
         "block_reason": None,
+        "legacy_shot_id": requested_legacy_shot_id,
+        "legacy_shot_id_source": legacy_source,
         "message": "",
     }
+
+    if requested_legacy_shot_id:
+        matched_shot = next(
+            (
+                state
+                for state in shot_states
+                if state["shot_id"] == requested_legacy_shot_id
+            ),
+            None,
+        )
+        if matched_shot is None:
+            policy.update(
+                {
+                    "status": GENERATION_STATUS_BLOCKED,
+                    "block_reason": GENERATION_BLOCK_LEGACY_SHOT_NOT_FOUND,
+                    "message": (
+                        f"Legacy shot ID '{requested_legacy_shot_id}' was not found "
+                        "in the Director timeline."
+                    ),
+                }
+            )
+            return normalized, policy
+        policy.update(
+            {
+                "status": GENERATION_STATUS_TARGETED,
+                "target_shot_id": requested_legacy_shot_id,
+                "message": (
+                    "A deprecated legacy shot ID selected an explicit Director "
+                    "shot for generation."
+                ),
+            }
+        )
+        return normalized, policy
 
     if mode == GENERATION_MODE_FORCE_FULL_TIMELINE:
         policy.update(
@@ -190,6 +235,19 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
         return []
     status = policy.get("status")
     reason = policy.get("skip_reason") or policy.get("block_reason")
+    if status == GENERATION_STATUS_TARGETED and policy.get("legacy_shot_id"):
+        return [
+            create_validation_entry(
+                "GENERATION_LEGACY_SHOT_ID_DEPRECATED",
+                SEVERITY_WARNING,
+                source,
+                "Generation",
+                policy.get("legacy_shot_id"),
+                "A deprecated legacy shot ID selected this generation target.",
+                "Use Generation Mode and select the shot in the Director timeline for new workflows.",
+                _policy_validation_details(policy),
+            )
+        ]
     if status == GENERATION_STATUS_SKIPPED:
         if reason == GENERATION_SKIP_ALL_READY:
             return [
@@ -231,6 +289,19 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
                 )
             ]
     if status == GENERATION_STATUS_BLOCKED:
+        if reason == GENERATION_BLOCK_LEGACY_SHOT_NOT_FOUND:
+            return [
+                create_validation_entry(
+                    "GENERATION_LEGACY_SHOT_NOT_FOUND",
+                    SEVERITY_ERROR,
+                    source,
+                    "Generation",
+                    policy.get("legacy_shot_id"),
+                    "The deprecated legacy shot ID was not found in the Director timeline.",
+                    "Select an existing shot and use Generation Mode, or update the legacy shot ID.",
+                    _policy_validation_details(policy),
+                )
+            ]
         if reason == GENERATION_BLOCK_SELECTED_REQUIRED:
             return [
                 create_validation_entry(
@@ -272,6 +343,8 @@ def generation_policy_debug_summary(policy: dict[str, Any] | None) -> dict[str, 
         "generation_pending_shot_count": len(policy.get("pending_shot_ids") or []),
         "generation_skip_reason": policy.get("skip_reason"),
         "generation_block_reason": policy.get("block_reason"),
+        "generation_legacy_shot_id": policy.get("legacy_shot_id"),
+        "generation_legacy_shot_id_source": policy.get("legacy_shot_id_source"),
     }
 
 
@@ -287,7 +360,23 @@ def _policy_validation_details(policy: dict[str, Any]) -> dict[str, Any]:
         "blocked_shot_ids": list(policy.get("blocked_shot_ids") or []),
         "skip_reason": policy.get("skip_reason"),
         "block_reason": policy.get("block_reason"),
+        "legacy_shot_id": policy.get("legacy_shot_id"),
+        "legacy_shot_id_source": policy.get("legacy_shot_id_source"),
     }
+
+
+def _legacy_shot_target(
+    generation_mode: Any,
+    explicit_shot_id: Any,
+) -> tuple[str | None, str | None]:
+    explicit = str(explicit_shot_id or "").strip()
+    if explicit:
+        return explicit, "shot_id"
+
+    raw_mode = str(generation_mode or "").strip()
+    if raw_mode and raw_mode not in GENERATION_MODES:
+        return raw_mode, "generation_mode"
+    return None, None
 
 
 def _ordered_shots(timeline: dict[str, Any]) -> list[dict[str, Any]]:

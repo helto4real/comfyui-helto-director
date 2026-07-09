@@ -78,10 +78,12 @@ def build_wan_timeline_plan(
     video_timeline: Any,
     wan_config: Any,
     generation_mode: str = GENERATION_MODE_MISSING_ONLY,
+    shot_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     source_timeline, generation_policy = resolve_generation_policy(
         video_timeline,
         generation_mode,
+        legacy_shot_id=shot_id,
     )
     shot_context = None
     if generation_policy.get("status") == GENERATION_STATUS_TARGETED:

@@ -678,6 +678,71 @@ def test_wan_force_selected_regenerates_ready_selected_shot():
     assert debug["summary"]["generation_status"] == "targeted"
 
 
+def test_wan_legacy_saved_widget_shot_id_targets_shot_with_deprecation_warning():
+    timeline = _two_shot_text_timeline()
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        generation_mode="shot_section_002",
+    )
+    policy = plan["model_specific"]["wan"]["generation_policy"]
+
+    assert validation["is_valid"] is True
+    assert [entry["code"] for entry in validation["warnings"]] == [
+        "GENERATION_LEGACY_SHOT_ID_DEPRECATED"
+    ]
+    assert policy["mode"] == GENERATION_MODE_MISSING_ONLY
+    assert policy["legacy_shot_id"] == "shot_section_002"
+    assert policy["legacy_shot_id_source"] == "generation_mode"
+    assert policy["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+    assert debug["summary"]["generation_legacy_shot_id"] == "shot_section_002"
+
+
+def test_wan_programmatic_legacy_shot_id_takes_precedence_over_generation_mode():
+    timeline = _two_shot_text_timeline()
+    timeline["ui_state"]["selected_item_id"] = "shot_section_001"
+
+    plan, validation, _debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(),
+        generation_mode=GENERATION_MODE_FORCE_SELECTED,
+        shot_id="shot_section_002",
+    )
+    policy = plan["model_specific"]["wan"]["generation_policy"]
+
+    assert validation["is_valid"] is True
+    assert [entry["code"] for entry in validation["warnings"]] == [
+        "GENERATION_LEGACY_SHOT_ID_DEPRECATED"
+    ]
+    assert policy["mode"] == GENERATION_MODE_FORCE_SELECTED
+    assert policy["legacy_shot_id_source"] == "shot_id"
+    assert policy["target_shot_id"] == "shot_section_002"
+    assert [entry["item_id"] for entry in plan["section_plan"]] == ["section_002"]
+
+
+def test_wan_missing_legacy_shot_id_blocks_instead_of_falling_back():
+    timeline = _two_shot_text_timeline()
+
+    plan, validation, debug = build_wan_timeline_plan(
+        timeline,
+        create_wan_timeline_config(debug_mode="Full"),
+        generation_mode="missing_legacy_shot",
+    )
+    policy = plan["model_specific"]["wan"]["generation_policy"]
+
+    assert validation["is_valid"] is False
+    assert [entry["code"] for entry in validation["errors"]] == [
+        "GENERATION_LEGACY_SHOT_NOT_FOUND"
+    ]
+    assert policy["status"] == "blocked"
+    assert policy["target_shot_id"] is None
+    assert plan["section_plan"] == []
+    assert "shot_context" not in plan["model_specific"]["wan"]
+    assert debug["summary"]["generation_block_reason"] == "legacy_shot_not_found"
+
+
 def test_wan_planner_plans_selected_shot_timeline_with_boundary_context():
     timeline = _two_shot_text_timeline()
     timeline["ui_state"]["selected_item_id"] = "shot_section_002"
