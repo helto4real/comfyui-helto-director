@@ -7,38 +7,24 @@ import {
   installTakeCapturePreview,
   installTakeCaptureResultListener,
 } from "./timeline/take_capture_preview.js";
-import { applyHtdNodeTheme } from "./timeline/design_tokens.js";
+import { createHtdNodeThemeLifecycle } from "./timeline/node_theme_extension.js";
 
 const HELTO_DIRECTOR_THEME_NODE_TYPES = new Set([
   "HeltoVideoTimelineDirector",
   "Video Timeline Director",
-  "HeltoLTX23TimelineConfig",
-  "LTX 2.3 Timeline Config",
-  "HeltoLTX23TimelinePlanner",
-  "LTX 2.3 Timeline Planner",
-  "HeltoLTX23TimelineRuntime",
-  "LTX 2.3 Timeline Runtime",
-  "HeltoLTX23TimelineSegmentedExecutor",
-  "LTX 2.3 Timeline Segmented Executor",
   "HeltoTimelineLoraConfiguration",
   "Timeline LoRA Configuration",
   "HeltoTimelineTakeCapture",
   "Timeline Take Capture",
   "HeltoTimelineSequenceAssembler",
   "Timeline Sequence Assembler",
-  "HeltoLTX23TimelineCropReferenceTail",
-  "LTX 2.3 Timeline Crop Reference Tail",
-  "HeltoLTX23TimelineReferenceImageSelector",
-  "LTX 2.3 Timeline Reference Image Selector",
-  "HeltoLTX23TimelineIdentityAnchorLatentAware",
-  "LTX 2.3 Timeline Identity Anchor: Latent Aware",
-  "HeltoLTX23TimelineIdentityAnchorFace",
-  "LTX 2.3 Timeline Identity Anchor: Face",
-  "HeltoLTX23TimelineIdentityAnchorCombine",
-  "LTX 2.3 Timeline Identity Anchor: Combine",
-  "HeltoLTX23TimelineApplyIdentityAnchor",
-  "LTX 2.3 Timeline Apply Identity Anchor",
 ]);
+
+const directorThemeLifecycle = createHtdNodeThemeLifecycle({
+  appRef: app,
+  nodeTypes: HELTO_DIRECTOR_THEME_NODE_TYPES,
+  patchKey: "director",
+});
 
 app.registerExtension({
   name: "helto.videoTimelineDirector.state",
@@ -47,17 +33,11 @@ app.registerExtension({
     // Director-side safety net: apply take capture results from the global
     // execution event stream even if the capture node's own hook misses them.
     installTakeCaptureResultListener(app, api);
-    requestAnimationFrame(() => {
-      for (const node of app.graph?._nodes || []) {
-        applyHeltoDirectorNodeTheme(node);
-      }
-    });
+    directorThemeLifecycle.setup();
   },
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (isHeltoDirectorThemeNodeData(nodeData)) {
-      patchHeltoDirectorThemeNodeType(nodeType);
-    }
+    directorThemeLifecycle.beforeRegisterNodeDef(nodeType, nodeData);
     if (nodeData?.name === "HeltoTimelineTakeCapture") {
       installTakeCapturePreview(nodeType, app, api);
       return;
@@ -129,70 +109,13 @@ app.registerExtension({
   },
 
   nodeCreated(node) {
-    applyHeltoDirectorNodeTheme(node);
+    directorThemeLifecycle.nodeCreated(node);
   },
 
   loadedGraphNode(node) {
-    applyHeltoDirectorNodeTheme(node);
+    directorThemeLifecycle.loadedGraphNode(node);
   },
 });
-
-function heltoDirectorNodeTypeCandidates(node) {
-  return [
-    node?.type,
-    node?.comfyClass,
-    node?.class_type,
-    node?.constructor?.type,
-    node?.constructor?.comfyClass,
-    node?.title,
-  ].map((value) => String(value || "")).filter(Boolean);
-}
-
-function isHeltoDirectorThemeNodeData(nodeData) {
-  return (
-    HELTO_DIRECTOR_THEME_NODE_TYPES.has(String(nodeData?.name || "")) ||
-    HELTO_DIRECTOR_THEME_NODE_TYPES.has(String(nodeData?.display_name || ""))
-  );
-}
-
-function isHeltoDirectorThemeNode(node) {
-  return heltoDirectorNodeTypeCandidates(node).some((candidate) => HELTO_DIRECTOR_THEME_NODE_TYPES.has(candidate));
-}
-
-function applyHeltoDirectorNodeTheme(node) {
-  if (!isHeltoDirectorThemeNode(node)) {
-    return false;
-  }
-  return applyHtdNodeTheme(node, { appRef: app });
-}
-
-function patchHeltoDirectorThemeNodeType(nodeType) {
-  if (nodeType.prototype.__heltoDirectorNodeThemePatched) {
-    return;
-  }
-  nodeType.prototype.__heltoDirectorNodeThemePatched = true;
-
-  const originalCreated = nodeType.prototype.onNodeCreated;
-  nodeType.prototype.onNodeCreated = function () {
-    const result = originalCreated?.apply(this, arguments);
-    applyHeltoDirectorNodeTheme(this);
-    return result;
-  };
-
-  const originalConfigure = nodeType.prototype.configure;
-  nodeType.prototype.configure = function () {
-    const result = originalConfigure?.apply(this, arguments);
-    applyHeltoDirectorNodeTheme(this);
-    return result;
-  };
-
-  const originalOnConfigure = nodeType.prototype.onConfigure;
-  nodeType.prototype.onConfigure = function () {
-    const result = originalOnConfigure?.apply(this, arguments);
-    applyHeltoDirectorNodeTheme(this);
-    return result;
-  };
-}
 
 function getNodeWidth(node) {
   const width = Number(node?.size?.[0] ?? 0);

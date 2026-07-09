@@ -66,6 +66,10 @@ function safeClassToken(value) {
     .replace(/^-+|-+$/g, "");
 }
 
+export function loraInfoEditActionLabel(editing = false) {
+  return editing ? "Save LoRA metadata" : "Edit LoRA metadata";
+}
+
 function infoTableRow(label, value, help = "", editableFieldName = "") {
   const richValue = trustedMarkupValue(value);
   const rawValue = richValue ?? value;
@@ -73,13 +77,14 @@ function infoTableRow(label, value, help = "", editableFieldName = "") {
     return "";
   }
   const valueMarkup = richValue == null ? `<span>${escapeLoraInfoHtml(value)}</span>` : richValue;
+  const editActionLabel = loraInfoEditActionLabel(false);
   return `
     <tr class="${editableFieldName ? "editable" : ""}" ${editableFieldName ? `data-field-name="${escapeLoraInfoHtml(editableFieldName)}"` : ""}>
       <td><span>${escapeLoraInfoHtml(label)} ${help ? `<span class="-help" title="${escapeLoraInfoHtml(help)}"></span>` : ""}</span></td>
       <td ${editableFieldName ? "" : 'colspan="2"'}>${valueMarkup}</td>
       ${
         editableFieldName
-          ? `<td style="width: 24px;"><button class="rgthree-button-reset rgthree-button-edit" data-action="edit-row">${EDIT_ICON}${SAVE_ICON}</button></td>`
+          ? `<td style="width: 24px;"><button class="rgthree-button-reset rgthree-button-edit" data-action="edit-row" aria-label="${editActionLabel}" title="${editActionLabel}">${EDIT_ICON}${SAVE_ICON}</button></td>`
           : ""
       }
     </tr>`;

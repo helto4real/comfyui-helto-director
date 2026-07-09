@@ -1,5 +1,5 @@
 import { app } from "../../scripts/app.js";
-import { applyHtdNodeTheme } from "./timeline/design_tokens.js";
+import { createHtdNodeThemeLifecycle } from "./timeline/node_theme_extension.js";
 
 const WAN_SEGMENTED_EXECUTOR = "HeltoWAN22TimelineSegmentedExecutor";
 
@@ -14,32 +14,32 @@ const HELTO_WAN_THEME_NODE_TYPES = new Set([
   "WAN 2.2 Timeline Segmented Executor",
 ]);
 
+const wanThemeLifecycle = createHtdNodeThemeLifecycle({
+  appRef: app,
+  nodeTypes: HELTO_WAN_THEME_NODE_TYPES,
+  patchKey: "wan",
+});
+
 app.registerExtension({
   name: "helto.wanTimelineRuntime",
 
   setup() {
-    requestAnimationFrame(() => {
-      for (const node of app.graph?._nodes || []) {
-        applyWanNodeTheme(node);
-      }
-    });
+    wanThemeLifecycle.setup();
   },
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (isWanThemeNodeData(nodeData)) {
-      patchWanThemeNodeType(nodeType);
-    }
+    wanThemeLifecycle.beforeRegisterNodeDef(nodeType, nodeData);
     if (nodeData?.name === WAN_SEGMENTED_EXECUTOR) {
       installWanSegmentedExecutorSplitStepSync(nodeType);
     }
   },
 
   nodeCreated(node) {
-    applyWanNodeTheme(node);
+    wanThemeLifecycle.nodeCreated(node);
   },
 
   loadedGraphNode(node) {
-    applyWanNodeTheme(node);
+    wanThemeLifecycle.loadedGraphNode(node);
   },
 });
 
@@ -88,62 +88,6 @@ function syncWanPhaseSplitStep(node, { markCanvas = false } = {}) {
   splitWidget.value = split;
   splitWidget.callback?.(split);
   if (markCanvas) app.graph?.setDirtyCanvas?.(true, true);
-}
-
-function isWanThemeNodeData(nodeData) {
-  return (
-    HELTO_WAN_THEME_NODE_TYPES.has(String(nodeData?.name || "")) ||
-    HELTO_WAN_THEME_NODE_TYPES.has(String(nodeData?.display_name || ""))
-  );
-}
-
-function isWanThemeNode(node) {
-  return [
-    node?.type,
-    node?.comfyClass,
-    node?.class_type,
-    node?.constructor?.type,
-    node?.constructor?.comfyClass,
-    node?.title,
-  ]
-    .map((value) => String(value || ""))
-    .filter(Boolean)
-    .some((candidate) => HELTO_WAN_THEME_NODE_TYPES.has(candidate));
-}
-
-function applyWanNodeTheme(node) {
-  if (!isWanThemeNode(node)) {
-    return false;
-  }
-  return applyHtdNodeTheme(node, { appRef: app });
-}
-
-function patchWanThemeNodeType(nodeType) {
-  if (nodeType.prototype.__heltoWanNodeThemePatched) {
-    return;
-  }
-  nodeType.prototype.__heltoWanNodeThemePatched = true;
-
-  const originalCreated = nodeType.prototype.onNodeCreated;
-  nodeType.prototype.onNodeCreated = function () {
-    const result = originalCreated?.apply(this, arguments);
-    applyWanNodeTheme(this);
-    return result;
-  };
-
-  const originalConfigure = nodeType.prototype.configure;
-  nodeType.prototype.configure = function () {
-    const result = originalConfigure?.apply(this, arguments);
-    applyWanNodeTheme(this);
-    return result;
-  };
-
-  const originalOnConfigure = nodeType.prototype.onConfigure;
-  nodeType.prototype.onConfigure = function () {
-    const result = originalOnConfigure?.apply(this, arguments);
-    applyWanNodeTheme(this);
-    return result;
-  };
 }
 
 function findWidget(node, name) {

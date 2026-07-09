@@ -2,7 +2,10 @@ import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 import { applyHtdNodeTheme, HTD, htdScrollbarBlock, htdTokenBlock } from "./timeline/design_tokens.js";
 import { setupOverlayDialog } from "./timeline/dialog.js";
-import { buildLoraInfoDialogMarkup } from "./timeline/lora_info_markup.js";
+import {
+  buildLoraInfoDialogMarkup,
+  loraInfoEditActionLabel,
+} from "./timeline/lora_info_markup.js";
 
 const NODE_NAME = "HeltoTimelineLoraConfiguration";
 const NODE_DISPLAY_NAME = "Timeline LoRA Configuration";
@@ -782,6 +785,7 @@ async function saveEditableRow(info, file, tr, saving = true) {
   const span = document.createElement("span");
   span.textContent = newValue;
   td.appendChild(span);
+  setEditableRowActionLabel(tr, false);
   return modified;
 }
 
@@ -792,6 +796,7 @@ function beginEditableRow(info, file, tr) {
     return;
   }
   tr.classList.add("-rgthree-editing");
+  setEditableRowActionLabel(tr, true);
   const isTextarea = fieldName === "userNote";
   const input = document.createElement(isTextarea ? "textarea" : "input");
   if (!isTextarea) {
@@ -811,6 +816,14 @@ function beginEditableRow(info, file, tr) {
   });
   td.replaceChildren(input);
   input.focus();
+}
+
+function setEditableRowActionLabel(tr, editing) {
+  const button = tr?.querySelector('[data-action="edit-row"]');
+  if (!button) return;
+  const label = loraInfoEditActionLabel(editing);
+  button.setAttribute("aria-label", label);
+  button.setAttribute("title", label);
 }
 
 async function showLoraInfoDialog(file, row = null) {

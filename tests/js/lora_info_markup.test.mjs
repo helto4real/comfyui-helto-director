@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   buildLoraInfoDialogMarkup,
   escapeLoraInfoHtml,
+  loraInfoEditActionLabel,
   sanitizeLoraInfoUrl,
 } from "../../web/timeline/lora_info_markup.js";
 
@@ -128,10 +129,29 @@ function testUrlSanitizerHasExplicitPolicy() {
   assert.equal(escapeLoraInfoHtml(`<>&\"'`), "&lt;&gt;&amp;&quot;&#039;");
 }
 
+function testEditAndSaveButtonsHaveAccessibleNamesAndTooltips() {
+  const markup = buildLoraInfoDialogMarkup({
+    name: "Accessible LoRA",
+    strengthMin: 0.2,
+    strengthMax: 1,
+    userNote: "Editable note",
+  }, "accessible.safetensors");
+  const editButtons = markup.match(/<button[^>]+data-action="edit-row"[^>]*>/g) || [];
+
+  assert.equal(editButtons.length, 4);
+  for (const button of editButtons) {
+    assert.ok(button.includes('aria-label="Edit LoRA metadata"'));
+    assert.ok(button.includes('title="Edit LoRA metadata"'));
+  }
+  assert.equal(loraInfoEditActionLabel(false), "Edit LoRA metadata");
+  assert.equal(loraInfoEditActionLabel(true), "Save LoRA metadata");
+}
+
 testEscapesAllUntrustedMetadata();
 testRejectsUnsafeLinksAndMediaSources();
 testEscapesSafetensorsFallbacksAndOmitsUnsafeCaptionLinks();
 testAllowsHttpMediaAndKnownDirectorPreviewRoute();
 testUrlSanitizerHasExplicitPolicy();
+testEditAndSaveButtonsHaveAccessibleNamesAndTooltips();
 
 console.log("lora info markup tests passed");

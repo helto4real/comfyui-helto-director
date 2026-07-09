@@ -42,6 +42,7 @@ import {
   takeCapturePreviewUrl,
 } from "../../web/timeline/take_capture_preview.js";
 import { HTD, applyHtdNodeTheme, isHtdThemedNode } from "../../web/timeline/design_tokens.js";
+import { createHtdNodeThemeLifecycle } from "../../web/timeline/node_theme_extension.js";
 
 function testTimelineHeightIsTripled() {
   const timeline = createDefaultVideoTimeline();
@@ -1073,7 +1074,7 @@ function testTakeCapturePreviewExtensionIsInstalled() {
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
 
   assert.equal(extensionSource.includes('import { api } from "../../scripts/api.js";'), true);
-  assert.equal(extensionSource.includes('import { applyHtdNodeTheme } from "./timeline/design_tokens.js";'), true);
+  assert.equal(extensionSource.includes('import { createHtdNodeThemeLifecycle } from "./timeline/node_theme_extension.js";'), true);
   assert.equal(extensionSource.includes('} from "./timeline/take_capture_preview.js";'), true);
   assert.equal(extensionSource.includes('nodeData?.name === "HeltoTimelineTakeCapture"'), true);
   assert.equal(extensionSource.includes("installTakeCapturePreview(nodeType, app, api)"), true);
@@ -1148,9 +1149,73 @@ function testHeltoNodeThemeAppliesScopedLiteGraphColors() {
   }
 }
 
+function testSharedNodeThemeLifecycleIsIdempotent() {
+  const scheduledFrames = [];
+  const existingThemedNode = { type: "HeltoTestNode" };
+  const unrelatedNode = { type: "UnrelatedNode" };
+  const appRef = { graph: { _nodes: [existingThemedNode, unrelatedNode] } };
+  const lifecycle = createHtdNodeThemeLifecycle({
+    appRef,
+    nodeTypes: new Set(["HeltoTestNode", "Test Node"]),
+    patchKey: "test",
+    scheduleFrame(callback) {
+      scheduledFrames.push(callback);
+    },
+  });
+
+  lifecycle.setup();
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames[0]();
+  assert.equal(existingThemedNode.color, HTD.surface3);
+  assert.equal(existingThemedNode.bgcolor, HTD.surface);
+  assert.equal(unrelatedNode.color, undefined);
+
+  const originalCalls = [];
+  class FakeThemedNode {}
+  FakeThemedNode.prototype.onNodeCreated = function () {
+    originalCalls.push("created");
+    return "created-result";
+  };
+  FakeThemedNode.prototype.configure = function () {
+    originalCalls.push("configure");
+    return "configure-result";
+  };
+  FakeThemedNode.prototype.onConfigure = function () {
+    originalCalls.push("onConfigure");
+    return "onConfigure-result";
+  };
+
+  lifecycle.beforeRegisterNodeDef(FakeThemedNode, { name: "HeltoTestNode" });
+  const wrappedCreated = FakeThemedNode.prototype.onNodeCreated;
+  const wrappedConfigure = FakeThemedNode.prototype.configure;
+  const wrappedOnConfigure = FakeThemedNode.prototype.onConfigure;
+  lifecycle.beforeRegisterNodeDef(FakeThemedNode, { display_name: "Test Node" });
+  assert.equal(FakeThemedNode.prototype.onNodeCreated, wrappedCreated);
+  assert.equal(FakeThemedNode.prototype.configure, wrappedConfigure);
+  assert.equal(FakeThemedNode.prototype.onConfigure, wrappedOnConfigure);
+
+  const node = Object.create(FakeThemedNode.prototype);
+  node.type = "HeltoTestNode";
+  assert.equal(node.onNodeCreated(), "created-result");
+  assert.equal(node.configure(), "configure-result");
+  assert.equal(node.onConfigure(), "onConfigure-result");
+  assert.deepEqual(originalCalls, ["created", "configure", "onConfigure"]);
+  assert.equal(node.color, HTD.surface3);
+  assert.equal(node.bgcolor, HTD.surface);
+
+  const createdHookNode = { comfyClass: "HeltoTestNode" };
+  lifecycle.nodeCreated(createdHookNode);
+  assert.equal(createdHookNode.color, HTD.surface3);
+  const loadedHookNode = { class_type: "HeltoTestNode" };
+  lifecycle.loadedGraphNode(loadedHookNode);
+  assert.equal(loadedHookNode.bgcolor, HTD.surface);
+}
+
 function testHeltoDirectorNodesUseActualNodeTheme() {
   const designSource = readFileSync(new URL("../../web/timeline/design_tokens.js", import.meta.url), "utf8");
+  const lifecycleSource = readFileSync(new URL("../../web/timeline/node_theme_extension.js", import.meta.url), "utf8");
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
+  const ltxExtensionSource = readFileSync(new URL("../../web/ltx_timeline_theme.js", import.meta.url), "utf8");
   const wanExtensionSource = readFileSync(new URL("../../web/wan_timeline_runtime.js", import.meta.url), "utf8");
   const loraSource = readFileSync(new URL("../../web/timeline_lora_configuration.js", import.meta.url), "utf8");
 
@@ -1160,16 +1225,27 @@ function testHeltoDirectorNodesUseActualNodeTheme() {
   assert.equal(designSource.includes("node.bgcolor = HTD.surface"), true);
   assert.equal(designSource.includes("drawNodeWidgets = function (node)"), true);
   assert.equal(designSource.includes("isHtdThemedNode(node)"), true);
+  assert.equal(lifecycleSource.includes("export function createHtdNodeThemeLifecycle"), true);
+  assert.equal(lifecycleSource.includes("applyHtdNodeTheme(node, { appRef })"), true);
+  assert.equal(lifecycleSource.includes("prototype.onNodeCreated = function ()"), true);
+  assert.equal(lifecycleSource.includes("prototype.configure = function ()"), true);
+  assert.equal(lifecycleSource.includes("prototype.onConfigure = function ()"), true);
   assert.equal(extensionSource.includes("const HELTO_DIRECTOR_THEME_NODE_TYPES = new Set(["), true);
   assert.equal(extensionSource.includes('"HeltoVideoTimelineDirector"'), true);
-  assert.equal(extensionSource.includes('"HeltoLTX23TimelineConfig"'), true);
+  assert.equal(extensionSource.includes("LTX"), false);
   assert.equal(extensionSource.includes("WAN"), false);
+  assert.equal(extensionSource.includes("createHtdNodeThemeLifecycle"), true);
+  assert.equal(ltxExtensionSource.includes('name: "helto.ltxTimelineTheme"'), true);
+  assert.equal(ltxExtensionSource.includes('"HeltoLTX23TimelineConfig"'), true);
+  assert.equal(ltxExtensionSource.includes('"HeltoLTX23TimelineIdentityAnchorFace"'), true);
+  assert.equal(ltxExtensionSource.includes("WAN"), false);
+  assert.equal(ltxExtensionSource.includes("createHtdNodeThemeLifecycle"), true);
   assert.equal(wanExtensionSource.includes('"HeltoWAN22TimelineRuntime"'), true);
-  assert.equal(wanExtensionSource.includes("applyHtdNodeTheme(node, { appRef: app })"), true);
+  assert.equal(wanExtensionSource.includes("LTX"), false);
+  assert.equal(wanExtensionSource.includes("createHtdNodeThemeLifecycle"), true);
   assert.equal(extensionSource.includes('"HeltoTimelineSequenceAssembler"'), true);
-  assert.equal(extensionSource.includes('"HeltoLTX23TimelineIdentityAnchorFace"'), true);
-  assert.equal(extensionSource.includes("patchHeltoDirectorThemeNodeType(nodeType)"), true);
-  assert.equal(extensionSource.includes("applyHtdNodeTheme(node, { appRef: app })"), true);
+  assert.equal(extensionSource.includes("patchHeltoDirectorThemeNodeType(nodeType)"), false);
+  assert.equal(wanExtensionSource.includes("patchWanThemeNodeType(nodeType)"), false);
   assert.equal(extensionSource.includes("nodeCreated(node)"), true);
   assert.equal(extensionSource.includes("loadedGraphNode(node)"), true);
   assert.equal(loraSource.includes("import { applyHtdNodeTheme, HTD,"), true);
@@ -1333,17 +1409,19 @@ async function testWanSegmentedExecutorSplitStepWidgetSync() {
     graph: { setDirtyCanvas(...args) { dirtyCalls.push(args); } },
     registerExtension(extension) { registered.push(extension); },
   };
-  globalThis.__heltoWanTestApplyTheme = (...args) => {
-    themeCalls.push(args);
-    return true;
-  };
+  globalThis.__heltoWanTestCreateThemeLifecycle = () => ({
+    setup() {},
+    beforeRegisterNodeDef() {},
+    nodeCreated(node) { themeCalls.push(["created", node]); },
+    loadedGraphNode(node) { themeCalls.push(["loaded", node]); },
+  });
 
   try {
     const executableSource = extensionSource
       .replace('import { app } from "../../scripts/app.js";', "const app = globalThis.__heltoWanTestApp;")
       .replace(
-        'import { applyHtdNodeTheme } from "./timeline/design_tokens.js";',
-        "const applyHtdNodeTheme = globalThis.__heltoWanTestApplyTheme;",
+        'import { createHtdNodeThemeLifecycle } from "./timeline/node_theme_extension.js";',
+        "const createHtdNodeThemeLifecycle = globalThis.__heltoWanTestCreateThemeLifecycle;",
       );
     await import(`data:text/javascript;base64,${Buffer.from(executableSource).toString("base64")}#wan-runtime-test`);
 
@@ -1425,10 +1503,12 @@ async function testWanSegmentedExecutorSplitStepWidgetSync() {
     assert.deepEqual(splitValues, [10, 11, 10, 1]);
     assert.deepEqual(dirtyCalls, [[true, true], [true, true], [true, true]]);
     assert.deepEqual(lifecycleCalls, ["created", "configured"]);
-    assert.equal(themeCalls.length >= 2, true);
+    extension.nodeCreated(node);
+    extension.loadedGraphNode(node);
+    assert.deepEqual(themeCalls, [["created", node], ["loaded", node]]);
   } finally {
     delete globalThis.__heltoWanTestApp;
-    delete globalThis.__heltoWanTestApplyTheme;
+    delete globalThis.__heltoWanTestCreateThemeLifecycle;
   }
 }
 
@@ -1583,6 +1663,7 @@ testTakeCapturePreviewRepairsPreviouslyShiftedSocketlessValues();
 testTakeCapturePreviewMaintainsNodeGrowthDuringDraw();
 testTakeCapturePreviewExtensionIsInstalled();
 testHeltoNodeThemeAppliesScopedLiteGraphColors();
+testSharedNodeThemeLifecycleIsIdempotent();
 testHeltoDirectorNodesUseActualNodeTheme();
 testTimelineEndTickUsesHeltoAccentTheme();
 testDeleteContextMenuIsAvailableOnTimelineItems();
