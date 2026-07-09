@@ -12,6 +12,7 @@ DOC_PATHS = [
     REPO_ROOT / "README.md",
     REPO_ROOT / "docs" / "getting_started.md",
     REPO_ROOT / "docs" / "node_reference.md",
+    REPO_ROOT / "docs" / "shot_take_sequence_workflow.md",
     REPO_ROOT / "docs" / "examples" / "ltx_timeline_workflow_guide.md",
     REPO_ROOT / "docs" / "workflows" / "README.md",
     REPO_ROOT / "docs" / "picker_setup.md",
@@ -145,6 +146,32 @@ def test_documentation_links_point_to_existing_files():
                 continue
             resolved = (path.parent / target_path).resolve()
             assert resolved.exists(), f"{path.relative_to(REPO_ROOT)} links to missing file {target}"
+
+
+def test_take_attachment_and_placeholder_behavior_is_documented():
+    workflow = (REPO_ROOT / "docs" / "shot_take_sequence_workflow.md").read_text(encoding="utf-8")
+    limitations = (REPO_ROOT / "docs" / "current_limitations.md").read_text(encoding="utf-8")
+    workflow_text = " ".join(workflow.split())
+    limitations_text = " ".join(limitations.split())
+
+    assert "automatically attaches the generated asset and take" in workflow_text
+    assert "attachment is deduplicated" in workflow_text
+    assert "no matching Director or shot" in workflow_text
+    assert "manual attachment fallback" in workflow_text
+    assert "Placeholder shots are generatable" in workflow_text
+    assert "accepted take or are removed or converted" in workflow_text
+
+    assert "automatically attach a deduplicated generated asset and take" in limitations_text
+    assert "Placeholder shots remain generatable" in limitations_text
+    assert "block multi-shot assembly" in limitations_text
+
+    stale_claims = (
+        "timeline is currently manual or semi-automatic",
+        "Automatic mutation of the Director timeline after runtime execution is deferred",
+        "Director timeline is not automatically mutated after graph execution",
+    )
+    combined = f"{workflow_text}\n{limitations_text}"
+    assert all(claim not in combined for claim in stale_claims)
 
 
 def _load_workflow(filename: str) -> dict[str, Any]:

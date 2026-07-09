@@ -19,7 +19,8 @@ To generate one shot:
 2. Add Text, Image, or Video Sections while that shot is selected.
 3. Use the LTX or WAN planner's `Generation Mode` control to choose the target.
 4. Run the existing planner/runtime path for that model.
-5. Register the generated output as an asset and attach it as a take.
+5. Let a matching take-capture result attach automatically, or attach the take
+   manually when no matching Director or shot is found.
 6. Accept the best take when it is ready for assembly.
 
 `Missing Only` is the default. It targets the selected shot when that shot is
@@ -95,9 +96,12 @@ Take metadata can include:
 - runtime/settings metadata.
 
 Runtime and executor context payloads may produce take-registration metadata.
-Attaching generated output to the timeline is currently manual or
-semi-automatic through UI/helper flows rather than automatic hidden mutation of
-the Director node after execution.
+When execution returns a matching take-capture result, the frontend
+automatically attaches the generated asset and take to the Director shot. The
+attachment is deduplicated, so replaying the same result does not create a
+second asset or take. If no matching Director or shot can be found, the
+timeline is left unchanged and the project take listing remains the manual
+attachment fallback.
 
 ## Accepting And Rejecting Takes
 
@@ -145,10 +149,12 @@ and audio mixing.
 
 When no accepted generated take or imported clip is ready, the Timeline Sequence
 Assembler blocks its media outputs silently instead of producing a black
-placeholder. Multi-shot sequences also block until every generated, edited, or
-extended shot has an accepted take; imported shots count as ready when they have
-an enabled imported video clip. This prevents partial sequence output while you
-render or review one not-yet-accepted shot.
+placeholder. Multi-shot sequences also block until every generated, edited,
+extended, or Placeholder shot has an accepted take; imported shots count as
+ready when they have an enabled imported video clip. Placeholder shots are
+generatable, but remain fail-safe assembly blockers until they receive an
+accepted take or are removed or converted. This prevents partial sequence
+output while you render or review one not-yet-accepted shot.
 
 Blend seams can blend frames when clip shapes are compatible. Unsupported or
 advanced transition behavior falls back to hard-cut style assembly with warnings
@@ -159,9 +165,9 @@ or preserved metadata rather than claiming model-specific transition support.
 - Only one sequence is supported for now.
 - Full-timeline generation remains supported and is still useful.
 - Shot-based generation is additive.
-- Take registration may be manual or semi-automatic in the current workflow.
-- Automatic mutation of the Director timeline after runtime execution is
-  deferred.
+- Matching take-capture results attach automatically and are deduplicated;
+  manual attachment remains the fallback when no matching Director or shot is
+  found.
 - Advanced transitions are deferred.
 - Section-level LoRAs are deferred.
 - Per-shot LoRAs are reliable when generating shots separately or when segmented

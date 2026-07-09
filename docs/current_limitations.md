@@ -34,10 +34,11 @@ For the current node list, see [Node Reference](node_reference.md).
 - Planner `Generation Mode` supports `Missing Only`, `Force Selected`, and `Force Full Timeline`; `Missing Only` is the default and skips shots that are already assembly-ready.
 - Selecting a compatible shot in the timeline UI lets new Text/Image/Video Sections attach to that shot instead of creating a second wrapper shot.
 - The LTX and WAN planners plan targeted shots against a shot-local timeline with generic boundary context. Deprecated programmatic `shot_id` values remain compatibility-only and produce a validation warning.
-- Take registration is currently manual or semi-automatic. Runtime/debug metadata can describe a take, but the Director timeline is not automatically mutated after graph execution.
+- Matching take-capture execution results automatically attach a deduplicated generated asset and take to the corresponding Director shot. Manual attachment remains the fallback when no matching Director or shot is found.
 - Generated outputs are represented as `Generated` assets and nested shot takes. Workflow JSON stores asset references and metadata only.
 - Accepting a video take updates the shot's accepted take and clip-instance state without changing a generated shot into an imported shot.
 - Imported shots can reference existing video assets through clip instances and can participate in sequence assembly without generated takes.
+- Placeholder shots remain generatable and intentionally block multi-shot assembly until they have an accepted take or are removed or converted.
 - Sequence assembly is a backend helper path for accepted generated takes and imported clips. Advanced transition rendering is still deferred or preserved as metadata/fallback behavior.
 - Assembly may need compatible clip sizes and frame rates, or it will rely on the documented fallback/resizing behavior.
 

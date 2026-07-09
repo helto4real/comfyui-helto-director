@@ -222,8 +222,10 @@ returns video, image frames, audio, frame rate, debug info, and whether a video
 was assembled. If no accepted or imported clip is ready, the media outputs block
 downstream execution silently so connected save/preview nodes can stay wired
 without producing a black placeholder. Multi-shot sequences also block until all
-non-imported shots have accepted takes; imported shots are ready when they have
-an enabled imported video clip.
+non-imported shots, including Placeholder shots, have accepted takes; imported
+shots are ready when they have an enabled imported video clip. Placeholder
+shots remain generatable and block assembly until accepted, removed, or
+converted.
 
 For the full workflow, read
 [Shot, Take, And Sequence Workflow](shot_take_sequence_workflow.md).
