@@ -1,0 +1,10 @@
+{
+  "ltx_2_3": {
+    "family_aliases": ["ltx", "ltx_2_3"],
+    "targets": ["main"]
+  },
+  "wan_2_2": {
+    "family_aliases": ["wan", "wan_2_2"],
+    "targets": ["high_noise", "low_noise"]
+  }
+}

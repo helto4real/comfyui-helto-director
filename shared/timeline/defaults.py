@@ -16,12 +16,8 @@ from ..contracts.video_timeline import (
     DEFAULT_USE_NATIVE_AUDIO,
     GLOBAL_PROMPT_POSITION_PREFIX,
     LORA_MERGE_MODE_INHERIT_GLOBAL,
-    MODEL_LORA_MODEL_LTX_2_3,
-    MODEL_LORA_MODEL_WAN_2_2,
     MODEL_LORA_SCHEMA_VERSION,
-    MODEL_LORA_TARGET_HIGH_NOISE,
-    MODEL_LORA_TARGET_LOW_NOISE,
-    MODEL_LORA_TARGET_MAIN,
+    MODEL_LORA_TARGET_DESCRIPTORS,
     SCHEMA_VERSION,
     SECTION_EDIT_MODE_TRIM_NEIGHBOR,
     SEQUENCE_ID_MAIN,
@@ -115,13 +111,11 @@ def create_default_project_model_loras() -> dict:
     return {
         "schema_version": MODEL_LORA_SCHEMA_VERSION,
         "global": {
-            MODEL_LORA_MODEL_LTX_2_3: {
-                MODEL_LORA_TARGET_MAIN: create_default_lora_stack(),
-            },
-            MODEL_LORA_MODEL_WAN_2_2: {
-                MODEL_LORA_TARGET_HIGH_NOISE: create_default_lora_stack(),
-                MODEL_LORA_TARGET_LOW_NOISE: create_default_lora_stack(),
-            },
+            model_key: {
+                target_key: create_default_lora_stack()
+                for target_key in descriptor["targets"]
+            }
+            for model_key, descriptor in MODEL_LORA_TARGET_DESCRIPTORS.items()
         },
     }
 

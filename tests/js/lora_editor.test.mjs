@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   MODEL_LORA_MODEL_LTX_2_3,
   MODEL_LORA_MODEL_WAN_2_2,
+  MODEL_LORA_TARGET_DESCRIPTORS,
   MODEL_LORA_TARGET_HIGH_NOISE,
   MODEL_LORA_TARGET_MAIN,
+  createDefaultProjectModelLoras,
+  modelLoraTargetDescriptors,
 } from "../../web/timeline/schema.js";
 import {
   fetchTimelineLoras,
@@ -50,6 +54,41 @@ function testWanModelOnlyStoresClipEqualToModel() {
   assert.equal(stack.loras[0].strength_clip, 0.6);
 }
 
+function testModelLoraDescriptorsMatchCanonicalFixtureAndDriveDefaults() {
+  const fixture = JSON.parse(readFileSync(
+    new URL("../../shared/contracts/model_lora_targets.fixture.json", import.meta.url),
+    "utf8",
+  ));
+  const runtimeContract = Object.fromEntries(
+    Object.entries(MODEL_LORA_TARGET_DESCRIPTORS).map(([modelKey, descriptor]) => [
+      modelKey,
+      {
+        family_aliases: [...descriptor.familyAliases],
+        targets: Object.keys(descriptor.targets),
+      },
+    ]),
+  );
+
+  assert.deepEqual(runtimeContract, fixture);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(createDefaultProjectModelLoras().global)
+        .map(([modelKey, targets]) => [modelKey, Object.keys(targets)]),
+    ),
+    Object.fromEntries(
+      Object.entries(fixture).map(([modelKey, descriptor]) => [modelKey, descriptor.targets]),
+    ),
+  );
+  assert.deepEqual(
+    modelLoraTargetDescriptors().map(({ modelKey, targetKey, label }) => ({ modelKey, targetKey, label })),
+    [
+      { modelKey: "ltx_2_3", targetKey: "main", label: "LTX Main" },
+      { modelKey: "wan_2_2", targetKey: "high_noise", label: "WAN High" },
+      { modelKey: "wan_2_2", targetKey: "low_noise", label: "WAN Low" },
+    ],
+  );
+}
+
 function testFilteredChoicesUseRegexAndFallbackOnInvalidRegex() {
   const loras = ["style/detail.safetensors", "character/main.safetensors", "style/light.safetensors"];
 
@@ -84,6 +123,7 @@ function testPrivacyLockedEditorDoesNotOpen() {
 testLtxSingleStrengthNormalizesModelAndClipTogether();
 testLtxSeparateStrengthPreservesClip();
 testWanModelOnlyStoresClipEqualToModel();
+testModelLoraDescriptorsMatchCanonicalFixtureAndDriveDefaults();
 testFilteredChoicesUseRegexAndFallbackOnInvalidRegex();
 await testFetchTimelineLorasUsesDirectorRoute();
 testPrivacyLockedEditorDoesNotOpen();

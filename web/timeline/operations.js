@@ -3,12 +3,7 @@ import {
   ASSET_TYPE_VIDEO,
   BOUNDARY_MODES,
   LORA_MERGE_MODES,
-  MODEL_LORA_MODEL_LTX_2_3,
-  MODEL_LORA_MODEL_WAN_2_2,
   MODEL_LORA_SCHEMA_VERSION,
-  MODEL_LORA_TARGET_HIGH_NOISE,
-  MODEL_LORA_TARGET_LOW_NOISE,
-  MODEL_LORA_TARGET_MAIN,
   SECTION_TYPE_IMAGE,
   SECTION_TYPE_TEXT,
   SECTION_TYPE_VIDEO,
@@ -22,6 +17,7 @@ import {
   createDefaultShot,
   createDefaultTake,
   deepClone,
+  isModelLoraTarget,
 } from "./schema.js";
 import { clamp, getProjectWholeSeconds, snapTime } from "./geometry.js";
 import { normalizeGlobalSettings } from "./global_settings.js";
@@ -1125,10 +1121,7 @@ function mediaReferenceAssetId(reference) {
 }
 
 function isValidLoraTarget(modelKey, targetKey) {
-  return (
-    (modelKey === MODEL_LORA_MODEL_LTX_2_3 && targetKey === MODEL_LORA_TARGET_MAIN) ||
-    (modelKey === MODEL_LORA_MODEL_WAN_2_2 && (targetKey === MODEL_LORA_TARGET_HIGH_NOISE || targetKey === MODEL_LORA_TARGET_LOW_NOISE))
-  );
+  return isModelLoraTarget(modelKey, targetKey);
 }
 
 function normalizeTimelineLoraStack(stack) {

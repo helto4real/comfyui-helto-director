@@ -1,10 +1,6 @@
 import {
-  MODEL_LORA_MODEL_LTX_2_3,
-  MODEL_LORA_MODEL_WAN_2_2,
-  MODEL_LORA_TARGET_HIGH_NOISE,
-  MODEL_LORA_TARGET_LOW_NOISE,
-  MODEL_LORA_TARGET_MAIN,
   createDefaultLoraStack,
+  modelLoraTargetDescriptor,
 } from "./schema.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 import { setupOverlayDialog } from "./dialog.js";
@@ -20,34 +16,15 @@ let loraListPromise = null;
 let dialogCounter = 0;
 
 export function loraEditorProfileForTarget(modelKey, targetKey) {
-  if (modelKey === MODEL_LORA_MODEL_LTX_2_3 && targetKey === MODEL_LORA_TARGET_MAIN) {
+  const descriptor = modelLoraTargetDescriptor(modelKey, targetKey);
+  if (descriptor) {
     return {
-      id: "ltx-main",
-      modelKey,
-      targetKey,
-      label: "LTX Main",
-      allowClipStrength: true,
-      showStrengths: "single",
-    };
-  }
-  if (modelKey === MODEL_LORA_MODEL_WAN_2_2 && targetKey === MODEL_LORA_TARGET_HIGH_NOISE) {
-    return {
-      id: "wan-high-noise",
-      modelKey,
-      targetKey,
-      label: "WAN High",
-      allowClipStrength: false,
-      showStrengths: "single",
-    };
-  }
-  if (modelKey === MODEL_LORA_MODEL_WAN_2_2 && targetKey === MODEL_LORA_TARGET_LOW_NOISE) {
-    return {
-      id: "wan-low-noise",
-      modelKey,
-      targetKey,
-      label: "WAN Low",
-      allowClipStrength: false,
-      showStrengths: "single",
+      id: descriptor.editorId,
+      modelKey: descriptor.modelKey,
+      targetKey: descriptor.targetKey,
+      label: descriptor.label,
+      allowClipStrength: descriptor.allowClipStrength,
+      showStrengths: descriptor.showStrengths,
     };
   }
   return {

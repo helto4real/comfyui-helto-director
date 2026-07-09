@@ -124,6 +124,19 @@ MODEL_LORA_MODEL_WAN_2_2 = "wan_2_2"
 MODEL_LORA_TARGET_MAIN = "main"
 MODEL_LORA_TARGET_HIGH_NOISE = "high_noise"
 MODEL_LORA_TARGET_LOW_NOISE = "low_noise"
+MODEL_LORA_TARGET_DESCRIPTORS = {
+    MODEL_LORA_MODEL_LTX_2_3: {
+        "family_aliases": ("ltx", "ltx_2_3"),
+        "targets": (MODEL_LORA_TARGET_MAIN,),
+    },
+    MODEL_LORA_MODEL_WAN_2_2: {
+        "family_aliases": ("wan", "wan_2_2"),
+        "targets": (
+            MODEL_LORA_TARGET_HIGH_NOISE,
+            MODEL_LORA_TARGET_LOW_NOISE,
+        ),
+    },
+}
 
 TIMELINE_DISPLAY_MODE_DEFAULT = "Sections"
 SECTION_EDIT_MODE_TRIM_NEIGHBOR = "Trim Neighbor"

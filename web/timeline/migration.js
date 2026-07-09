@@ -10,12 +10,8 @@ import {
   BOUNDARY_MODES,
   CROP_MODE_PROJECT_DEFAULT,
   LORA_MERGE_MODES,
-  MODEL_LORA_MODEL_LTX_2_3,
-  MODEL_LORA_MODEL_WAN_2_2,
   MODEL_LORA_SCHEMA_VERSION,
-  MODEL_LORA_TARGET_HIGH_NOISE,
-  MODEL_LORA_TARGET_LOW_NOISE,
-  MODEL_LORA_TARGET_MAIN,
+  MODEL_LORA_TARGET_DESCRIPTORS,
   PROJECT_STORAGE_SCHEMA_VERSION,
   SEQUENCE_ID_MAIN,
   SEQUENCE_NAME_MAIN,
@@ -175,21 +171,19 @@ function normalizeProjectModelLoras(timeline) {
 }
 
 function normalizeProjectLoraTargets(targets) {
-  const ltx = targets[MODEL_LORA_MODEL_LTX_2_3] && typeof targets[MODEL_LORA_MODEL_LTX_2_3] === "object" && !Array.isArray(targets[MODEL_LORA_MODEL_LTX_2_3])
-    ? targets[MODEL_LORA_MODEL_LTX_2_3]
-    : {};
-  const wan = targets[MODEL_LORA_MODEL_WAN_2_2] && typeof targets[MODEL_LORA_MODEL_WAN_2_2] === "object" && !Array.isArray(targets[MODEL_LORA_MODEL_WAN_2_2])
-    ? targets[MODEL_LORA_MODEL_WAN_2_2]
-    : {};
-  return {
-    [MODEL_LORA_MODEL_LTX_2_3]: {
-      [MODEL_LORA_TARGET_MAIN]: normalizeTimelineLoraConfig(ltx[MODEL_LORA_TARGET_MAIN]),
-    },
-    [MODEL_LORA_MODEL_WAN_2_2]: {
-      [MODEL_LORA_TARGET_HIGH_NOISE]: normalizeTimelineLoraConfig(wan[MODEL_LORA_TARGET_HIGH_NOISE]),
-      [MODEL_LORA_TARGET_LOW_NOISE]: normalizeTimelineLoraConfig(wan[MODEL_LORA_TARGET_LOW_NOISE]),
-    },
-  };
+  return Object.fromEntries(
+    Object.entries(MODEL_LORA_TARGET_DESCRIPTORS).map(([modelKey, descriptor]) => {
+      const sourceTargets = targets[modelKey] && typeof targets[modelKey] === "object" && !Array.isArray(targets[modelKey])
+        ? targets[modelKey]
+        : {};
+      return [modelKey, Object.fromEntries(
+        Object.keys(descriptor.targets).map((targetKey) => [
+          targetKey,
+          normalizeTimelineLoraConfig(sourceTargets[targetKey]),
+        ]),
+      )];
+    }),
+  );
 }
 
 function normalizeTimelineLoraConfig(config) {
@@ -387,23 +381,16 @@ function normalizeShotLoraOverrides(overrides) {
 function normalizeOptionalLoraTargets(targets) {
   if (!targets || typeof targets !== "object" || Array.isArray(targets)) return {};
   const normalized = {};
-  const ltx = targets[MODEL_LORA_MODEL_LTX_2_3];
-  if (ltx && typeof ltx === "object" && !Array.isArray(ltx) && MODEL_LORA_TARGET_MAIN in ltx) {
-    normalized[MODEL_LORA_MODEL_LTX_2_3] = {
-      [MODEL_LORA_TARGET_MAIN]: normalizeTimelineLoraConfig(ltx[MODEL_LORA_TARGET_MAIN]),
-    };
+  for (const [modelKey, descriptor] of Object.entries(MODEL_LORA_TARGET_DESCRIPTORS)) {
+    const sourceTargets = targets[modelKey];
+    if (!sourceTargets || typeof sourceTargets !== "object" || Array.isArray(sourceTargets)) continue;
+    const normalizedTargets = Object.fromEntries(
+      Object.keys(descriptor.targets)
+        .filter((targetKey) => targetKey in sourceTargets)
+        .map((targetKey) => [targetKey, normalizeTimelineLoraConfig(sourceTargets[targetKey])]),
+    );
+    if (Object.keys(normalizedTargets).length) normalized[modelKey] = normalizedTargets;
   }
-  const wan = targets[MODEL_LORA_MODEL_WAN_2_2];
-  const wanTargets = {};
-  if (wan && typeof wan === "object" && !Array.isArray(wan)) {
-    if (MODEL_LORA_TARGET_HIGH_NOISE in wan) {
-      wanTargets[MODEL_LORA_TARGET_HIGH_NOISE] = normalizeTimelineLoraConfig(wan[MODEL_LORA_TARGET_HIGH_NOISE]);
-    }
-    if (MODEL_LORA_TARGET_LOW_NOISE in wan) {
-      wanTargets[MODEL_LORA_TARGET_LOW_NOISE] = normalizeTimelineLoraConfig(wan[MODEL_LORA_TARGET_LOW_NOISE]);
-    }
-  }
-  if (Object.keys(wanTargets).length) normalized[MODEL_LORA_MODEL_WAN_2_2] = wanTargets;
   return normalized;
 }
 

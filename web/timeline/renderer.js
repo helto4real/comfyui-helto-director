@@ -7,11 +7,6 @@ import {
   CROP_MODES,
   GLOBAL_PROMPT_POSITIONS,
   LORA_MERGE_MODES,
-  MODEL_LORA_MODEL_LTX_2_3,
-  MODEL_LORA_MODEL_WAN_2_2,
-  MODEL_LORA_TARGET_HIGH_NOISE,
-  MODEL_LORA_TARGET_LOW_NOISE,
-  MODEL_LORA_TARGET_MAIN,
   SECTION_EDIT_MODES,
   SNAP_MODES,
   SHOT_TYPES,
@@ -22,6 +17,7 @@ import {
   VIDEO_TIMING_MODES,
   createDefaultVideoTimeline,
   deepClone,
+  modelLoraTargetDescriptors,
 } from "./schema.js";
 import {
   mediaLabel,
@@ -1495,20 +1491,28 @@ export class TimelineRenderer {
     const row = el("div", "htd-shot-lora-targets-row");
     const title = el("span", "htd-shot-lora-title");
     title.textContent = "LoRA Targets";
-    const separator = el("span", "htd-lora-target-separator");
-    separator.setAttribute("aria-hidden", "true");
     const clear = iconButton("delete", "Clear Shot LoRA Override", () => {
       this.commitMutation((currentTimeline) => clearShotLoraOverride(currentTimeline, shot.shot_id), "shot lora clear");
     });
     clear.classList.add("is-danger");
-    row.append(
-      title,
-      this.renderShotLoraTargetCompact(timeline, shot, "LTX Main", MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN),
-      separator,
-      this.renderShotLoraTargetCompact(timeline, shot, "WAN High", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE),
-      this.renderShotLoraTargetCompact(timeline, shot, "WAN Low", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_LOW_NOISE),
-      clear,
-    );
+    const targetElements = [title];
+    let previousModelKey = null;
+    for (const descriptor of modelLoraTargetDescriptors()) {
+      if (previousModelKey && previousModelKey !== descriptor.modelKey) {
+        const separator = el("span", "htd-lora-target-separator");
+        separator.setAttribute("aria-hidden", "true");
+        targetElements.push(separator);
+      }
+      targetElements.push(this.renderShotLoraTargetCompact(
+        timeline,
+        shot,
+        descriptor.label,
+        descriptor.modelKey,
+        descriptor.targetKey,
+      ));
+      previousModelKey = descriptor.modelKey;
+    }
+    row.append(...targetElements, clear);
     return row;
   }
 
@@ -2425,9 +2429,13 @@ export class TimelineRenderer {
     title.textContent = "Project Model LoRAs";
     block.append(
       title,
-      this.renderProjectLoraStackRow(timeline, "LTX Main", MODEL_LORA_MODEL_LTX_2_3, MODEL_LORA_TARGET_MAIN, options),
-      this.renderProjectLoraStackRow(timeline, "WAN High", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_HIGH_NOISE, options),
-      this.renderProjectLoraStackRow(timeline, "WAN Low", MODEL_LORA_MODEL_WAN_2_2, MODEL_LORA_TARGET_LOW_NOISE, options),
+      ...modelLoraTargetDescriptors().map((descriptor) => this.renderProjectLoraStackRow(
+        timeline,
+        descriptor.label,
+        descriptor.modelKey,
+        descriptor.targetKey,
+        options,
+      )),
     );
     return block;
   }

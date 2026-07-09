@@ -23,11 +23,7 @@ from ..contracts.video_timeline import (
     LORA_MERGE_MODE_INHERIT_GLOBAL,
     LORA_MERGE_MODE_REPLACE_GLOBAL,
     LORA_MERGE_MODES,
-    MODEL_LORA_MODEL_LTX_2_3,
-    MODEL_LORA_MODEL_WAN_2_2,
-    MODEL_LORA_TARGET_HIGH_NOISE,
-    MODEL_LORA_TARGET_LOW_NOISE,
-    MODEL_LORA_TARGET_MAIN,
+    MODEL_LORA_TARGET_DESCRIPTORS,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
@@ -49,18 +45,14 @@ from .references import (
 )
 
 VALID_MODEL_LORA_TARGETS = {
-    MODEL_LORA_MODEL_LTX_2_3: {MODEL_LORA_TARGET_MAIN},
-    MODEL_LORA_MODEL_WAN_2_2: {
-        MODEL_LORA_TARGET_HIGH_NOISE,
-        MODEL_LORA_TARGET_LOW_NOISE,
-    },
+    model_key: set(descriptor["targets"])
+    for model_key, descriptor in MODEL_LORA_TARGET_DESCRIPTORS.items()
 }
 
 RESOLVED_LORA_TARGETS_BY_FAMILY = {
-    "ltx": {MODEL_LORA_TARGET_MAIN},
-    "ltx_2_3": {MODEL_LORA_TARGET_MAIN},
-    "wan": {MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE},
-    "wan_2_2": {MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE},
+    family_alias: set(descriptor["targets"])
+    for descriptor in MODEL_LORA_TARGET_DESCRIPTORS.values()
+    for family_alias in descriptor["family_aliases"]
 }
 
 

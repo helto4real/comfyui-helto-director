@@ -134,6 +134,55 @@ export const MODEL_LORA_MODEL_WAN_2_2 = "wan_2_2";
 export const MODEL_LORA_TARGET_MAIN = "main";
 export const MODEL_LORA_TARGET_HIGH_NOISE = "high_noise";
 export const MODEL_LORA_TARGET_LOW_NOISE = "low_noise";
+export const MODEL_LORA_TARGET_DESCRIPTORS = Object.freeze({
+  [MODEL_LORA_MODEL_LTX_2_3]: Object.freeze({
+    familyAliases: Object.freeze(["ltx", "ltx_2_3"]),
+    targets: Object.freeze({
+      [MODEL_LORA_TARGET_MAIN]: Object.freeze({
+        modelKey: MODEL_LORA_MODEL_LTX_2_3,
+        targetKey: MODEL_LORA_TARGET_MAIN,
+        label: "LTX Main",
+        editorId: "ltx-main",
+        allowClipStrength: true,
+        showStrengths: "single",
+      }),
+    }),
+  }),
+  [MODEL_LORA_MODEL_WAN_2_2]: Object.freeze({
+    familyAliases: Object.freeze(["wan", "wan_2_2"]),
+    targets: Object.freeze({
+      [MODEL_LORA_TARGET_HIGH_NOISE]: Object.freeze({
+        modelKey: MODEL_LORA_MODEL_WAN_2_2,
+        targetKey: MODEL_LORA_TARGET_HIGH_NOISE,
+        label: "WAN High",
+        editorId: "wan-high-noise",
+        allowClipStrength: false,
+        showStrengths: "single",
+      }),
+      [MODEL_LORA_TARGET_LOW_NOISE]: Object.freeze({
+        modelKey: MODEL_LORA_MODEL_WAN_2_2,
+        targetKey: MODEL_LORA_TARGET_LOW_NOISE,
+        label: "WAN Low",
+        editorId: "wan-low-noise",
+        allowClipStrength: false,
+        showStrengths: "single",
+      }),
+    }),
+  }),
+});
+
+export function modelLoraTargetDescriptors() {
+  return Object.values(MODEL_LORA_TARGET_DESCRIPTORS)
+    .flatMap((descriptor) => Object.values(descriptor.targets));
+}
+
+export function modelLoraTargetDescriptor(modelKey, targetKey) {
+  return MODEL_LORA_TARGET_DESCRIPTORS[modelKey]?.targets?.[targetKey] ?? null;
+}
+
+export function isModelLoraTarget(modelKey, targetKey) {
+  return modelLoraTargetDescriptor(modelKey, targetKey) !== null;
+}
 
 export const DEFAULT_DURATION_SECONDS = 5.0;
 export const DEFAULT_FRAME_RATE = 24.0;
@@ -152,15 +201,15 @@ export function createDefaultLoraStack() {
 export function createDefaultProjectModelLoras() {
   return {
     schema_version: MODEL_LORA_SCHEMA_VERSION,
-    global: {
-      [MODEL_LORA_MODEL_LTX_2_3]: {
-        [MODEL_LORA_TARGET_MAIN]: createDefaultLoraStack(),
-      },
-      [MODEL_LORA_MODEL_WAN_2_2]: {
-        [MODEL_LORA_TARGET_HIGH_NOISE]: createDefaultLoraStack(),
-        [MODEL_LORA_TARGET_LOW_NOISE]: createDefaultLoraStack(),
-      },
-    },
+    global: Object.fromEntries(
+      Object.entries(MODEL_LORA_TARGET_DESCRIPTORS).map(([modelKey, descriptor]) => [
+        modelKey,
+        Object.fromEntries(Object.keys(descriptor.targets).map((targetKey) => [
+          targetKey,
+          createDefaultLoraStack(),
+        ])),
+      ]),
+    ),
   };
 }
 

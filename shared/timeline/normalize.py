@@ -22,12 +22,8 @@ from ..contracts.video_timeline import (
     DEFAULT_VIDEO_TIMING_MODE,
     LORA_MERGE_MODE_INHERIT_GLOBAL,
     LORA_MERGE_MODES,
-    MODEL_LORA_MODEL_LTX_2_3,
-    MODEL_LORA_MODEL_WAN_2_2,
     MODEL_LORA_SCHEMA_VERSION,
-    MODEL_LORA_TARGET_HIGH_NOISE,
-    MODEL_LORA_TARGET_LOW_NOISE,
-    MODEL_LORA_TARGET_MAIN,
+    MODEL_LORA_TARGET_DESCRIPTORS,
     SECTION_TYPE_IMAGE,
     SECTION_TYPE_TEXT,
     SECTION_TYPE_VIDEO,
@@ -145,27 +141,16 @@ def _normalize_project_model_loras(timeline: dict) -> None:
 
 
 def _normalize_project_lora_targets(targets: dict[str, Any]) -> dict[str, Any]:
-    ltx = targets.get(MODEL_LORA_MODEL_LTX_2_3)
-    if not isinstance(ltx, dict):
-        ltx = {}
-    wan = targets.get(MODEL_LORA_MODEL_WAN_2_2)
-    if not isinstance(wan, dict):
-        wan = {}
-    return {
-        MODEL_LORA_MODEL_LTX_2_3: {
-            MODEL_LORA_TARGET_MAIN: _normalize_lora_stack(
-                ltx.get(MODEL_LORA_TARGET_MAIN)
-            ),
-        },
-        MODEL_LORA_MODEL_WAN_2_2: {
-            MODEL_LORA_TARGET_HIGH_NOISE: _normalize_lora_stack(
-                wan.get(MODEL_LORA_TARGET_HIGH_NOISE)
-            ),
-            MODEL_LORA_TARGET_LOW_NOISE: _normalize_lora_stack(
-                wan.get(MODEL_LORA_TARGET_LOW_NOISE)
-            ),
-        },
-    }
+    normalized: dict[str, Any] = {}
+    for model_key, descriptor in MODEL_LORA_TARGET_DESCRIPTORS.items():
+        model_targets = targets.get(model_key)
+        if not isinstance(model_targets, dict):
+            model_targets = {}
+        normalized[model_key] = {
+            target_key: _normalize_lora_stack(model_targets.get(target_key))
+            for target_key in descriptor["targets"]
+        }
+    return normalized
 
 
 def _normalize_lora_stack(stack: Any) -> dict[str, Any]:
@@ -411,26 +396,17 @@ def _normalize_optional_lora_targets(targets: Any) -> dict[str, Any]:
     if not isinstance(targets, dict):
         return {}
     normalized: dict[str, Any] = {}
-    ltx = targets.get(MODEL_LORA_MODEL_LTX_2_3)
-    if isinstance(ltx, dict) and MODEL_LORA_TARGET_MAIN in ltx:
-        normalized[MODEL_LORA_MODEL_LTX_2_3] = {
-            MODEL_LORA_TARGET_MAIN: _normalize_lora_stack(
-                ltx.get(MODEL_LORA_TARGET_MAIN)
-            )
+    for model_key, descriptor in MODEL_LORA_TARGET_DESCRIPTORS.items():
+        model_targets = targets.get(model_key)
+        if not isinstance(model_targets, dict):
+            continue
+        normalized_targets = {
+            target_key: _normalize_lora_stack(model_targets.get(target_key))
+            for target_key in descriptor["targets"]
+            if target_key in model_targets
         }
-    wan = targets.get(MODEL_LORA_MODEL_WAN_2_2)
-    wan_targets: dict[str, Any] = {}
-    if isinstance(wan, dict):
-        if MODEL_LORA_TARGET_HIGH_NOISE in wan:
-            wan_targets[MODEL_LORA_TARGET_HIGH_NOISE] = _normalize_lora_stack(
-                wan.get(MODEL_LORA_TARGET_HIGH_NOISE)
-            )
-        if MODEL_LORA_TARGET_LOW_NOISE in wan:
-            wan_targets[MODEL_LORA_TARGET_LOW_NOISE] = _normalize_lora_stack(
-                wan.get(MODEL_LORA_TARGET_LOW_NOISE)
-            )
-    if wan_targets:
-        normalized[MODEL_LORA_MODEL_WAN_2_2] = wan_targets
+        if normalized_targets:
+            normalized[model_key] = normalized_targets
     return normalized
 
 

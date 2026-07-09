@@ -6,11 +6,7 @@ import {
   ASSET_SOURCE_KINDS,
   BOUNDARY_MODES,
   LORA_MERGE_MODES,
-  MODEL_LORA_MODEL_LTX_2_3,
-  MODEL_LORA_MODEL_WAN_2_2,
-  MODEL_LORA_TARGET_HIGH_NOISE,
-  MODEL_LORA_TARGET_LOW_NOISE,
-  MODEL_LORA_TARGET_MAIN,
+  MODEL_LORA_TARGET_DESCRIPTORS,
 } from "./schema.js";
 import { migrateVideoTimeline, normalizeVideoTimeline } from "./migration.js";
 import { normalizeGlobalSettings } from "./global_settings.js";
@@ -22,17 +18,18 @@ import {
   parseReferenceTags,
 } from "./references.js";
 
-const VALID_MODEL_LORA_TARGETS = {
-  [MODEL_LORA_MODEL_LTX_2_3]: new Set([MODEL_LORA_TARGET_MAIN]),
-  [MODEL_LORA_MODEL_WAN_2_2]: new Set([MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE]),
-};
+const VALID_MODEL_LORA_TARGETS = Object.fromEntries(
+  Object.entries(MODEL_LORA_TARGET_DESCRIPTORS).map(([modelKey, descriptor]) => [
+    modelKey,
+    new Set(Object.keys(descriptor.targets)),
+  ]),
+);
 
-const RESOLVED_LORA_TARGETS_BY_FAMILY = {
-  ltx: new Set([MODEL_LORA_TARGET_MAIN]),
-  ltx_2_3: new Set([MODEL_LORA_TARGET_MAIN]),
-  wan: new Set([MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE]),
-  wan_2_2: new Set([MODEL_LORA_TARGET_HIGH_NOISE, MODEL_LORA_TARGET_LOW_NOISE]),
-};
+const RESOLVED_LORA_TARGETS_BY_FAMILY = Object.fromEntries(
+  Object.values(MODEL_LORA_TARGET_DESCRIPTORS).flatMap((descriptor) => (
+    descriptor.familyAliases.map((familyAlias) => [familyAlias, new Set(Object.keys(descriptor.targets))])
+  )),
+);
 
 export function createValidationEntry(code, severity, source, scope, itemId, message, hint = "", details = {}) {
   return {
