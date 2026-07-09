@@ -66,6 +66,11 @@ def extract_shot_timeline(timeline: Any, shot_id: str) -> dict[str, Any]:
         source_start,
         duration,
     )
+    local_timeline["audio_tracks"] = _local_audio_tracks(
+        normalized.get("audio_tracks", []),
+        source_start,
+        source_end,
+    )
     local_timeline["sequence"] = _local_sequence(
         sequence,
         selected_shot,
@@ -198,6 +203,56 @@ def _local_sections(
         )
         local_sections.append(local_section)
     return local_sections
+
+
+def _local_audio_tracks(
+    audio_tracks: list[dict[str, Any]],
+    source_start: float,
+    source_end: float,
+) -> list[dict[str, Any]]:
+    local_tracks = []
+    for track in audio_tracks:
+        local_track = deepcopy(track)
+        local_clips = []
+        for clip in track.get("clips", []):
+            clip_start = _as_float(clip.get("start_time"), 0.0)
+            clip_end = _as_float(clip.get("end_time"), clip_start)
+            retained_start = max(clip_start, source_start)
+            retained_end = min(clip_end, source_end)
+            if retained_end <= retained_start:
+                continue
+
+            left_trim = retained_start - clip_start
+            right_trim = clip_end - retained_end
+            retained_duration = retained_end - retained_start
+            local_clip = deepcopy(clip)
+            local_clip["start_time"] = retained_start - source_start
+            local_clip["end_time"] = retained_end - source_start
+            local_clip["source_in"] = _as_float(local_clip.get("source_in"), 0.0) + left_trim
+
+            source_out = local_clip.get("source_out")
+            if source_out is not None:
+                retained_source_end = local_clip["source_in"] + retained_duration
+                explicit_source_out = _as_float(source_out, retained_source_end)
+                local_clip["source_out"] = _clamp(
+                    explicit_source_out,
+                    local_clip["source_in"],
+                    retained_source_end,
+                )
+
+            local_clip["fade_in"] = max(
+                0.0,
+                _as_float(local_clip.get("fade_in"), 0.0) - left_trim,
+            )
+            local_clip["fade_out"] = max(
+                0.0,
+                _as_float(local_clip.get("fade_out"), 0.0) - right_trim,
+            )
+            local_clips.append(local_clip)
+
+        local_track["clips"] = local_clips
+        local_tracks.append(local_track)
+    return local_tracks
 
 
 def _local_sequence(

@@ -782,6 +782,176 @@ def test_extract_generated_shot_creates_local_timeline_with_shifted_sections():
     assert local["sequence"]["metadata"]["shot_extraction"] == context
 
 
+def test_shot_extraction_localizes_audio_clips_without_mutating_the_source():
+    timeline = _shot_extraction_timeline()
+    timeline["audio_tracks"] = [
+        {
+            "track_id": "dialogue",
+            "name": "Dialogue stem",
+            "enabled": False,
+            "locked": True,
+            "metadata": {"role": "dialogue"},
+            "clips": [
+                {
+                    "item_id": "fully_inside",
+                    "audio": "/mnt/media/inside.wav",
+                    "start_time": 2.5,
+                    "end_time": 4.5,
+                    "source_in": 1.0,
+                    "source_out": 3.0,
+                    "volume": 0.75,
+                    "normalization": {"mode": "peak"},
+                    "fade_in": 0.4,
+                    "fade_out": 0.6,
+                    "enabled": False,
+                    "locked": True,
+                    "name": "Inside",
+                    "lane": 2,
+                    "metadata": {"speaker": "narrator"},
+                },
+                {
+                    "item_id": "left_trim_none_source_out",
+                    "audio": "/mnt/media/left.wav",
+                    "start_time": 1.0,
+                    "end_time": 4.0,
+                    "source_in": 4.0,
+                    "source_out": None,
+                    "fade_in": 1.5,
+                    "fade_out": 0.75,
+                },
+                {
+                    "item_id": "right_trim_explicit_source_out",
+                    "audio": "/mnt/media/right.wav",
+                    "start_time": 3.0,
+                    "end_time": 6.0,
+                    "source_in": 1.0,
+                    "source_out": 4.0,
+                    "fade_in": 0.5,
+                    "fade_out": 1.25,
+                },
+                {
+                    "item_id": "trim_both_boundaries",
+                    "audio": "/mnt/media/both.wav",
+                    "start_time": 0.0,
+                    "end_time": 7.0,
+                    "source_in": 10.0,
+                    "source_out": 17.0,
+                    "fade_in": 3.0,
+                    "fade_out": 3.0,
+                },
+                {
+                    "item_id": "outside_before",
+                    "audio": "/mnt/media/before.wav",
+                    "start_time": 0.0,
+                    "end_time": 2.0,
+                },
+                {
+                    "item_id": "outside_after",
+                    "audio": "/mnt/media/after.wav",
+                    "start_time": 5.0,
+                    "end_time": 7.0,
+                },
+            ],
+        },
+        {
+            "track_id": "outside_only",
+            "name": "Preserved empty track",
+            "clips": [
+                {
+                    "item_id": "outside",
+                    "audio": "/mnt/media/outside.wav",
+                    "start_time": 6.0,
+                    "end_time": 7.0,
+                }
+            ],
+        },
+    ]
+    source_before = json.loads(json.dumps(timeline))
+
+    local = extract_shot_timeline(timeline, "shot_middle")["timeline"]
+
+    assert timeline == source_before
+    assert local["audio_tracks"][0] == {
+        "track_id": "dialogue",
+        "name": "Dialogue stem",
+        "enabled": False,
+        "locked": True,
+        "metadata": {"role": "dialogue"},
+        "clips": [
+            {
+                "item_id": "fully_inside",
+                "audio": "/mnt/media/inside.wav",
+                "start_time": 0.5,
+                "end_time": 2.5,
+                "source_in": 1.0,
+                "source_out": 3.0,
+                "volume": 0.75,
+                "normalization": {"mode": "peak"},
+                "fade_in": 0.4,
+                "fade_out": 0.6,
+                "enabled": False,
+                "locked": True,
+                "name": "Inside",
+                "lane": 2,
+                "metadata": {"speaker": "narrator"},
+            },
+            {
+                "item_id": "left_trim_none_source_out",
+                "audio": "/mnt/media/left.wav",
+                "start_time": 0.0,
+                "end_time": 2.0,
+                "source_in": 5.0,
+                "source_out": None,
+                "volume": 100.0,
+                "normalization": {},
+                "fade_in": 0.5,
+                "fade_out": 0.75,
+                "enabled": True,
+                "locked": False,
+                "name": "",
+                "lane": 0,
+            },
+            {
+                "item_id": "right_trim_explicit_source_out",
+                "audio": "/mnt/media/right.wav",
+                "start_time": 1.0,
+                "end_time": 3.0,
+                "source_in": 1.0,
+                "source_out": 3.0,
+                "volume": 100.0,
+                "normalization": {},
+                "fade_in": 0.5,
+                "fade_out": 0.25,
+                "enabled": True,
+                "locked": False,
+                "name": "",
+                "lane": 0,
+            },
+            {
+                "item_id": "trim_both_boundaries",
+                "audio": "/mnt/media/both.wav",
+                "start_time": 0.0,
+                "end_time": 3.0,
+                "source_in": 12.0,
+                "source_out": 15.0,
+                "volume": 100.0,
+                "normalization": {},
+                "fade_in": 1.0,
+                "fade_out": 1.0,
+                "enabled": True,
+                "locked": False,
+                "name": "",
+                "lane": 0,
+            },
+        ],
+    }
+    assert local["audio_tracks"][1] == {
+        "track_id": "outside_only",
+        "name": "Preserved empty track",
+        "clips": [],
+    }
+
+
 def test_extract_imported_shot_preserves_clip_metadata():
     timeline = create_default_video_timeline()
     timeline["project"]["duration_seconds"] = 2.0
