@@ -576,6 +576,9 @@ def test_ltx_missing_legacy_shot_id_blocks_instead_of_falling_back():
     assert [entry["code"] for entry in validation["errors"]] == [
         "GENERATION_LEGACY_SHOT_NOT_FOUND"
     ]
+    assert [entry["code"] for entry in validation["warnings"]] == [
+        "GENERATION_LEGACY_SHOT_ID_DEPRECATED"
+    ]
     assert policy["status"] == "blocked"
     assert policy["target_shot_id"] is None
     assert plan["section_plan"] == []

@@ -235,22 +235,24 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
         return []
     status = policy.get("status")
     reason = policy.get("skip_reason") or policy.get("block_reason")
-    if status == GENERATION_STATUS_TARGETED and policy.get("legacy_shot_id"):
-        return [
+    entries = []
+    if policy.get("legacy_shot_id"):
+        entries.append(
             create_validation_entry(
                 "GENERATION_LEGACY_SHOT_ID_DEPRECATED",
                 SEVERITY_WARNING,
                 source,
                 "Generation",
                 policy.get("legacy_shot_id"),
-                "A deprecated legacy shot ID selected this generation target.",
+                "A deprecated legacy shot ID was provided for generation targeting.",
                 "Use Generation Mode and select the shot in the Director timeline for new workflows.",
                 _policy_validation_details(policy),
             )
-        ]
+        )
     if status == GENERATION_STATUS_SKIPPED:
         if reason == GENERATION_SKIP_ALL_READY:
             return [
+                *entries,
                 create_validation_entry(
                     "GENERATION_SKIPPED_ALL_SHOTS_READY",
                     SEVERITY_INFO,
@@ -264,6 +266,7 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
             ]
         if reason == GENERATION_SKIP_NO_SHOTS:
             return [
+                *entries,
                 create_validation_entry(
                     "GENERATION_SKIPPED_NO_SHOTS",
                     SEVERITY_INFO,
@@ -277,6 +280,7 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
             ]
         if reason == GENERATION_SKIP_NO_GENERATABLE_SHOTS:
             return [
+                *entries,
                 create_validation_entry(
                     "GENERATION_SKIPPED_NO_GENERATABLE_SHOTS",
                     SEVERITY_WARNING,
@@ -291,6 +295,7 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
     if status == GENERATION_STATUS_BLOCKED:
         if reason == GENERATION_BLOCK_LEGACY_SHOT_NOT_FOUND:
             return [
+                *entries,
                 create_validation_entry(
                     "GENERATION_LEGACY_SHOT_NOT_FOUND",
                     SEVERITY_ERROR,
@@ -304,6 +309,7 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
             ]
         if reason == GENERATION_BLOCK_SELECTED_REQUIRED:
             return [
+                *entries,
                 create_validation_entry(
                     "GENERATION_SELECTED_SHOT_REQUIRED",
                     SEVERITY_ERROR,
@@ -317,6 +323,7 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
             ]
         if reason == GENERATION_BLOCK_SELECTED_NOT_GENERATABLE:
             return [
+                *entries,
                 create_validation_entry(
                     "GENERATION_SELECTED_SHOT_NOT_GENERATABLE",
                     SEVERITY_ERROR,
@@ -328,7 +335,7 @@ def generation_policy_validation_entries(policy: dict[str, Any] | None, source: 
                     _policy_validation_details(policy),
                 )
             ]
-    return []
+    return entries
 
 
 def generation_policy_debug_summary(policy: dict[str, Any] | None) -> dict[str, Any]:
