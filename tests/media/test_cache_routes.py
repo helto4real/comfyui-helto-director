@@ -22,6 +22,7 @@ from shared.media_cache import (
     resolve_media_path,
 )
 from shared.privacy import CRYPTO_AVAILABLE, decrypt_bytes
+import shared.timeline.global_settings as timeline_global_settings
 
 
 def test_preview_route_jobs_are_awaited_and_concurrency_limited(monkeypatch):
@@ -190,6 +191,39 @@ def test_resolve_media_path_rejects_absolute_paths_outside_allowed_roots(tmp_pat
     media_path = tmp_path.parent / f"{tmp_path.name}_outside" / "clip.wav"
     media_path.parent.mkdir(parents=True)
     media_path.write_bytes(b"data")
+
+    with pytest.raises(ValueError, match=MEDIA_PATH_SECURITY_ERROR):
+        resolve_media_path(str(media_path))
+
+
+def test_resolve_media_path_supports_configured_director_asset_root(tmp_path):
+    media_root = tmp_path.parent / f"{tmp_path.name}_director_assets"
+    media_path = media_root / "project" / "takes" / "shot_001" / "take.mp4"
+    media_path.parent.mkdir(parents=True)
+    media_path.write_bytes(b"video")
+    timeline_global_settings.save_global_settings(
+        {
+            "storage": {"asset_root_directory": str(media_root)},
+            "privacy": {"mode": False},
+        }
+    )
+
+    resolved = resolve_media_path(str(media_path))
+
+    assert resolved == media_path.resolve()
+
+
+def test_resolve_media_path_ignores_invalid_director_asset_root(tmp_path):
+    media_root = tmp_path.parent / f"{tmp_path.name}_invalid_director_assets"
+    media_path = media_root / "take.mp4"
+    media_path.parent.mkdir(parents=True)
+    media_path.write_bytes(b"video")
+    settings_path = timeline_global_settings.settings_path()
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps({"storage": {"asset_root_directory": "relative/assets"}, "privacy": {"mode": False}}),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match=MEDIA_PATH_SECURITY_ERROR):
         resolve_media_path(str(media_path))

@@ -75,6 +75,7 @@ def _allowed_media_roots() -> list[Path]:
     ]
     for paths, _extensions in getattr(folder_paths, "folder_names_and_paths", {}).values():
         candidates.extend(paths)
+    candidates.extend(_configured_director_asset_roots())
     candidates.extend(_configured_media_browser_roots())
 
     seen: set[str] = set()
@@ -88,6 +89,21 @@ def _allowed_media_roots() -> list[Path]:
         roots.append(root)
         seen.add(root_key)
     return roots
+
+
+def _configured_director_asset_roots() -> list[str]:
+    try:
+        from .timeline.global_settings import resolve_global_asset_root
+    except Exception:
+        try:
+            from shared.timeline.global_settings import resolve_global_asset_root
+        except Exception:
+            return []
+
+    try:
+        return [str(resolve_global_asset_root(create=False))]
+    except Exception:
+        return []
 
 
 def _configured_media_browser_roots() -> list[str]:
