@@ -1151,6 +1151,7 @@ function testHeltoNodeThemeAppliesScopedLiteGraphColors() {
 function testHeltoDirectorNodesUseActualNodeTheme() {
   const designSource = readFileSync(new URL("../../web/timeline/design_tokens.js", import.meta.url), "utf8");
   const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
+  const wanExtensionSource = readFileSync(new URL("../../web/wan_timeline_runtime.js", import.meta.url), "utf8");
   const loraSource = readFileSync(new URL("../../web/timeline_lora_configuration.js", import.meta.url), "utf8");
 
   assert.equal(designSource.includes("export const HTD = {"), true);
@@ -1162,7 +1163,9 @@ function testHeltoDirectorNodesUseActualNodeTheme() {
   assert.equal(extensionSource.includes("const HELTO_DIRECTOR_THEME_NODE_TYPES = new Set(["), true);
   assert.equal(extensionSource.includes('"HeltoVideoTimelineDirector"'), true);
   assert.equal(extensionSource.includes('"HeltoLTX23TimelineConfig"'), true);
-  assert.equal(extensionSource.includes('"HeltoWAN22TimelineRuntime"'), true);
+  assert.equal(extensionSource.includes("WAN"), false);
+  assert.equal(wanExtensionSource.includes('"HeltoWAN22TimelineRuntime"'), true);
+  assert.equal(wanExtensionSource.includes("applyHtdNodeTheme(node, { appRef: app })"), true);
   assert.equal(extensionSource.includes('"HeltoTimelineSequenceAssembler"'), true);
   assert.equal(extensionSource.includes('"HeltoLTX23TimelineIdentityAnchorFace"'), true);
   assert.equal(extensionSource.includes("patchHeltoDirectorThemeNodeType(nodeType)"), true);
@@ -1320,17 +1323,113 @@ function testToolbarUsesGroupedIconControls() {
   assert.equal(rendererSource.includes('settings: `<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5'), true);
 }
 
-function testWanSegmentedExecutorSplitStepWidgetSync() {
-  const extensionSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
+async function testWanSegmentedExecutorSplitStepWidgetSync() {
+  const directorSource = readFileSync(new URL("../../web/video_timeline_director.js", import.meta.url), "utf8");
+  const extensionSource = readFileSync(new URL("../../web/wan_timeline_runtime.js", import.meta.url), "utf8");
+  const registered = [];
+  const dirtyCalls = [];
+  const themeCalls = [];
+  globalThis.__heltoWanTestApp = {
+    graph: { setDirtyCanvas(...args) { dirtyCalls.push(args); } },
+    registerExtension(extension) { registered.push(extension); },
+  };
+  globalThis.__heltoWanTestApplyTheme = (...args) => {
+    themeCalls.push(args);
+    return true;
+  };
 
-  assert.equal(extensionSource.includes('nodeData?.name === "HeltoWAN22TimelineSegmentedExecutor"'), true);
-  assert.equal(extensionSource.includes("installWanSegmentedExecutorSplitStepSync(nodeType)"), true);
-  assert.equal(extensionSource.includes('findWidget(node, "steps")'), true);
-  assert.equal(extensionSource.includes('findWidget(node, "phase_split_step")'), true);
-  assert.equal(extensionSource.includes("Math.floor(Number.isFinite(steps) ? steps / 2 : 10)"), true);
-  assert.equal(extensionSource.includes("stepsWidget.callback = function ()"), true);
-  assert.equal(extensionSource.includes("syncWanPhaseSplitStep(node, { markCanvas: true })"), true);
-  assert.equal(extensionSource.includes("app.graph?.setDirtyCanvas?.(true, true)"), true);
+  try {
+    const executableSource = extensionSource
+      .replace('import { app } from "../../scripts/app.js";', "const app = globalThis.__heltoWanTestApp;")
+      .replace(
+        'import { applyHtdNodeTheme } from "./timeline/design_tokens.js";',
+        "const applyHtdNodeTheme = globalThis.__heltoWanTestApplyTheme;",
+      );
+    await import(`data:text/javascript;base64,${Buffer.from(executableSource).toString("base64")}#wan-runtime-test`);
+
+    assert.equal(directorSource.includes("WAN"), false);
+    assert.equal(registered.length, 1);
+    const extension = registered[0];
+    assert.equal(extension.name, "helto.wanTimelineRuntime");
+
+    const lifecycleCalls = [];
+    class FakeWanSegmentedExecutor {}
+    FakeWanSegmentedExecutor.prototype.onNodeCreated = function () {
+      lifecycleCalls.push("created");
+      return "created-result";
+    };
+    FakeWanSegmentedExecutor.prototype.onConfigure = function () {
+      lifecycleCalls.push("configured");
+      return "configured-result";
+    };
+
+    await extension.beforeRegisterNodeDef(FakeWanSegmentedExecutor, {
+      name: "HeltoWAN22TimelineSegmentedExecutor",
+    });
+    const wrappedOnNodeCreated = FakeWanSegmentedExecutor.prototype.onNodeCreated;
+    const wrappedOnConfigure = FakeWanSegmentedExecutor.prototype.onConfigure;
+    await extension.beforeRegisterNodeDef(FakeWanSegmentedExecutor, {
+      name: "HeltoWAN22TimelineSegmentedExecutor",
+    });
+    assert.equal(FakeWanSegmentedExecutor.prototype.onNodeCreated, wrappedOnNodeCreated);
+    assert.equal(FakeWanSegmentedExecutor.prototype.onConfigure, wrappedOnConfigure);
+
+    const splitValues = [];
+    const originalStepCalls = [];
+    const node = Object.create(FakeWanSegmentedExecutor.prototype);
+    node.type = "HeltoWAN22TimelineSegmentedExecutor";
+    const stepsWidget = {
+      name: "steps",
+      value: 20,
+      callback(...args) {
+        originalStepCalls.push({ context: this, args });
+        return "steps-result";
+      },
+    };
+    const splitWidget = {
+      name: "phase_split_step",
+      value: 3,
+      callback(value) { splitValues.push(value); },
+    };
+    node.widgets = [stepsWidget, splitWidget];
+
+    assert.equal(node.onNodeCreated(), "created-result");
+    assert.equal(splitWidget.value, 10);
+    assert.deepEqual(splitValues, [10]);
+    assert.deepEqual(dirtyCalls, []);
+    const wrappedStepsCallback = stepsWidget.callback;
+
+    assert.equal(node.onConfigure(), "configured-result");
+    assert.equal(stepsWidget.callback, wrappedStepsCallback);
+    assert.deepEqual(splitValues, [10]);
+    assert.deepEqual(dirtyCalls, []);
+
+    stepsWidget.value = 22;
+    assert.equal(stepsWidget.callback("user-change"), "steps-result");
+    assert.equal(originalStepCalls.length, 1);
+    assert.equal(originalStepCalls[0].context, stepsWidget);
+    assert.deepEqual(originalStepCalls[0].args, ["user-change"]);
+    assert.equal(splitWidget.value, 11);
+    assert.deepEqual(splitValues, [10, 11]);
+    assert.deepEqual(dirtyCalls, [[true, true]]);
+
+    stepsWidget.value = "invalid";
+    stepsWidget.callback();
+    assert.equal(splitWidget.value, 10);
+    assert.deepEqual(splitValues, [10, 11, 10]);
+    assert.deepEqual(dirtyCalls, [[true, true], [true, true]]);
+
+    stepsWidget.value = 1;
+    stepsWidget.callback();
+    assert.equal(splitWidget.value, 1);
+    assert.deepEqual(splitValues, [10, 11, 10, 1]);
+    assert.deepEqual(dirtyCalls, [[true, true], [true, true], [true, true]]);
+    assert.deepEqual(lifecycleCalls, ["created", "configured"]);
+    assert.equal(themeCalls.length >= 2, true);
+  } finally {
+    delete globalThis.__heltoWanTestApp;
+    delete globalThis.__heltoWanTestApplyTheme;
+  }
 }
 
 function testTimelineStatusBarOverlayIsNotInstalled() {
@@ -1488,7 +1587,7 @@ testHeltoDirectorNodesUseActualNodeTheme();
 testTimelineEndTickUsesHeltoAccentTheme();
 testDeleteContextMenuIsAvailableOnTimelineItems();
 testToolbarUsesGroupedIconControls();
-testWanSegmentedExecutorSplitStepWidgetSync();
+await testWanSegmentedExecutorSplitStepWidgetSync();
 testTimelineStatusBarOverlayIsNotInstalled();
 testRendererUsesRealWaveformsOnly();
 testWaveformHelpersAdaptAndTrimPeaks();
