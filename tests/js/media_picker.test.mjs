@@ -16,31 +16,6 @@ import {
   replacePickedSectionMedia,
 } from "../../web/timeline/media_actions.js";
 import { addSection } from "../../web/timeline/operations.js";
-import {
-  hasPrivacyTokenCookie,
-  storePrivacyToken,
-} from "../../web/timeline/privacy.js";
-
-function installBrowserTokenStubs() {
-  const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, "document");
-  const hadLocalStorage = Object.prototype.hasOwnProperty.call(globalThis, "localStorage");
-  const previousDocument = globalThis.document;
-  const previousLocalStorage = globalThis.localStorage;
-  const storage = new Map();
-  globalThis.document = { cookie: "" };
-  globalThis.localStorage = {
-    getItem: (key) => storage.get(key) ?? null,
-    setItem: (key, value) => storage.set(key, String(value)),
-    removeItem: (key) => storage.delete(key),
-  };
-  return () => {
-    if (hadDocument) globalThis.document = previousDocument;
-    else delete globalThis.document;
-    if (hadLocalStorage) globalThis.localStorage = previousLocalStorage;
-    else delete globalThis.localStorage;
-  };
-}
-
 function pickedItem(path, filename, extras = {}) {
   return {
     path,
@@ -265,38 +240,32 @@ function testGeneratedVideoPickerFallbackStillCreatesCandidateTake() {
   assert.equal(result.take.asset_id, result.asset.asset_id);
 }
 
-async function testProjectTakeCapturesRefreshesPrivateThumbnailCookie() {
-  const restoreBrowser = installBrowserTokenStubs();
-  const hadFetch = Object.prototype.hasOwnProperty.call(globalThis, "fetch");
-  const previousFetch = globalThis.fetch;
+async function testProjectTakeCapturesUseManagedOpaqueReferences() {
   const calls = [];
-  try {
-    storePrivacyToken("project token");
-    globalThis.document.cookie = "";
-    globalThis.fetch = async (url, options) => {
-      calls.push({ url, options });
+  const sourceReference = { id: `hp-ref-${"S".repeat(32)}`, kind: "media-source" };
+  const takeReference = { id: `hp-ref-${"T".repeat(32)}`, kind: "project-take" };
+  const payload = await fetchProjectTakeCaptures({
+    project: { metadata: { library_item_id: `hp-rec-${"P".repeat(32)}` } },
+  }, "shot_001", {
+    async listProjectTakes(input) {
+      calls.push(input);
       return {
-        ok: true,
-        json: async () => ({ captures: [] }),
+        data: { capture_count: 1 },
+        references: { sources: [sourceReference], takes: [takeReference] },
       };
-    };
-
-    assert.equal(hasPrivacyTokenCookie(), false);
-    const payload = await fetchProjectTakeCaptures({
-      project: { name: "Timeline Project" },
-    }, "shot_001", true);
-
-    assert.deepEqual(payload, { captures: [] });
-    assert.equal(hasPrivacyTokenCookie(), true);
-    assert.ok(globalThis.document.cookie.includes("helto_privacy_token=project%20token"));
-    assert.equal(calls.length, 1);
-    assert.ok(calls[0].url.endsWith("/project_takes"));
-    assert.equal(JSON.parse(calls[0].options.body).privacy, true);
-  } finally {
-    if (hadFetch) globalThis.fetch = previousFetch;
-    else delete globalThis.fetch;
-    restoreBrowser();
-  }
+    },
+  });
+  assert.deepEqual(calls, [{
+    project_record_id: `hp-rec-${"P".repeat(32)}`,
+    shot_id: "shot_001",
+  }]);
+  assert.deepEqual(payload, {
+    captures: [{
+      filename: "Private capture 1",
+      sourceReference,
+      takeReference,
+    }],
+  });
 }
 
 function testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake() {
@@ -350,7 +319,10 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
 
   assert.equal(pickerSource.includes("hover-hide"), false);
   assert.equal(pickerSource.includes("privacyMode = false"), true);
-  assert.equal(pickerSource.includes("if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);"), true);
+  assert.equal(pickerSource.includes("ensureStoredPrivacyTokenCookie"), false);
+  assert.equal(pickerSource.includes("/helto_director/media_browser"), false);
+  assert.equal(pickerSource.includes("fetch("), false);
+  assert.equal(pickerSource.includes("managedMediaProvider(managedMedia)"), true);
   assert.equal(pickerSource.includes("pr-image-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("pr-audio-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("showMediaPreview(documentRef"), true);
@@ -360,18 +332,20 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
   assert.equal(pickerSource.includes("selectedItem = { ...item, folder_alias: folderSelect.value };"), true);
   assert.equal(pickerSource.includes("promptInDocument"), false);
   assert.equal(pickerSource.includes("function showFolderManager"), true);
-  assert.equal(pickerSource.includes("folder.alias === \"input\""), true);
+  assert.equal(pickerSource.includes("folder.removable === false"), true);
   assert.equal(pickerSource.includes("folder-alias"), false);
   assert.equal(pickerSource.includes("ADD FOLDER PATH"), true);
   assert.equal(pickerSource.includes("ACTIVE FOLDERS"), true);
-  assert.equal(pickerSource.includes("body: JSON.stringify({ path })"), true);
+  assert.equal(pickerSource.includes("await media.addFolder(mediaType, path)"), true);
   assert.equal(pickerSource.includes("folderDisplayName(folder)"), true);
   assert.equal(pickerSource.includes("pr-folder-item-path"), true);
   assert.equal(pickerSource.includes("folderCountLabel"), false);
   assert.equal(pickerSource.includes("<strong title="), false);
   assert.equal((pickerSource.match(/showFolderManager\(/g) ?? []).length, 3);
   assert.equal((pickerSource.match(/folder-manage/g) ?? []).length >= 4, true);
-  assert.equal(mediaActionsSource.includes("if (privacyMode) ensureStoredPrivacyTokenCookie();"), true);
+  assert.equal(mediaActionsSource.includes("ensureStoredPrivacyTokenCookie"), false);
+  assert.equal(mediaActionsSource.includes("/helto_director/media_browser"), false);
+  assert.equal(mediaActionsSource.includes("managedMedia.listProjectTakes"), true);
 }
 
 testImagePickerSelectionCreatesSectionAndAsset();
@@ -382,7 +356,7 @@ testReplaceModePreservesTiming();
 testGeneratedVideoPickerSidecarCreatesMetadataRichTake();
 testGeneratedVideoPickerKeepsRepeatedCaptureAssetIdsPathUnique();
 testGeneratedVideoPickerFallbackStillCreatesCandidateTake();
-await testProjectTakeCapturesRefreshesPrivateThumbnailCookie();
+await testProjectTakeCapturesUseManagedOpaqueReferences();
 testTakeCaptureDebugPayloadRegistersVisibleGeneratedTake();
 testInspectorNoLongerRendersPathEntryClearControls();
 testMediaPickerPrivacyUsesSingleDirectorMode();

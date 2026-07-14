@@ -1,181 +1,115 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   MAX_WAVEFORM_PEAKS,
   MIN_WAVEFORM_PEAKS,
   TimelineMediaCache,
   clampWaveformPeaks,
-  mediaViewUrl,
-  thumbnailUrl,
-  waveformUrl,
 } from "../../web/timeline/media_cache.js";
-import {
-  hasPrivacyTokenCookie,
-  storePrivacyToken,
-} from "../../web/timeline/privacy.js";
 
-function installBrowserTokenStubs() {
-  const hadDocument = Object.prototype.hasOwnProperty.call(globalThis, "document");
-  const hadLocalStorage = Object.prototype.hasOwnProperty.call(globalThis, "localStorage");
-  const previousDocument = globalThis.document;
-  const previousLocalStorage = globalThis.localStorage;
-  const storage = new Map();
-  globalThis.document = { cookie: "" };
-  globalThis.localStorage = {
-    getItem: (key) => storage.get(key) ?? null,
-    setItem: (key, value) => storage.set(key, String(value)),
-    removeItem: (key) => storage.delete(key),
-  };
-  return () => {
-    if (hadDocument) globalThis.document = previousDocument;
-    else delete globalThis.document;
-    if (hadLocalStorage) globalThis.localStorage = previousLocalStorage;
-    else delete globalThis.localStorage;
+const LEASE_URL = `/helto_privacy/artifacts/hp-lease-${"L".repeat(32)}`;
+
+function managedMedia(calls) {
+  return {
+    async resolveSource(input) {
+      calls.push(["resolve", input]);
+      return { id: `hp-ref-${"R".repeat(32)}`, kind: "media-source" };
+    },
+    async previewSource(source, options) {
+      calls.push(["preview", source, options]);
+      return { url: LEASE_URL, expiresInSeconds: 30 };
+    },
+    async viewSource(source) {
+      calls.push(["view", source]);
+      return { url: LEASE_URL, expiresInSeconds: 30 };
+    },
   };
 }
 
-function testThumbnailUrlUsesBackendRoute() {
-  const url = thumbnailUrl({
+function visualAsset() {
+  return {
+    asset_id: "asset_image",
     type: "Image",
     source_kind: "FilePath",
     path: "/mnt/media/reference image.png",
-  }, 256);
-
-  assert.ok(url.startsWith("/helto_director/media/thumbnail?"));
-  assert.ok(url.includes("max_size=256"));
-  assert.ok(url.includes("path=%2Fmnt%2Fmedia%2Freference+image.png"));
-  assert.equal(url.includes("privacy=1"), false);
-
-  const privateUrl = thumbnailUrl({
-    type: "Image",
-    source_kind: "FilePath",
-    path: "/mnt/media/reference image.png",
-  }, 256, true);
-
-  assert.ok(privateUrl.includes("privacy=1"));
-}
-
-function testUploadedFileWaveformUsesInputType() {
-  const url = waveformUrl({
-    type: "Audio",
-    source_kind: "UploadedFile",
-    path: "voice.wav",
-  }, 64);
-
-  assert.ok(url.startsWith("/helto_director/media/waveform?"));
-  assert.ok(url.includes("type=input"));
-  assert.ok(url.includes("peaks=64"));
-
-  const privateUrl = waveformUrl({
-    type: "Audio",
-    source_kind: "UploadedFile",
-    path: "voice.wav",
-  }, 64, true);
-
-  assert.ok(privateUrl.includes("privacy=1"));
-}
-
-function testPrivateMediaUrlsRestoreCookieFromStoredToken() {
-  const restore = installBrowserTokenStubs();
-  try {
-    storePrivacyToken("token 123");
-    globalThis.document.cookie = "";
-
-    assert.equal(hasPrivacyTokenCookie(), false);
-    const thumbUrl = thumbnailUrl({
-      type: "Image",
-      source_kind: "FilePath",
-      path: "/mnt/media/reference image.png",
-    }, 256, true);
-
-    assert.ok(thumbUrl.includes("privacy=1"));
-    assert.equal(hasPrivacyTokenCookie(), true);
-    assert.ok(globalThis.document.cookie.includes("helto_privacy_token=token%20123"));
-
-    globalThis.document.cookie = "";
-    const privateWaveformUrl = waveformUrl({
-      type: "Audio",
-      source_kind: "FilePath",
-      path: "/mnt/media/voice.wav",
-    }, 64, true);
-
-    assert.ok(privateWaveformUrl.includes("privacy=1"));
-    assert.equal(hasPrivacyTokenCookie(), true);
-  } finally {
-    restore();
-  }
-}
-
-function testMediaViewUrlUsesBackendViewRoute() {
-  const url = mediaViewUrl({
-    type: "Video",
-    source_kind: "FilePath",
-    path: "/mnt/media/source clip.mp4",
-  });
-
-  assert.ok(url.startsWith("/helto_director/media/view?"));
-  assert.ok(url.includes("path=%2Fmnt%2Fmedia%2Fsource+clip.mp4"));
-  assert.ok(url.includes("type="));
-
-  const uploadedUrl = mediaViewUrl({
-    type: "Image",
-    source_kind: "UploadedFile",
-    path: "reference.png",
-  });
-
-  assert.ok(uploadedUrl.includes("type=input"));
-  assert.equal(mediaViewUrl({ type: "Image" }), "");
-}
-
-function testWaveformUrlClampsPeakCount() {
-  const asset = {
-    type: "Audio",
-    source_kind: "FilePath",
-    path: "/mnt/media/voice.wav",
   };
-
-  assert.equal(clampWaveformPeaks(1), MIN_WAVEFORM_PEAKS);
-  assert.equal(clampWaveformPeaks(9999), MAX_WAVEFORM_PEAKS);
-  assert.ok(waveformUrl(asset, 1).includes(`peaks=${MIN_WAVEFORM_PEAKS}`));
-  assert.ok(waveformUrl(asset, 9999).includes(`peaks=${MAX_WAVEFORM_PEAKS}`));
 }
 
-function testWaveformCacheUsesAssetAndPeakCountKeys() {
-  const cache = new TimelineMediaCache({}, {});
+async function testManagedThumbnailAndViewLeasesNeverPutPathsInUrls() {
+  const calls = [];
+  const cache = new TimelineMediaCache({}, {}, managedMedia(calls));
+  const asset = visualAsset();
+
+  assert.equal(cache.requestThumbnail(asset, 256), null);
+  assert.equal(await cache.acquireThumbnailUrl(asset, 256), LEASE_URL);
+  assert.equal(await cache.acquireViewUrl(asset), LEASE_URL);
+  assert.equal(LEASE_URL.includes(asset.path), false);
+  assert.deepEqual(calls, [
+    ["resolve", { assetType: "Image", path: asset.path, sourceType: "" }],
+    ["preview", { id: `hp-ref-${"R".repeat(32)}`, kind: "media-source" }, { maxSize: 256 }],
+    ["view", { id: `hp-ref-${"R".repeat(32)}`, kind: "media-source" }],
+  ]);
+}
+
+async function testWaveformUsesManagedArtifactLease() {
+  const calls = [];
+  const peaks = Array.from({ length: 64 }, (_, index) => index / 64);
+  const fetchCalls = [];
+  const cache = new TimelineMediaCache(
+    {},
+    {},
+    managedMedia(calls),
+    async (url, options) => {
+      fetchCalls.push([url, options]);
+      return {
+        ok: true,
+        async json() {
+          return { duration_seconds: 2, sample_rate: 48_000, channels: 2, peaks };
+        },
+      };
+    },
+  );
   const asset = {
     asset_id: "asset_audio",
     type: "Audio",
-    source_kind: "FilePath",
     path: "/mnt/media/voice.wav",
   };
-  const loadCalls = [];
-  cache.loadWaveform = (requestedAsset, peaks) => loadCalls.push([requestedAsset.asset_id, peaks]);
 
   assert.equal(cache.requestWaveform(asset, 64), null);
-  cache.waveforms.set("asset_audio:64:plain", { peaks: [0.2, 0.8], duration_seconds: 2 });
+  await cache.pendingWaveforms.get("asset_audio:64");
+  assert.deepEqual(cache.getWaveform(asset.asset_id, 64)?.peaks, peaks);
+  assert.deepEqual(calls.at(-1)?.[2], { peaks: 64 });
+  assert.deepEqual(fetchCalls, [[LEASE_URL, { cache: "no-store" }]]);
+}
 
-  assert.deepEqual(cache.requestWaveform(asset, 64).peaks, [0.2, 0.8]);
-  assert.equal(cache.requestWaveform(asset, 128), null);
-  assert.deepEqual(loadCalls, [["asset_audio", 64], ["asset_audio", 128]]);
+function testWaveformPeakCountClamping() {
+  assert.equal(clampWaveformPeaks(1), MIN_WAVEFORM_PEAKS);
+  assert.equal(clampWaveformPeaks(9999), MAX_WAVEFORM_PEAKS);
 }
 
 function testRefreshDoesNotPreloadAudioWaveforms() {
-  const cache = new TimelineMediaCache({}, {});
+  const cache = new TimelineMediaCache({}, {}, managedMedia([]));
   let loadCount = 0;
   cache.loadWaveform = () => { loadCount += 1; };
 
   cache.refresh({
     assets: [{ asset_id: "asset_audio", type: "Audio", path: "/mnt/media/voice.wav" }],
-  }, { privacy: { mode: false }, display: { show_thumbnails: true, show_audio_waveforms: true } });
+  }, { privacy: { mode: true }, display: { show_thumbnails: true, show_audio_waveforms: true } });
 
   assert.equal(loadCount, 0);
 }
 
-testThumbnailUrlUsesBackendRoute();
-testUploadedFileWaveformUsesInputType();
-testPrivateMediaUrlsRestoreCookieFromStoredToken();
-testMediaViewUrlUsesBackendViewRoute();
-testWaveformUrlClampsPeakCount();
-testWaveformCacheUsesAssetAndPeakCountKeys();
+function testLegacyMediaTransportIsAbsent() {
+  const source = readFileSync(new URL("../../web/timeline/media_cache.js", import.meta.url), "utf8");
+  assert.equal(source.includes("./privacy.js"), false);
+  assert.equal(source.includes("/helto_director/media"), false);
+  assert.equal(source.includes("URLSearchParams"), false);
+}
+
+await testManagedThumbnailAndViewLeasesNeverPutPathsInUrls();
+await testWaveformUsesManagedArtifactLease();
+testWaveformPeakCountClamping();
 testRefreshDoesNotPreloadAudioWaveforms();
+testLegacyMediaTransportIsAbsent();
 
 console.log("media cache tests passed");

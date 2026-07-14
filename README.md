@@ -37,6 +37,8 @@ Clone this repository into your ComfyUI custom nodes folder:
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/helto4real/comfyui-helto-director
+cd comfyui-helto-director
+python -m pip install -r requirements.txt
 ```
 
 Restart ComfyUI after cloning. The nodes appear under the `timeline/*`
@@ -105,10 +107,11 @@ thumbnails, waveform arrays, video bytes, image bytes, audio bytes, blobs, or
 data URLs.
 
 Original media stays where it already lives. Preview thumbnails and waveforms
-are cache data. Privacy Mode is enabled by default for new Director projects:
-private timeline state is encrypted in the hidden `video_timeline_json` widget
-and UI previews are masked outside the relevant Director/picker/optimizer
-surfaces.
+are managed cache artifacts. Privacy Mode is enabled by default for new
+Director projects. The exact shared Helto privacy suite manages timeline
+snapshots, records, settings, takes, derivatives, and opaque media leases. A
+missing or mismatched suite blocks the Director instead of falling back to
+plaintext or a local privacy engine.
 
 Read more:
 

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from shared.contracts.video_timeline import SECTION_TYPE_TEXT
 from shared.timeline import create_default_video_timeline
-from shared.privacy import CRYPTO_AVAILABLE, encrypt_state
 import pytest
 
 
@@ -29,7 +28,6 @@ def get_video_timeline_director():
             if Path(path or ".").resolve() != module_path
         ]
         spec.loader.exec_module(module)
-        _sync_runtime_privacy_paths()
         extension = asyncio.run(module.comfy_entrypoint())
         return asyncio.run(extension.get_node_list())[0]
     finally:
@@ -38,19 +36,6 @@ def get_video_timeline_director():
             sys.modules.pop(sys_module_name, None)
         else:
             sys.modules[sys_module_name] = previous
-
-
-def _sync_runtime_privacy_paths():
-    """The loader imports the pack under its runtime package name; mirror the
-    conftest privacy-path isolation onto that module copy so node execution
-    and the test encrypt with the same key location."""
-    import shared.privacy as shared_privacy
-
-    runtime_privacy = sys.modules.get("comfyui_helto_director_runtime.shared.privacy")
-    if runtime_privacy is not None:
-        runtime_privacy.config_dir = shared_privacy.config_dir
-
-
 def test_director_schema_has_project_widgets_and_no_media_inputs():
     VideoTimelineDirector = get_video_timeline_director()
     schema = VideoTimelineDirector.define_schema()
@@ -64,6 +49,8 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
         "orientation",
         "quality_preset",
         "video_timeline_json",
+        "privacy_mode_reference",
+        "private_execution",
     ]
     assert "IMAGE" not in input_types
     assert "VIDEO" not in input_types
@@ -73,6 +60,8 @@ def test_director_schema_has_project_widgets_and_no_media_inputs():
     assert schema.inputs[input_ids.index("aspect_ratio")].options == ["16:9", "4:3", "3:2", "21:9", "1:1"]
     assert schema.inputs[input_ids.index("orientation")].options == ["Landscape", "Portrait"]
     assert schema.inputs[input_ids.index("video_timeline_json")].extra_dict["hidden"] is True
+    assert schema.inputs[input_ids.index("privacy_mode_reference")].extra_dict["hidden"] is True
+    assert schema.inputs[input_ids.index("private_execution")].extra_dict["hidden"] is True
 
 
 def test_director_runs_without_frontend_state():
@@ -171,30 +160,17 @@ def test_director_outputs_validation_for_invalid_timeline():
     ]
 
 
-@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
-def test_director_decrypts_private_timeline_json():
+def test_director_rejects_local_private_timeline_decryption_without_managed_execution():
     VideoTimelineDirector = get_video_timeline_director()
-    timeline = create_default_video_timeline()
-    timeline["director_track"]["sections"].append(
-        {
-            "item_id": "section_001",
-            "type": SECTION_TYPE_TEXT,
-            "start_time": 0.0,
-            "end_time": 1.0,
-            "prompt": "private prompt",
-        }
-    )
-    envelope = encrypt_state({"timeline": timeline})
+    envelope = {
+        "encrypted": True,
+        "schema": "helto.timeline-director",
+        "version": 1,
+        "ciphertext": "synthetic-test-value",
+    }
 
-    output_timeline, validation, _frame_rate = VideoTimelineDirector.execute(
-        video_timeline_json=json.dumps(envelope)
-    ).result
-
-    assert validation["is_valid"] is True
-    # Privacy lives in global settings now; normalization strips it from the
-    # per-project payload.
-    assert "privacy" not in output_timeline["project"]
-    assert output_timeline["director_track"]["sections"][0]["prompt"] == "private prompt"
+    with pytest.raises(ValueError, match="requires managed execution"):
+        VideoTimelineDirector.execute(video_timeline_json=json.dumps(envelope))
 
 
 def test_director_invalid_json_returns_validation_error_not_crash():

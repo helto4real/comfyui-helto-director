@@ -29,9 +29,9 @@ except Exception:  # noqa: BLE001 - tests can import this module outside ComfyUI
     folder_paths = None
 
 try:
-    from .media_browser import resolve_browser_media_path
+    from .media_domain import resolve_legacy_browser_media_path
 except Exception:  # noqa: BLE001 - direct unit-test imports.
-    resolve_browser_media_path = None
+    resolve_legacy_browser_media_path = None
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -1545,9 +1545,9 @@ def decode_image(segment: dict[str, Any]) -> Image.Image | None:
 
     folder_alias = segment.get("imageFolderAlias") or segment.get("mediaFolderAlias")
     image_file = segment.get("imageFile") or segment.get("mediaFile")
-    if folder_alias and image_file and resolve_browser_media_path is not None:
+    if folder_alias and image_file and resolve_legacy_browser_media_path is not None:
         resolved_type = "video" if media_type == "video" else "image"
-        path = resolve_browser_media_path(resolved_type, str(folder_alias), str(image_file))
+        path = resolve_legacy_browser_media_path(resolved_type, str(folder_alias), str(image_file))
         if resolved_type == "video":
             return _load_video_preview(path)
         return _load_rgb_image(path)

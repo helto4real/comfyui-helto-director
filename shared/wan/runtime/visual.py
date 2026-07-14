@@ -8,7 +8,7 @@ import torch
 import numpy as np
 from PIL import Image, ImageOps
 
-from ...media_cache import resolve_media_path
+from ...media_domain import resolve_media_path
 
 
 def apply_comfy_core_visual_keyframes(

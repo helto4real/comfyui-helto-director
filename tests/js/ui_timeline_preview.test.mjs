@@ -257,8 +257,9 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("Attached Takes"), true);
   assert.equal(rendererSource.includes("Open Captures"), true);
   assert.equal(rendererSource.includes("Register Take From Metadata"), false);
-  assert.equal(rendererSource.includes("attachPickedGeneratedVideoAsTake(timeline, options.shotId, item)"), true);
-  assert.equal(rendererSource.includes("fetchProjectTakeCaptures(timeline, shot.shot_id"), true);
+  assert.equal(rendererSource.includes("PRIVACY_DIRECTOR_PROJECT_TAKE_ATTACH_UNAVAILABLE"), true);
+  assert.equal(rendererSource.includes("await managedMedia.attachSource(this.node, timeline, item.reference"), true);
+  assert.equal(rendererSource.includes("fetchProjectTakeCaptures(\n      timeline,\n      shot.shot_id"), true);
   assert.equal(rendererSource.includes("Attach Project Capture As Take"), true);
   assert.equal(rendererSource.includes("Attach And Accept Project Capture"), true);
   assert.equal(rendererSource.includes("Project Name"), false);
@@ -305,12 +306,12 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("deleteProjectTakeFromTimelineTake(shot, take, asset"), true);
   assert.equal(rendererSource.includes("const capturePath = captureMediaPath(item)"), true);
   assert.equal(rendererSource.includes("const existing = findAttachedTakeForCapture(timeline, shot, item)"), true);
-  assert.equal(rendererSource.includes("const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item)"), true);
+  assert.equal(rendererSource.includes("const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item)"), false);
   assert.equal(rendererSource.includes("async deleteProjectTakePath(shotId, path, options = {})"), true);
-  assert.equal(rendererSource.includes("if (!path && !options.takeId)"), true);
+  assert.equal(rendererSource.includes("if (!path && !options.takeId && !options.takeReference)"), true);
   assert.equal(rendererSource.includes("confirmFn?.(`Remove ${label} from the timeline and delete any remaining project take files?`)"), true);
-  assert.equal(rendererSource.includes("if (path) {"), true);
-  assert.equal(rendererSource.includes("await deleteProjectTakeCapture(timeline, shotId, path"), true);
+  assert.equal(rendererSource.includes("if (options.takeReference)"), true);
+  assert.equal(rendererSource.includes("this.controller.managedPrivacy?.media"), true);
   assert.equal(rendererSource.includes("deleteTakesByAssetPath(currentTimeline, shotId, path, options.takeId)"), true);
   assert.equal(rendererSource.includes("export function findAttachedTakeForCapture(timeline, shot, item)"), true);
   assert.equal(rendererSource.includes("function captureMediaPath(item)"), true);
@@ -737,6 +738,17 @@ function testTakeCaptureExecutedListenerAppliesResultToGraphDirectors() {
   );
 
   assert.equal(handleTakeCaptureExecutedEvent(appRef, { detail: { output: {} } }), false);
+  assert.equal(
+    handleTakeCaptureExecutedEvent(appRef, {
+      detail: {
+        output: {
+          helto_take_capture_managed_association: [`hp-assoc-${"A".repeat(32)}`],
+        },
+      },
+    }),
+    false,
+    "managed associations without an exact executed capture node stay unclaimed",
+  );
   assert.equal(
     handleTakeCaptureExecutedEvent(appRef, { detail: { output: { helto_take_capture_result: [payload] } } }),
     false,
@@ -1297,7 +1309,7 @@ function testDeleteContextMenuIsAvailableOnTimelineItems() {
   assert.equal(rendererSource.includes("sectionImagePreviewData(section)"), true);
   assert.equal(rendererSource.includes("section?.type !== ASSET_TYPE_IMAGE"), true);
   assert.equal(rendererSource.includes("this.isGlobalPrivacyMode() && (!this.privacyRevealActive || this.privacyExternalModalOpen)"), true);
-  assert.equal(rendererSource.includes("const url = mediaViewUrl(asset);"), true);
+  assert.equal(rendererSource.includes("const url = this.node?._timelineMediaCache?.requestView?.(asset);"), true);
   assert.equal(rendererSource.includes("openSectionMediaPreviewData(previewData)"), true);
   assert.equal(rendererSource.includes("if (!previewData?.url) return false;"), true);
   assert.equal(rendererSource.includes("showMediaPreview(this.container.ownerDocument ?? globalThis.document, previewData)"), true);
@@ -1538,10 +1550,10 @@ function testRendererUsesRealWaveformsOnly() {
   assert.equal(rendererSource.includes(".htd-waveform { position: absolute; z-index: 1; inset: 4px 9px;"), true);
   assert.equal(rendererSource.includes('this.renderGlobalSettingCheckbox("Privacy Mode", draft, ["privacy", "mode"])'), true);
   assert.equal(rendererSource.includes('this.renderSettingCheckbox("Privacy Mode", ["project", "privacy", "mode"])'), false);
-  assert.equal(rendererSource.includes("hasPrivacyTokenCookie(documentRef)"), true);
-  assert.equal(rendererSource.includes("hasStoredPrivacyToken()"), true);
-  assert.equal(rendererSource.includes("ensureStoredPrivacyTokenCookie(documentRef)"), true);
-  assert.equal(rendererSource.includes("Unlocked on server; unlock here to refresh media previews"), true);
+  assert.equal(rendererSource.includes("hasPrivacyTokenCookie(documentRef)"), false);
+  assert.equal(rendererSource.includes("hasStoredPrivacyToken()"), false);
+  assert.equal(rendererSource.includes("ensureStoredPrivacyTokenCookie(documentRef)"), false);
+  assert.equal(rendererSource.includes("managed by Helto Privacy"), true);
   assert.equal(rendererSource.includes("renderGlobalSettings(timeline)"), true);
   assert.equal(rendererSource.includes("renderProjectSettings(timeline)"), true);
   assert.equal(rendererSource.includes("Hide Media Previews"), false);

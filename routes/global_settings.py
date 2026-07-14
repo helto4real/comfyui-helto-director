@@ -6,7 +6,6 @@ import logging
 from aiohttp import web
 
 try:
-    from ..shared.media_cache import clear_public_media_cache
     from ..shared.timeline.global_settings import (
         GlobalSettingsError,
         global_privacy_mode,
@@ -14,7 +13,6 @@ try:
         patch_global_settings,
     )
 except Exception:
-    from shared.media_cache import clear_public_media_cache
     from shared.timeline.global_settings import (
         GlobalSettingsError,
         global_privacy_mode,
@@ -22,17 +20,11 @@ except Exception:
         patch_global_settings,
     )
 
-try:
-    from .privacy import check_privacy_token
-except Exception:
-    from routes.privacy import check_privacy_token
-
-
 ROUTE_PREFIX = "/helto_director/global_settings"
 _ROUTES_REGISTERED = False
-PRIVACY_CACHE_PURGE_ERROR = (
-    "PRIVACY_CACHE_PURGE_FAILED: Could not remove public preview caches; "
-    "Privacy Mode was not changed."
+PRIVACY_TRANSITION_MANAGED_ERROR = (
+    "PRIVACY_TRANSITION_MANAGED: Privacy Mode changes require the shared "
+    "Director transition handle."
 )
 
 
@@ -53,16 +45,11 @@ def apply_global_settings_patch(request, payload: Mapping | None) -> web.Respons
     safe_payload = payload if isinstance(payload, Mapping) else {}
     current_mode, next_mode = privacy_mode_transition(safe_payload)
 
-    if current_mode and not next_mode:
-        denied = check_privacy_token(request)
-        if denied is not None:
-            return denied
-
-    if not current_mode and next_mode:
-        try:
-            clear_public_media_cache()
-        except Exception as exc:
-            raise GlobalSettingsError(PRIVACY_CACHE_PURGE_ERROR) from exc
+    if current_mode != next_mode:
+        return web.json_response(
+            {"ok": False, "error": PRIVACY_TRANSITION_MANAGED_ERROR},
+            status=409,
+        )
 
     patch_global_settings(safe_payload)
     return None

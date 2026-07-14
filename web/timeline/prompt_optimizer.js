@@ -4,7 +4,6 @@ import {
   SECTION_TYPE_TEXT,
 } from "./schema.js";
 import { resolveMediaReference } from "./media.js";
-import { mediaViewUrl, thumbnailUrl } from "./media_cache.js";
 import {
   closeMediaPreview,
   showMediaPreview,
@@ -14,12 +13,17 @@ import { setupOverlayDialog } from "./dialog.js";
 
 const ROUTE_PREFIX = "/helto_director/prompt_optimizer";
 
-export function showPromptOptimizer(options) {
+export async function showPromptOptimizer(options) {
   const documentRef = options.documentRef ?? globalThis.document;
   installPromptOptimizerStyles(documentRef);
   closePromptOptimizer(documentRef);
 
-  const timelineRows = promptOptimizerRows(options.timeline, Boolean(options.privacyMode));
+  const timelineRows = promptOptimizerRows(options.timeline, options.mediaCache);
+  await Promise.all(timelineRows.map(async (row) => {
+    if (!row.mediaAsset) return;
+    row.thumbnailUrl = await options.mediaCache?.acquireThumbnailUrl?.(row.mediaAsset, 320) ?? "";
+    row.mediaPreviewUrl = await options.mediaCache?.acquireViewUrl?.(row.mediaAsset) ?? "";
+  }));
   const overlay = documentRef.createElement("div");
   overlay.className = `htd-prompt-optimizer-dialog${options.privacyMode ? " privacy-mode" : ""}`;
   overlay.innerHTML = `
@@ -524,7 +528,7 @@ export function closePromptOptimizer(documentRef = globalThis.document) {
   closeMediaPreview(documentRef);
 }
 
-export function promptOptimizerRows(timeline, privacyMode = false) {
+export function promptOptimizerRows(timeline, mediaCache = null) {
   const fps = frameRate(timeline);
   return [...(timeline?.director_track?.sections || [])]
     .filter((section) => section && section.type)
@@ -543,22 +547,23 @@ export function promptOptimizerRows(timeline, privacyMode = false) {
         mediaPath: asset?.path || asset?.file_path || "",
         mediaFile: asset?.metadata?.browser_filename || asset?.name || "",
         mediaFolderAlias: asset?.metadata?.browser_alias || "",
-        thumbnailUrl: thumbnailUrlForAsset(asset, privacyMode),
-        mediaPreviewUrl: mediaViewUrlForAsset(asset),
+        mediaAsset: asset,
+        thumbnailUrl: thumbnailUrlForAsset(asset, mediaCache),
+        mediaPreviewUrl: mediaViewUrlForAsset(asset, mediaCache),
         mediaPreviewCaption: mediaCaptionForAsset(asset, section),
         label: asset?.name || asset?.path || (section.type === SECTION_TYPE_TEXT ? "Text segment" : `${section.type} segment`),
       };
     });
 }
 
-function thumbnailUrlForAsset(asset, privacyMode = false) {
+function thumbnailUrlForAsset(asset, mediaCache) {
   if (!asset?.path || (asset.type !== ASSET_TYPE_IMAGE && asset.type !== ASSET_TYPE_VIDEO)) return "";
-  return thumbnailUrl(asset, 320, privacyMode);
+  return mediaCache?.requestThumbnail?.(asset, 320) ?? "";
 }
 
-function mediaViewUrlForAsset(asset) {
+function mediaViewUrlForAsset(asset, mediaCache) {
   if (!asset?.path || (asset.type !== ASSET_TYPE_IMAGE && asset.type !== ASSET_TYPE_VIDEO)) return "";
-  return mediaViewUrl(asset);
+  return mediaCache?.requestView?.(asset) ?? "";
 }
 
 function mediaCaptionForAsset(asset, section) {

@@ -1,13 +1,9 @@
-import json
 from pathlib import Path
 
 import torch
 
-import shared.privacy as privacy
 from shared.contracts.video_timeline import ASSET_SOURCE_FILE_PATH, ASSET_TYPE_IMAGE, MODEL_LORA_TARGET_HIGH_NOISE, SECTION_TYPE_IMAGE, SECTION_TYPE_TEXT
-from shared.privacy import BYTE_CHUNKED_ENVELOPE_SCHEMA, CRYPTO_AVAILABLE
 from shared.segmented_executor import (
-    SegmentSpillStore,
     blend_segment_seam,
     build_segment_plan,
     external_sigmas_step_count,
@@ -30,6 +26,64 @@ import shared.audio as shared_audio
 import shared.ltx.runtime.segmented as ltx_segmented
 from shared.ltx.references import LTX_HIDDEN_REFERENCE_GUARD_LATENT_FRAMES
 from shared.timeline.segmentation import build_generation_segments
+
+
+class SegmentSpillStore:
+    """Synthetic non-privacy store for exercising generic executor control flow."""
+
+    def __init__(self, *, privacy_mode: bool, root: Path):
+        self.privacy_mode = bool(privacy_mode)
+        self.root = Path(root) / f"synthetic-spill-{id(self)}"
+        self.root.mkdir(parents=True)
+        self.records = []
+        self.files_read = 0
+        self.files_deleted = 0
+
+    def write_segment(self, segment, images):
+        segment_id = str(segment.get("id") or f"segment_{len(self.records) + 1:03d}")
+        path = self.root / f"{len(self.records) + 1:03d}.pt"
+        torch.save(images.detach().cpu(), path)
+        record = {
+            "segment_id": segment_id,
+            "path": str(path),
+            "encrypted": self.privacy_mode,
+            "frame_count": int(images.shape[0]),
+        }
+        self.records.append(record)
+        return record
+
+    def read_segment(self, record):
+        self.files_read += 1
+        try:
+            return torch.load(record["path"], map_location="cpu", weights_only=True)
+        except TypeError:
+            return torch.load(record["path"], map_location="cpu")
+
+    def cleanup(self):
+        for record in self.records:
+            path = Path(record["path"])
+            if path.exists():
+                path.unlink()
+                self.files_deleted += 1
+        self.root.rmdir()
+        return self.debug_summary()
+
+    def debug_summary(self, *, include_paths=False):
+        records = []
+        for record in self.records:
+            item = {key: record[key] for key in ("segment_id", "encrypted", "frame_count")}
+            if include_paths and not self.privacy_mode:
+                item["path"] = record["path"]
+            records.append(item)
+        return {
+            "encrypted": self.privacy_mode,
+            "privacy_mode": self.privacy_mode,
+            "files_written": len(self.records),
+            "files_read": self.files_read,
+            "files_deleted": self.files_deleted,
+            "records": records,
+            "cleanup_warnings": [],
+        }
 
 
 def test_segment_seed_modes_increment_or_reuse():
@@ -569,46 +623,6 @@ def test_segment_spill_store_plain_round_trips_and_cleans_up(tmp_path):
     assert summary["files_deleted"] == 1
 
 
-def test_segment_spill_store_encrypted_round_trips_without_plaintext(tmp_path):
-    if not CRYPTO_AVAILABLE:
-        return
-    store = SegmentSpillStore(privacy_mode=True, root=tmp_path)
-    tensor = torch.arange(36, dtype=torch.float32).reshape(3, 2, 2, 3)
-
-    record = store.write_segment({"id": "secret_segment"}, tensor)
-    path = Path(record["path"])
-    encrypted_text = path.read_text(encoding="utf-8")
-    loaded = store.read_segment(record)
-    summary = store.cleanup()
-
-    assert torch.equal(loaded, tensor)
-    assert "secret_segment" not in encrypted_text
-    assert "tensor" not in encrypted_text
-    assert encrypted_text.startswith("{")
-    assert summary["encrypted"] is True
-    assert "path" not in summary["records"][0]
-
-
-def test_segment_spill_store_encrypted_chunked_round_trips(monkeypatch, tmp_path):
-    if not CRYPTO_AVAILABLE:
-        return
-    monkeypatch.setattr(privacy, "BYTE_CHUNK_SIZE", 64)
-    store = SegmentSpillStore(privacy_mode=True, root=tmp_path)
-    tensor = torch.arange(240, dtype=torch.float32).reshape(5, 4, 4, 3)
-
-    record = store.write_segment({"id": "secret_chunked_segment"}, tensor)
-    path = Path(record["path"])
-    encrypted = json.loads(path.read_text(encoding="utf-8"))
-    loaded = store.read_segment(record)
-    summary = store.cleanup()
-
-    assert encrypted["schema"] == BYTE_CHUNKED_ENVELOPE_SCHEMA
-    assert len(encrypted["chunks"]) > 1
-    assert torch.equal(loaded, tensor)
-    assert "secret_chunked_segment" not in json.dumps(encrypted)
-    assert summary["encrypted"] is True
-
-
 def test_stitch_spilled_segments_loads_sequentially_and_clamps(tmp_path):
     store = SegmentSpillStore(privacy_mode=False, root=tmp_path)
     first = torch.zeros((5, 2, 2, 3), dtype=torch.float32)
@@ -710,7 +724,7 @@ def test_wan_segmented_executor_cleans_spill_on_base_exception(monkeypatch, tmp_
     monkeypatch.setattr(wan_segmented, "post_decode_memory_cleanup", lambda _stage: (_ for _ in ()).throw(abort))
     monkeypatch.setattr(
         wan_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -795,7 +809,7 @@ def test_wan_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -862,7 +876,7 @@ def test_ltx_segmented_executor_applies_seam_blend_after_trim(monkeypatch, tmp_p
     monkeypatch.setattr(ltx_segmented, "mix_timeline_audio", lambda _plan: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         ltx_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -1743,7 +1757,7 @@ def test_wan_segmented_executor_context_includes_status_events(monkeypatch, tmp_
     monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -1889,7 +1903,7 @@ def test_wan_segmented_executor_passes_previous_latent_to_fmlf_svi(monkeypatch, 
     monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -1985,7 +1999,7 @@ def test_wan_fmlf_svi_three_segment_plan_and_handoff_exclude_padded_tail(monkeyp
     monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -2089,7 +2103,7 @@ def test_wan_fmlf_svi_10s_debug_shows_two_text_sections_in_second_generation(mon
     monkeypatch.setattr(shared_audio, "mix_audio_clips", lambda *_args, **_kwargs: ({"waveform": torch.zeros((1, 2, 1)), "sample_rate": 44100}, []))
     monkeypatch.setattr(
         wan_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )
 
@@ -2480,6 +2494,6 @@ def _patch_ltx_executor_runtime(monkeypatch, tmp_path, build_runtime_outputs):
     )
     monkeypatch.setattr(
         ltx_segmented,
-        "SegmentSpillStore",
+        "managed_segment_spill_store",
         lambda privacy_mode: SegmentSpillStore(privacy_mode=privacy_mode, root=tmp_path),
     )

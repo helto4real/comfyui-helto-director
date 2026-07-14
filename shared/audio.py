@@ -6,7 +6,7 @@ from typing import Any
 import av
 import torch
 
-from .media_cache import resolve_media_path
+from .media_domain import resolve_media_path
 
 
 TARGET_SAMPLE_RATE = 44100

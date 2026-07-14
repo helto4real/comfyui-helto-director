@@ -16,14 +16,9 @@ import {
   getCharacterReferences,
   replaceTimelineCharacterReferenceFromLibraryItem,
 } from "./references.js";
-import {
-  mediaViewUrl,
-  thumbnailUrl,
-} from "./media_cache.js";
 import { showMediaPreview } from "./media_preview.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 
-export const ROUTE_PREFIX = "/helto_director/library";
 export const PROJECT_REPLACE_CONFIRMATION = "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.";
 export const PROJECT_UPDATE_CONFIRMATION = "Update saved project with current timeline?\n\nThis will overwrite the linked Director Library project. Save as a new project if you want to keep the existing saved version.";
 
@@ -44,6 +39,7 @@ export async function showDirectorLibrary(options = {}) {
 
   const timeline = options.timeline ?? null;
   const privacyMode = Boolean(options.privacyMode);
+  const mediaCache = options.mediaCache ?? null;
   const overlay = documentRef.createElement("div");
   overlay.className = libraryDialogClassName(privacyMode);
   overlay.setAttribute("role", "dialog");
@@ -289,6 +285,7 @@ export async function showDirectorLibrary(options = {}) {
         refresh: refreshLibrary,
         state,
         render,
+        mediaCache,
       },
     });
     renderDetails(documentRef, details, currentSelected, state.tab, timeline, privacyMode, {
@@ -300,6 +297,7 @@ export async function showDirectorLibrary(options = {}) {
       refresh: refreshLibrary,
       state,
       render,
+      mediaCache,
     });
     renderActions(documentRef, actions, {
       item: currentSelected,
@@ -569,13 +567,13 @@ function renderDetails(documentRef, details, item, tab, timeline, privacyMode, c
   if (tab === TAB_CHARACTERS) {
     renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context);
   } else {
-    renderProjectDetails(documentRef, details, item, privacyMode);
+    renderProjectDetails(documentRef, details, item, privacyMode, context);
   }
 }
 
 function renderProjectCardContent(documentRef, item, privacyMode, context) {
   const fragment = documentRef.createDocumentFragment();
-  fragment.append(renderProjectMediaStrip(documentRef, item, privacyMode));
+  fragment.append(renderProjectMediaStrip(documentRef, item, context.mediaCache));
   const title = renderEditableLibraryTitle(documentRef, item, TAB_PROJECTS, context);
   const meta = el(documentRef, "div", "htd-library-card-meta-line");
   meta.textContent = timelineMetaLine(item);
@@ -622,7 +620,7 @@ function renderProjectCardContent(documentRef, item, privacyMode, context) {
 
 function renderCharacterCardContent(documentRef, item, timeline, privacyMode, context) {
   const fragment = documentRef.createDocumentFragment();
-  fragment.append(renderPreview(documentRef, item, privacyMode, "htd-library-card-preview"));
+  fragment.append(renderPreview(documentRef, item, context.mediaCache, "htd-library-card-preview"));
   const title = renderEditableLibraryTitle(documentRef, item, TAB_CHARACTERS, context);
   const description = el(documentRef, "div", "htd-library-description");
   description.textContent = item.description;
@@ -679,12 +677,12 @@ function renderCharacterCardContent(documentRef, item, timeline, privacyMode, co
   return fragment;
 }
 
-function renderProjectDetails(documentRef, details, item, privacyMode) {
+function renderProjectDetails(documentRef, details, item, privacyMode, context = {}) {
   const name = el(documentRef, "div", "htd-library-detail-name");
   name.textContent = item.title;
   const meta = el(documentRef, "div", "htd-library-detail-meta");
   meta.textContent = timelineMetaLine(item);
-  details.append(name, meta, renderPreview(documentRef, item, privacyMode, "htd-library-detail-preview"));
+  details.append(name, meta, renderPreview(documentRef, item, context.mediaCache, "htd-library-detail-preview"));
   details.append(renderTimelineSegmentBar(documentRef, item));
   details.append(renderInfoSection(documentRef, "Summary", summaryRows(item)));
   details.append(renderInfoSection(documentRef, "Sections", sectionRows(item)));
@@ -693,7 +691,7 @@ function renderProjectDetails(documentRef, details, item, privacyMode) {
 }
 
 function renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context) {
-  details.append(renderPreview(documentRef, item, privacyMode, "htd-library-detail-preview"));
+  details.append(renderPreview(documentRef, item, context.mediaCache, "htd-library-detail-preview"));
   const existing = findLoadedCharacterReferenceForLibraryItem(timeline, item.source);
   if (existing) {
     const loaded = el(documentRef, "div", "htd-library-loaded");
@@ -727,7 +725,7 @@ function renderCharacterDetails(documentRef, details, item, timeline, privacyMod
   details.append(stack);
 }
 
-function renderProjectMediaStrip(documentRef, item, privacyMode) {
+function renderProjectMediaStrip(documentRef, item, mediaCache) {
   const strip = el(documentRef, "div", "htd-library-media-strip");
   const assets = timelinePreviewAssets(item).slice(0, 3);
   if (!assets.length) {
@@ -737,24 +735,28 @@ function renderProjectMediaStrip(documentRef, item, privacyMode) {
     return strip;
   }
   for (const asset of assets) {
-    strip.append(renderAssetThumb(documentRef, asset, item.title, privacyMode));
+    strip.append(renderAssetThumb(documentRef, asset, item.title, mediaCache));
   }
   strip.append(renderTimelineSegmentBar(documentRef, item, true));
   return strip;
 }
 
-function renderAssetThumb(documentRef, asset, title, privacyMode) {
+function renderAssetThumb(documentRef, asset, title, mediaCache) {
   const thumb = el(documentRef, "button", "htd-library-strip-thumb");
   thumb.type = "button";
   thumb.title = "Open Preview";
   if (asset?.path) {
+    const url = mediaCache?.requestThumbnail?.(asset, 220);
     const img = documentRef.createElement("img");
     img.alt = title;
-    img.src = thumbnailUrl(asset, 220, privacyMode);
+    if (url) img.src = url;
+    else mediaCache?.acquireThumbnailUrl?.(asset, 220).then((leaseUrl) => {
+      if (leaseUrl && img.isConnected) img.src = leaseUrl;
+    });
     thumb.append(img);
-    thumb.addEventListener("click", (event) => {
+    thumb.addEventListener("click", async (event) => {
       event.stopPropagation();
-      openLibraryMediaPreview(documentRef, asset, title);
+      await openLibraryMediaPreview(documentRef, asset, title, mediaCache);
     });
   }
   return thumb;
@@ -1209,19 +1211,23 @@ function replaceCharacterFromLibrary(options, referenceId, item, libraryItem) {
   return reference;
 }
 
-function renderPreview(documentRef, item, privacyMode, className) {
+function renderPreview(documentRef, item, mediaCache, className) {
   const preview = el(documentRef, "button", `htd-library-preview ${className}`);
   preview.type = "button";
   preview.title = "Open Preview";
   const asset = libraryPreviewAssetForItem(item);
   if (asset?.path) {
+    const url = mediaCache?.requestThumbnail?.(asset, 320);
     const img = documentRef.createElement("img");
     img.alt = item.title;
-    img.src = thumbnailUrl(asset, 320, privacyMode);
+    if (url) img.src = url;
+    else mediaCache?.acquireThumbnailUrl?.(asset, 320).then((leaseUrl) => {
+      if (leaseUrl && img.isConnected) img.src = leaseUrl;
+    });
     preview.append(img);
-    preview.addEventListener("click", (event) => {
+    preview.addEventListener("click", async (event) => {
       event.stopPropagation();
-      openLibraryMediaPreview(documentRef, asset, item.title);
+      await openLibraryMediaPreview(documentRef, asset, item.title, mediaCache);
     });
   } else {
     preview.append(iconSvg(documentRef, item.kind === TAB_PROJECTS ? "timeline" : "character"));
@@ -1379,16 +1385,9 @@ async function saveCurrentProjectAsNew({ timeline, documentRef, setStatus, priva
       await saveProject(cloneProjectForDirectorLibrary(timeline, "", name, { forkProjectIdentity: Boolean(forkProject) }));
     } else {
       const projectPayload = cloneProjectForDirectorLibrary(timeline, "", name, { forkProjectIdentity: Boolean(forkProject) });
-      const data = await fetchLibraryJson(`${ROUTE_PREFIX}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          private: Boolean(privacyMode),
-          project: projectPayload,
-        }),
-      });
-      const itemId = data?.item?.id;
+      const library = await managedLibrary();
+      const receipt = await library.projects.create(projectPayload, { name });
+      const itemId = receipt.recordId;
       if (itemId) {
         stampCurrentProjectLibraryItemId(callbacks, timeline, itemId, name);
       }
@@ -1426,16 +1425,11 @@ async function saveCurrentCharacters({ timeline, documentRef, setStatus, privacy
     setStatus("No character references in the current timeline.");
     return;
   }
+  const library = await managedLibrary();
   for (const reference of references) {
-    await fetchLibraryJson(`${ROUTE_PREFIX}/characters`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: reference.description || formatCharacterReferenceTag(reference),
-        description: reference.description || "",
-        private: privacyMode,
-        character: reference,
-      }),
+    await library.characters.create(reference, {
+      name: reference.description || formatCharacterReferenceTag(reference),
+      description: reference.description || "",
     });
   }
   setStatus(references.length === 1 ? "Saved character." : `Saved ${references.length} characters.`);
@@ -1491,17 +1485,21 @@ function showProjectSaveChoicePopup(documentRef, anchor, actions) {
 }
 
 async function fetchLibraryItems() {
-  const data = await fetchLibraryJson(`${ROUTE_PREFIX}/items`);
+  const library = await managedLibrary();
+  const [projectShells, characterShells] = await Promise.all([
+    library.projects.list(),
+    library.characters.list(),
+  ]);
   return {
-    projects: Array.isArray(data.projects) ? data.projects : [],
-    characters: Array.isArray(data.characters) ? data.characters : [],
+    projects: await hydrateManagedShells(library.projects, projectShells),
+    characters: await hydrateManagedShells(library.characters, characterShells),
   };
 }
 
 async function fetchProjectForUse(item) {
   if (item?.timeline) return item;
-  const data = await fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(item.id)}/use`, { method: "POST" });
-  const timeline = data.project ?? data.item?.project ?? data.item?.payload;
+  const library = await managedLibrary();
+  const timeline = await library.projects.use(item.id);
   return {
     ...item,
     timeline: normalizeVideoTimeline(timeline),
@@ -1509,17 +1507,19 @@ async function fetchProjectForUse(item) {
 }
 
 async function fetchProjectPreview(item) {
-  return fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
+  const library = await managedLibrary();
+  return library.projects.preview(item.id);
 }
 
 async function fetchCharacterPreview(item) {
-  return fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/preview`, { method: "POST" });
+  const library = await managedLibrary();
+  return library.characters.preview(item.id);
 }
 
 async function fetchCharacterForUse(item) {
   if (item?.source?.image?.path) return { ...item, character: item.source };
-  const data = await fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/use`, { method: "POST" });
-  const character = data.character ?? data.item?.character ?? data.item?.payload;
+  const library = await managedLibrary();
+  const character = await library.characters.use(item.id);
   return {
     ...item,
     character,
@@ -1528,47 +1528,51 @@ async function fetchCharacterForUse(item) {
 
 async function updateProjectLibraryItem(itemId, timeline, privacyMode = false) {
   const timelinePayload = cloneProjectForDirectorLibrary(timeline, itemId);
-  return fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(itemId)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: projectName(timelinePayload),
-      private: Boolean(privacyMode),
-      project: timelinePayload,
-    }),
+  const library = await managedLibrary();
+  return library.projects.replace(itemId, timelinePayload, {
+    name: projectName(timelinePayload),
   });
 }
 
 async function duplicateLibraryItem(tab, itemId) {
-  const route = tab === TAB_CHARACTERS ? "characters" : "projects";
-  return fetchLibraryJson(`${ROUTE_PREFIX}/${route}/${encodeURIComponent(itemId)}/duplicate`, { method: "POST" });
+  const library = await managedLibrary();
+  return recordFacade(library, tab).duplicate(itemId);
 }
 
 async function patchLibraryItem(tab, itemId, metadata) {
-  const route = tab === TAB_CHARACTERS ? "characters" : "projects";
-  return fetchLibraryJson(`${ROUTE_PREFIX}/${route}/${encodeURIComponent(itemId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(metadata),
-  });
+  const library = await managedLibrary();
+  return recordFacade(library, tab).patch(itemId, { metadata });
 }
 
 async function deleteLibraryItem(tab, itemId) {
-  const route = tab === TAB_CHARACTERS ? "characters" : "projects";
-  return fetchLibraryJson(`${ROUTE_PREFIX}/${route}/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+  const library = await managedLibrary();
+  return recordFacade(library, tab).delete(itemId);
 }
 
-async function fetchLibraryJson(url, options) {
-  const response = await fetch(url, options);
-  const text = await response.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(text || response.statusText || `HTTP ${response.status}`);
-  }
-  if (!response.ok || data.error) throw new Error(data.error || response.statusText || `HTTP ${response.status}`);
-  return data;
+async function managedLibrary() {
+  const connector = await import("./managed_connector.js");
+  const connection = await connector.directorManagedPrivacy();
+  if (!connection?.library) throw new Error("PRIVACY_DIRECTOR_INSTALLATION_BLOCKED");
+  return connection.library;
+}
+
+async function hydrateManagedShells(facade, shells) {
+  if (!Array.isArray(shells)) throw new Error("PRIVACY_DIRECTOR_LIBRARY_INVALID");
+  return Promise.all(shells.map(async (shell) => {
+    const details = await facade.details(shell.id);
+    return {
+      ...shell,
+      ...details,
+      is_private: Boolean(shell.private),
+      summary: details.summary,
+      created_at: details.created_at,
+      updated_at: details.updated_at,
+    };
+  }));
+}
+
+function recordFacade(library, tab) {
+  return tab === TAB_CHARACTERS ? library.characters : library.projects;
 }
 
 function filterLibraryItems(items, query, tag, filters = {}, tab = TAB_PROJECTS, timeline = null) {
@@ -1756,8 +1760,8 @@ function iconSvg(documentRef, name) {
   return span;
 }
 
-function openLibraryMediaPreview(documentRef, asset, caption) {
-  const url = mediaViewUrl(asset);
+async function openLibraryMediaPreview(documentRef, asset, caption, mediaCache) {
+  const url = await mediaCache?.acquireViewUrl?.(asset);
   if (!url) return null;
   return showMediaPreview(documentRef, {
     type: asset?.type,

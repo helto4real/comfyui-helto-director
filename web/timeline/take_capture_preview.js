@@ -69,7 +69,11 @@ export function installTakeCapturePreview(nodeType, appRef, apiRef) {
   nodeType.prototype.onExecuted = function (output) {
     const nativeArgs = [stripTakeCapturePreviewMedia(output), ...Array.prototype.slice.call(arguments, 1)];
     const result = onExecuted?.apply(this, nativeArgs);
-    syncTakeCaptureResultToDirector(this, output, { appRef });
+    if (managedTakeAssociationsFromOutput(output).length) {
+      syncManagedTakeCaptureToDirector(this, output, { appRef }).catch(() => {});
+    } else {
+      syncTakeCaptureResultToDirector(this, output, { appRef });
+    }
     syncTakeCapturePreview(this, output, { appRef, apiRef });
     return result;
   };
@@ -131,6 +135,38 @@ export function takeCaptureResultsFromOutput(output) {
   return values.filter(isTakeCaptureResultPayload);
 }
 
+export function managedTakeAssociationsFromOutput(output) {
+  const values = Array.isArray(output?.helto_take_capture_managed_association)
+    ? output.helto_take_capture_managed_association
+    : [output?.helto_take_capture_managed_association];
+  return values.filter(
+    (value) => typeof value === "string" && /^hp-assoc-[A-Za-z0-9_-]{32}$/.test(value),
+  );
+}
+
+export async function syncManagedTakeCaptureToDirector(node, output, { appRef = null } = {}) {
+  const directorNode = findLinkedDirectorNode(node);
+  const associations = managedTakeAssociationsFromOutput(output);
+  if (!directorNode || !associations.length) return false;
+  const connection = await connectDirectorManagedPrivacy();
+  let applied = false;
+  for (const association of associations) {
+    const claimed = await connection.takes.claimCapture(association);
+    await connection.takes.associateCapture(
+      directorNode,
+      directorTimeline(directorNode),
+      claimed.asset,
+      claimed.take,
+    );
+    applied = true;
+  }
+  if (applied) {
+    invalidateDirectorCapturesCache(directorNode);
+    setCanvasDirty(directorNode, appRef);
+  }
+  return applied;
+}
+
 export function syncTakeCaptureResultToDirector(node, output, { appRef = null } = {}) {
   const payloads = takeCaptureResultsFromOutput(output);
   if (!payloads.length) return false;
@@ -172,7 +208,9 @@ export function applyTakeCaptureResultsToDirector(directorNode, payloads, { appR
 
 export function installTakeCaptureResultListener(appRef, apiRef) {
   if (!apiRef?.addEventListener || apiRef._heltoTakeCaptureResultListener) return false;
-  const handler = (event) => handleTakeCaptureExecutedEvent(appRef, event);
+  const handler = (event) => {
+    handleTakeCaptureExecutedEvent(appRef, event)?.catch?.(() => {});
+  };
   apiRef.addEventListener("executed", handler);
   apiRef._heltoTakeCaptureResultListener = handler;
   return true;
@@ -180,6 +218,12 @@ export function installTakeCaptureResultListener(appRef, apiRef) {
 
 export function handleTakeCaptureExecutedEvent(appRef, event) {
   const output = event?.detail?.output ?? event?.output ?? null;
+  const associations = managedTakeAssociationsFromOutput(output);
+  if (associations.length) {
+    const captureNode = executedGraphNode(appRef?.graph, event);
+    if (!captureNode) return false;
+    return syncManagedTakeCaptureToDirector(captureNode, output, { appRef });
+  }
   const payloads = takeCaptureResultsFromOutput(output);
   if (!payloads.length) return false;
   let applied = false;
@@ -187,6 +231,12 @@ export function handleTakeCaptureExecutedEvent(appRef, event) {
     applied = applyTakeCaptureResultsToDirector(director, payloads, { appRef }) || applied;
   }
   return applied;
+}
+
+function executedGraphNode(graph, event) {
+  const node = event?.detail?.node ?? event?.node ?? null;
+  if (node && typeof node === "object") return node;
+  return graphNodeById(graph, node);
 }
 
 export function maintainTakeCapturePreview(node, { appRef = null } = {}) {
@@ -465,6 +515,11 @@ function setCanvasDirty(node, appRef = null) {
 
 function firstValue(value) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+async function connectDirectorManagedPrivacy() {
+  const connector = await import("./managed_connector.js");
+  return connector.directorManagedPrivacy();
 }
 
 function isTakeCaptureResultPayload(payload) {

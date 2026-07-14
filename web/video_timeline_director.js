@@ -8,6 +8,10 @@ import {
   installTakeCaptureResultListener,
 } from "./timeline/take_capture_preview.js";
 import { createHtdNodeThemeLifecycle } from "./timeline/node_theme_extension.js";
+import {
+  bindDirectorManagedPrivacy,
+  directorManagedPrivacy,
+} from "./timeline/managed_connector.js";
 
 const HELTO_DIRECTOR_THEME_NODE_TYPES = new Set([
   "HeltoVideoTimelineDirector",
@@ -34,6 +38,7 @@ app.registerExtension({
     // execution event stream even if the capture node's own hook misses them.
     installTakeCaptureResultListener(app, api);
     directorThemeLifecycle.setup();
+    directorManagedPrivacy().catch(() => {});
   },
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -50,6 +55,7 @@ app.registerExtension({
       const controller = mountTimelineState(this, app);
       mountTimelineMediaCache(this, app);
       mountTimelineRenderer(this, app, controller);
+      bindManagedPrivacyOrBlock(this, controller);
       return result;
     };
 
@@ -59,10 +65,7 @@ app.registerExtension({
       const controller = mountTimelineState(this, app);
       mountTimelineMediaCache(this, app);
       mountTimelineRenderer(this, app, controller);
-      controller.loadTimelineState();
-      if (!controller.hasEncryptedTimelineWidget?.()) {
-        controller.commitTimelineChange("workflow load", { pushUndo: false, markDirty: false });
-      }
+      bindManagedPrivacyOrBlock(this, controller);
       return result;
     };
 
@@ -116,6 +119,12 @@ app.registerExtension({
     directorThemeLifecycle.loadedGraphNode(node);
   },
 });
+
+function bindManagedPrivacyOrBlock(node, controller) {
+  bindDirectorManagedPrivacy(node, controller).catch(() => {
+    controller.blockManagedPrivacy?.();
+  });
+}
 
 function getNodeWidth(node) {
   const width = Number(node?.size?.[0] ?? 0);

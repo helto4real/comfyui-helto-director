@@ -77,7 +77,22 @@ class VideoTimelineDirector(io.ComfyNode):
                     advanced=True,
                     extra_dict={"hidden": True},
                 ),
+                io.String.Input(
+                    "privacy_mode_reference",
+                    default="",
+                    socketless=True,
+                    advanced=True,
+                    extra_dict={"hidden": True},
+                ),
+                io.String.Input(
+                    "private_execution",
+                    default="",
+                    socketless=True,
+                    advanced=True,
+                    extra_dict={"hidden": True},
+                ),
             ],
+            hidden=[io.Hidden.unique_id],
             outputs=[
                 VIDEO_TIMELINE.Output(
                     "video_timeline",
@@ -103,7 +118,10 @@ class VideoTimelineDirector(io.ComfyNode):
         orientation: str = DEFAULT_ORIENTATION,
         quality_preset: str = DEFAULT_QUALITY_PRESET,
         video_timeline_json: str = "",
+        privacy_mode_reference: str = "",
+        private_execution: str = "",
     ) -> io.NodeOutput:
+        subject_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
         video_timeline, timeline_validation = build_director_outputs(
             video_timeline_json=video_timeline_json,
             duration_seconds=duration_seconds,
@@ -111,5 +129,8 @@ class VideoTimelineDirector(io.ComfyNode):
             aspect_ratio=aspect_ratio,
             orientation=orientation,
             quality_preset=quality_preset,
+            privacy_mode_reference=privacy_mode_reference,
+            private_execution=private_execution,
+            subject_id=subject_id,
         )
         return io.NodeOutput(video_timeline, timeline_validation, float(video_timeline["project"]["frame_rate"]))
