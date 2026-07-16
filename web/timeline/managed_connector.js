@@ -33,7 +33,7 @@ async function connect() {
   const suite = await response.json();
   if (
     suite?.ok !== true
-    || suite?.suiteStatus !== "active"
+    || !["ready", "activation-required", "active"].includes(suite?.suiteStatus)
     || !/^[0-9a-f]{64}$/.test(String(suite?.suiteManifestDigest || ""))
   ) blocked();
   const runtime = await import(

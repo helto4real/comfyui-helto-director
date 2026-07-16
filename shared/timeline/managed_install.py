@@ -7,7 +7,9 @@ from threading import RLock
 
 from helto_privacy import (
     BoundPrivacyPack,
+    ConsumerSuiteDeclaration,
     install,
+    register_consumer_suite_declaration,
     register_legacy_key_dir,
     register_legacy_reader_units,
 )
@@ -28,6 +30,7 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _PACKAGE_ROOT / "config"
 _SINGLETON_DATABASE = _CONFIG_DIR / "director_privacy_singletons.sqlite3"
 _INSTALL_LOCK = RLock()
+DIRECTOR_SUITE_ID = "helto-suite-2026-07-16.2"
 _PACK: BoundPrivacyPack | None = None
 _ADAPTERS: dict[str, object] | None = None
 
@@ -53,6 +56,9 @@ def install_director_privacy() -> BoundPrivacyPack:
         if set(adapters) != expected:
             raise RuntimeError("Director privacy adapter binding is incomplete.")
         pack = install(profile, adapters)
+        register_consumer_suite_declaration(
+            ConsumerSuiteDeclaration(profile.distribution, DIRECTOR_SUITE_ID)
+        )
         _PACK = pack
         _ADAPTERS = adapters
         return pack
