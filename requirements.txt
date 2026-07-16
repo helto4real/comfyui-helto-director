@@ -1,4 +1,4 @@
 # Privacy mode (default-on for new Director projects) needs AES-GCM support;
 # ComfyUI core does not ship the cryptography package.
-helto-privacy==0.4.1
+helto-privacy==0.4.2
 cryptography>=42.0
