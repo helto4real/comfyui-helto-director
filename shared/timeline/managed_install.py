@@ -30,7 +30,7 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = _PACKAGE_ROOT / "config"
 _SINGLETON_DATABASE = _CONFIG_DIR / "director_privacy_singletons.sqlite3"
 _INSTALL_LOCK = RLock()
-DIRECTOR_SUITE_ID = "helto-suite-2026-07-17.2"
+DIRECTOR_SUITE_ID = "helto-suite-2026-07-17.3"
 _PACK: BoundPrivacyPack | None = None
 _ADAPTERS: dict[str, object] | None = None
 

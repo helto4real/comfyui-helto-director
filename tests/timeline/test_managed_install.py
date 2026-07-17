@@ -21,7 +21,7 @@ def test_registry_metadata_matches_requirements_and_packages_browser_assets():
 
     assert project["project"]["dependencies"] == requirements
     assert requirements[0] == "helto-privacy==0.4.5"
-    assert managed_install.DIRECTOR_SUITE_ID == "helto-suite-2026-07-17.2"
+    assert managed_install.DIRECTOR_SUITE_ID == "helto-suite-2026-07-17.3"
     assert all(
         marker not in "\n".join(requirements)
         for marker in ("file:", "/home/", "@main", "@master", "git+")

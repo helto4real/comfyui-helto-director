@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-helto-director"
-version = "0.0.6"
+version = "0.0.7"
 description = "Generic ComfyUI video timeline director nodepack scaffold."
 readme = "README.md"
 requires-python = ">=3.10"
