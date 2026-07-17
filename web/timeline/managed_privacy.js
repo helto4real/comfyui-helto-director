@@ -220,7 +220,17 @@ export function createDirectorTimelineBrowserAdapter({ workflowHandle = null, ap
     if (guardedWidgets.has(target)) return;
     const descriptor = Object.getOwnPropertyDescriptor(target, "value");
     if (descriptor && descriptor.configurable === false) {
-      fail("Director timeline widget cannot be transition-frozen.");
+      const options = target.options;
+      const setValue = options?.setValue;
+      if (typeof setValue !== "function") {
+        fail("Director timeline widget cannot be transition-frozen.");
+      }
+      options.setValue = function guardedSetValue(value) {
+        requireMutable();
+        return setValue.call(this, value);
+      };
+      guardedWidgets.add(target);
+      return;
     }
     if (descriptor?.get && !descriptor.set) {
       fail("Director timeline widget cannot be transition-frozen.");

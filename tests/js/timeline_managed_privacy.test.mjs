@@ -80,6 +80,22 @@ function fakeNode(widgetValue) {
   return { node, controller, events };
 }
 
+function useVueDomWidget(node, widgetValue) {
+  let current = widgetValue;
+  const options = {
+    getValue() { return current; },
+    setValue(value) { current = value; },
+  };
+  const widget = { name: "video_timeline_json", options };
+  Object.defineProperty(widget, "value", {
+    configurable: false,
+    get() { return options.getValue(); },
+    set(value) { options.setValue(value); },
+  });
+  node.widgets = [widget];
+  return widget;
+}
+
 function serializedNode(node) {
   node.flushTimelineBeforeSerialization?.();
   return {
@@ -173,6 +189,33 @@ const lockedEnvelope = JSON.stringify({
   ]) {
     assert.equal(typeof adapter[method], "function", `${method} must be implemented`);
   }
+}
+
+{
+  const source = JSON.stringify(timeline(6));
+  const { node, controller } = fakeNode(source);
+  const widget = useVueDomWidget(node, source);
+  controller.pendingDebounce = null;
+  controller.globalSettings.privacy.mode = false;
+  const { app } = graphHarness([node]);
+  const adapter = createDirectorTimelineBrowserAdapter({ app });
+  adapter.onPrivacySessionChange({ state: "unlocked" });
+  adapter.reconcileNode(node);
+
+  widget.value = JSON.stringify(timeline(7));
+  assert.equal(JSON.parse(widget.value).project.duration_seconds, 7);
+
+  const transition = adapter.settleModeTransition();
+  await transition.settled;
+  assert.throws(
+    () => { widget.value = JSON.stringify(timeline(8)); },
+    /transition is in progress/i,
+    "Vue DOM widget writes must remain fail-closed while a transition is frozen",
+  );
+  await transition.release();
+
+  widget.value = JSON.stringify(timeline(9));
+  assert.equal(JSON.parse(widget.value).project.duration_seconds, 9);
 }
 
 {
