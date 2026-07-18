@@ -11,10 +11,13 @@ import {
   saveGlobalSettings,
 } from "./global_settings.js";
 import {
+  confirmUnreadablePrivacyReset,
   encryptTimelineSync,
   fetchPrivacyJson,
   isEncryptedPrivacyPayload,
+  isPrivacyKeyUnavailableError,
   isPrivacyLockedError,
+  isUnreadablePrivacyValueError,
   parsePrivacyPayload,
 } from "./privacy.js";
 import {
@@ -42,6 +45,8 @@ export class TimelineStateController {
     this.destroyed = false;
     this.privacyError = "";
     this.decryptingPrivacy = false;
+    this.confirmUnreadablePrivacyReset = options.confirmUnreadablePrivacyReset ?? confirmUnreadablePrivacyReset;
+    this.resetPrivacyToPlaintext = false;
     this._onKeyDown = (event) => this.handleKeyDown(event);
     this._onMouseUp = () => this.endTimelineGesture("drag end");
 
@@ -100,6 +105,14 @@ export class TimelineStateController {
       this.refreshAsyncMediaCaches("privacy decrypt", {});
       return true;
     } catch (error) {
+      if (await isUnreadablePrivacyValueError(error)) {
+        if (await this.confirmUnreadablePrivacyReset()) {
+          await this.resetUnreadableTimeline(error);
+        } else {
+          this.preserveUnreadableTimeline();
+        }
+        return false;
+      }
       this.timeline = normalizeVideoTimeline("");
       this.privacyError = `Private timeline locked: ${error.message}`;
       console.error("Helto Director privacy decrypt failed", error);
@@ -109,6 +122,45 @@ export class TimelineStateController {
     } finally {
       this.decryptingPrivacy = false;
     }
+  }
+
+  preserveUnreadableTimeline() {
+    this.timeline = normalizeVideoTimeline("");
+    applyVisibleNodeProperties(this.timeline, this.node);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    this.privacyError = "Private timeline could not be decrypted. The encrypted value was preserved.";
+    this.requestRender();
+    this.refreshAsyncMediaCaches("privacy preserve", {});
+  }
+
+  async resetUnreadableTimeline(error) {
+    const disablePrivacy = await isPrivacyKeyUnavailableError(error);
+    this.timeline = normalizeVideoTimeline("");
+    applyVisibleNodeProperties(this.timeline, this.node);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    this.resetPrivacyToPlaintext = disablePrivacy;
+
+    if (disablePrivacy) {
+      const settings = normalizeGlobalSettings(this.globalSettings);
+      settings.privacy.mode = false;
+      this.globalSettings = settings;
+      try {
+        this.globalSettings = await saveGlobalSettings(settings);
+        this.globalSettingsError = "";
+      } catch (settingsError) {
+        this.globalSettingsError = `Global privacy could not be disabled after reset: ${settingsError.message}`;
+      }
+    }
+
+    try {
+      writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+      this.privacyError = "Unreadable private timeline was reset to defaults.";
+    } catch (writeError) {
+      this.privacyError = `Private timeline reset could not be saved: ${writeError.message}`;
+    }
+    markGraphDirty(this.node, this.app);
+    this.requestRender();
+    this.refreshAsyncMediaCaches("privacy reset", {});
   }
 
   async promptPrivacyUnlock(onUnlocked = null) {
@@ -289,13 +341,20 @@ export class TimelineStateController {
   async loadGlobalSettings() {
     try {
       this.globalSettings = await fetchGlobalSettings();
+      if (this.resetPrivacyToPlaintext && isGlobalPrivacyMode(this.globalSettings)) {
+        const settings = normalizeGlobalSettings(this.globalSettings);
+        settings.privacy.mode = false;
+        this.globalSettings = await saveGlobalSettings(settings);
+      }
       this.globalSettingsError = "";
       this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
-      try {
-        writeTimelineWidget(this.node, this.timeline, this.globalSettings);
-      } catch (error) {
-        this.privacyError = `Privacy encryption failed: ${error.message}`;
-        if (isPrivacyLockedError(error)) this.promptPrivacyUnlock(() => this.retryPrivateWidgetWrite());
+      if (!this.hasEncryptedTimelineWidget() && !this.decryptingPrivacy) {
+        try {
+          writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+        } catch (error) {
+          this.privacyError = `Privacy encryption failed: ${error.message}`;
+          if (isPrivacyLockedError(error)) this.promptPrivacyUnlock(() => this.retryPrivateWidgetWrite());
+        }
       }
       this.requestRender();
       this.refreshAsyncMediaCaches("global settings", {});

@@ -3,6 +3,14 @@ const ROUTE_PREFIX = "/helto_director/privacy";
 const PRIVACY_TOKEN_HEADER = "X-Helto-Privacy-Token";
 const PRIVACY_TOKEN_STORAGE_KEY = "helto_privacy_token";
 const PRIVACY_LOCKED_CODES = ["PRIVACY_LOCKED", "PRIVACY_TOKEN_REQUIRED"];
+const SHARED_PRIVACY_MODULE_ROUTE = "/helto_privacy/ui/privacy.js";
+const PRIVACY_KEY_UNAVAILABLE_CODES = [
+  "PRIVACY_KEYSTORE_UNINITIALIZED",
+  "PRIVACY_KEYSTORE_INVALID",
+  "PRIVACY_KEY_MISSING",
+  "PRIVACY_KEY_INVALID",
+];
+let sharedPrivacyModulePromise = null;
 
 export function getStoredPrivacyToken() {
   try {
@@ -61,6 +69,45 @@ function writePrivacyTokenCookie(token, documentRef = globalThis.document) {
 export function isPrivacyLockedError(error) {
   const message = String(error?.message ?? error ?? "");
   return PRIVACY_LOCKED_CODES.some((code) => message.includes(code));
+}
+
+async function sharedPrivacyModule() {
+  if (!sharedPrivacyModulePromise) {
+    sharedPrivacyModulePromise = import(SHARED_PRIVACY_MODULE_ROUTE).catch(() => null);
+  }
+  return sharedPrivacyModulePromise;
+}
+
+export async function isUnreadablePrivacyValueError(error) {
+  const privacy = await sharedPrivacyModule();
+  if (typeof privacy?.isUnreadablePrivacyValueError === "function") {
+    return privacy.isUnreadablePrivacyValueError(error);
+  }
+  if (isPrivacyLockedError(error)) return false;
+  const message = String(error?.message ?? error ?? "").toLowerCase();
+  return PRIVACY_KEY_UNAVAILABLE_CODES.some((code) => message.includes(code.toLowerCase()))
+    || ["PRIVACY_KEY_MISMATCH", "PRIVACY_DECRYPT_FAILED", "PRIVACY_PAYLOAD_INVALID"]
+      .some((code) => message.includes(code.toLowerCase()))
+    || message.includes("different local privacy key")
+    || message.includes("privacy key file is missing")
+    || message.includes("could not decrypt timeline director data");
+}
+
+export async function isPrivacyKeyUnavailableError(error) {
+  const privacy = await sharedPrivacyModule();
+  if (typeof privacy?.isPrivacyKeyUnavailableError === "function") {
+    return privacy.isPrivacyKeyUnavailableError(error);
+  }
+  const message = String(error?.message ?? error ?? "").toLowerCase();
+  return PRIVACY_KEY_UNAVAILABLE_CODES.some((code) => message.includes(code.toLowerCase()))
+    || message.includes("privacy key file is missing")
+    || (message.includes("privacy key file") && message.includes("malformed"));
+}
+
+export async function confirmUnreadablePrivacyReset() {
+  const privacy = await sharedPrivacyModule();
+  if (typeof privacy?.confirmUnreadablePrivacyReset !== "function") return false;
+  return Boolean(await privacy.confirmUnreadablePrivacyReset());
 }
 
 export function isEncryptedPrivacyPayload(value) {

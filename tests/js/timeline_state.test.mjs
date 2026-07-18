@@ -134,6 +134,18 @@ function installPrivacyXhrStub() {
   };
 }
 
+function encryptedTimelineEnvelope(keyId = "old-key") {
+  return {
+    version: 1,
+    schema: PRIVACY_SCHEMA,
+    encrypted: true,
+    algorithm: "AES-256-GCM",
+    keyId,
+    nonce: "nonce",
+    ciphertext: "ciphertext",
+  };
+}
+
 function longMultilinePrompt() {
   return [
     "Wide establishing shot of a rainy neon street with detailed reflections.",
@@ -888,6 +900,140 @@ async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
   }
 }
 
+async function testMissingPrivacyKeyIsPreservedWhenResetIsDeclined() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  const original = JSON.stringify(encryptedTimelineEnvelope("missing-key"));
+  widget.value = original;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_KEY_MISSING: old key is unavailable" }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, {
+      globalSettings: PRIVATE_GLOBAL_SETTINGS,
+      confirmUnreadablePrivacyReset: async () => false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(widget.value, original);
+    assert.equal(controller.globalSettings.privacy.mode, true);
+    assert.equal(controller.timeline.director_track.sections.length, 0);
+    assert.match(controller.privacyError, /encrypted value was preserved/i);
+    assert.equal(node.dirtyCalls.length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testMissingPrivacyKeyResetsTimelineAndDisablesPrivacyWhenConfirmed() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  widget.value = JSON.stringify(encryptedTimelineEnvelope());
+  const savedSettings = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_KEY_MISSING: old key is unavailable" }),
+      };
+    }
+    if (String(url).endsWith("/global_settings") && options.method === "POST") {
+      const settings = JSON.parse(options.body);
+      savedSettings.push(settings);
+      return { ok: true, json: async () => ({ ok: true, settings }) };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, {
+      globalSettings: PRIVATE_GLOBAL_SETTINGS,
+      confirmUnreadablePrivacyReset: async () => true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(controller.globalSettings.privacy.mode, false);
+    assert.equal(savedSettings.at(-1).privacy.mode, false);
+    assert.equal(JSON.parse(widget.value).encrypted, undefined);
+    assert.equal(controller.timeline.director_track.sections.length, 0);
+    assert.match(controller.privacyError, /reset to defaults/i);
+    assert(node.dirtyCalls.length > 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testWrongPrivacyKeyReencryptsDefaultTimelineWhenResetIsConfirmed() {
+  const previousFetch = globalThis.fetch;
+  const restoreXhr = installPrivacyXhrStub();
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  widget.value = JSON.stringify(encryptedTimelineEnvelope("wrong-key"));
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_KEY_MISMATCH: wrong key" }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, {
+      globalSettings: PRIVATE_GLOBAL_SETTINGS,
+      confirmUnreadablePrivacyReset: async () => true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const payload = JSON.parse(widget.value);
+    assert.equal(payload.encrypted, true);
+    assert.equal(payload.keyId, "test");
+    assert.equal(controller.globalSettings.privacy.mode, true);
+    assert.equal(controller.timeline.director_track.sections.length, 0);
+    assert.match(controller.privacyError, /reset to defaults/i);
+  } finally {
+    restoreXhr();
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testLockedPrivacyKeyPreservesEncryptedTimeline() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  const original = JSON.stringify(encryptedTimelineEnvelope("locked-key"));
+  widget.value = original;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_LOCKED: unlock required" }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(widget.value, original);
+    assert.match(controller.privacyError, /locked/i);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
 await testDefaultTimelineProjectIdentityStorage();
 await testDefaultTimelineStripsGlobalOwnedFields();
 await testNormalizeStripsGlobalOwnedProjectFields();
@@ -913,5 +1059,9 @@ await testReplaceTimelineClearsLibraryLinkAndIsUndoable();
 await testPrivacyModeWritesEncryptedHiddenWidget();
 await testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget();
 await testEncryptedWorkflowLoadDecryptsBeforeRender();
+await testMissingPrivacyKeyIsPreservedWhenResetIsDeclined();
+await testMissingPrivacyKeyResetsTimelineAndDisablesPrivacyWhenConfirmed();
+await testWrongPrivacyKeyReencryptsDefaultTimelineWhenResetIsConfirmed();
+await testLockedPrivacyKeyPreservesEncryptedTimeline();
 
 console.log("timeline state tests passed");

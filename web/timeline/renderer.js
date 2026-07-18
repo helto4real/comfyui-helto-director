@@ -154,12 +154,43 @@ const REPLACE_MENU_LABELS = {
   Video: "Replace video",
 };
 
+function comfySetting(appRef, name) {
+  const setting = appRef?.extensionManager?.setting?.get?.(name)
+    ?? appRef?.ui?.settings?.getSettingValue?.(name);
+  if (typeof setting === "object" && setting !== null) {
+    return setting.value ?? setting.id ?? setting.name ?? setting.text;
+  }
+  return setting;
+}
+
+export function timelineUsesVueLayout(appRef, container = null) {
+  const renderer = String(comfySetting(appRef, "Comfy.Graph.Renderer") ?? "").toLowerCase();
+  if (renderer) {
+    if (renderer.includes("litegraph") || renderer.includes("canvas") || renderer.includes("classic") || renderer.includes("legacy")) return false;
+    if (renderer.includes("vue") || renderer.includes("dom") || renderer.includes("modern") || /nodes?\s*2|2\.0/.test(renderer)) return true;
+  }
+
+  const vueNodesEnabled = comfySetting(appRef, "Comfy.VueNodes.Enabled");
+  const vueNodesValue = String(vueNodesEnabled ?? "").toLowerCase();
+  if (vueNodesEnabled === true || vueNodesValue === "true" || vueNodesValue === "enabled") return true;
+  if (vueNodesEnabled === false || vueNodesValue === "false" || vueNodesValue === "disabled") return false;
+  return Boolean(container?.closest?.(".lg-node"));
+}
+
 export function getTimelineWidgetHeight(timeline) {
   return TOOLBAR_HEIGHT + RANGE_CONTROL_HEIGHT + getTimelineViewportHeight(timeline) + getInspectorHeight(timeline) + ROOT_GAP * 3;
 }
 
 export function getTimelineWidgetRenderedHeight(node, widget, timeline, contentHeight = getTimelineWidgetHeight(timeline)) {
   return Math.max(contentHeight, timelineWidgetAvailableHeight(node, widget));
+}
+
+export function getTimelineWidgetLayoutHeight(node, widget, timeline, contentHeight = getTimelineWidgetHeight(timeline), vueLayout = false) {
+  // Nodes 2.0 observes the DOM row and updates node.size. Feeding that current
+  // size back as the row's requested height creates an unbounded resize loop.
+  return vueLayout
+    ? Math.max(1, Number(contentHeight) || getTimelineWidgetHeight(timeline))
+    : getTimelineWidgetRenderedHeight(node, widget, timeline, contentHeight);
 }
 
 export function getTimelineNodeMinimumHeight(node, widget, timeline, contentHeight = getTimelineWidgetHeight(timeline)) {
@@ -212,12 +243,13 @@ export function isDefaultEmptyTimeline(timeline) {
 }
 
 export class TimelineRenderer {
-  constructor(node, app, controller, container, widget = null) {
+  constructor(node, app, controller, container, widget = null, { vueLayout = false } = {}) {
     this.node = node;
     this.app = app;
     this.controller = controller;
     this.container = container;
     this.widget = widget;
+    this.vueLayout = vueLayout;
     this.drag = null;
     this.globalSettingsOpen = false;
     this.projectSettingsOpen = false;
@@ -3040,18 +3072,20 @@ export class TimelineRenderer {
   }
 
   getRenderedHeight(timeline = this.controller.timeline) {
-    return getTimelineWidgetRenderedHeight(this.node, this.widget, timeline, this.contentHeight);
+    return getTimelineWidgetLayoutHeight(this.node, this.widget, timeline, this.contentHeight, this.vueLayout);
   }
 
   applyWidgetContainerHeight(renderedHeight, contentHeight = this.contentHeight) {
     const stableHeight = Math.max(1, Number(renderedHeight) || getTimelineWidgetHeight(this.controller.timeline));
     const stableContentHeight = Math.max(1, Number(contentHeight) || stableHeight);
     this.renderedHeight = stableHeight;
-    this.container.style.height = `${stableHeight}px`;
+    this.container.style.height = this.vueLayout ? "100%" : `${stableHeight}px`;
     this.container.style.minHeight = `${stableContentHeight}px`;
+    this.container.style.maxHeight = this.vueLayout ? "none" : `${stableHeight}px`;
     if (this.container.parentElement) {
-      this.container.parentElement.style.height = `${stableHeight}px`;
+      this.container.parentElement.style.height = this.vueLayout ? "100%" : `${stableHeight}px`;
       this.container.parentElement.style.minHeight = `${stableContentHeight}px`;
+      this.container.parentElement.style.maxHeight = this.vueLayout ? "none" : `${stableHeight}px`;
     }
   }
 
@@ -3122,20 +3156,22 @@ export class TimelineRenderer {
 export function mountTimelineRenderer(node, app, controller) {
   if (node._timelineRenderer) return node._timelineRenderer;
   const container = document.createElement("div");
+  const vueLayout = timelineUsesVueLayout(app, container);
   const widgetContentHeight = () => Math.max(
     getTimelineWidgetHeight(controller.timeline),
     Number(node._timelineRenderer?.contentHeight ?? 0) || 0,
   );
   let widget = null;
-  const widgetRenderedHeight = () => getTimelineWidgetRenderedHeight(node, widget, controller.timeline, widgetContentHeight());
-  widget = node.addDOMWidget?.("video_timeline_director", "VideoTimelineDirector", container, {
+  const widgetRenderedHeight = () => getTimelineWidgetLayoutHeight(node, widget, controller.timeline, widgetContentHeight(), vueLayout);
+  const widgetOptions = {
     serialize: false,
     hideOnZoom: false,
     getMinHeight: widgetContentHeight,
-    getMaxHeight: widgetRenderedHeight,
     getHeight: widgetRenderedHeight,
-  });
-  const renderer = new TimelineRenderer(node, app, controller, container, widget);
+  };
+  if (!vueLayout) widgetOptions.getMaxHeight = widgetRenderedHeight;
+  widget = node.addDOMWidget?.("video_timeline_director", "VideoTimelineDirector", container, widgetOptions);
+  const renderer = new TimelineRenderer(node, app, controller, container, widget, { vueLayout });
   node._timelineRenderer = renderer;
   node._timelineRendererWidget = widget;
   return renderer;

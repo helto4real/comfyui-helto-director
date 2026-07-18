@@ -13,11 +13,13 @@ import {
   ensureTimelineNodeFitsContent,
   findAttachedTakeForCapture,
   getTimelineNodeMinimumHeight,
+  getTimelineWidgetLayoutHeight,
   getTimelineWidgetRenderedHeight,
   getTimelineWidgetHeight,
   isDefaultEmptyTimeline,
   measureStableTimelineViewportWidth,
   setLiveItemField,
+  timelineUsesVueLayout,
   waveformPeakCountForWidth,
   waveformPeakRequestForClip,
   waveformPeaksForClip,
@@ -129,6 +131,24 @@ function testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall() {
 
   const tallNode = { size: [820, 900] };
   assert.equal(ensureTimelineNodeFitsContent(tallNode, widget, timeline), false);
+}
+
+function testVueTimelineWidgetHeightDoesNotFeedBackNodeHeight() {
+  const timeline = createDefaultVideoTimeline();
+  const widget = { y: 180 };
+  const node = { size: [820, 900] };
+  const contentHeight = getTimelineWidgetHeight(timeline);
+
+  assert.equal(getTimelineWidgetLayoutHeight(node, widget, timeline, contentHeight, true), contentHeight);
+  node.size[1] = 5000;
+  assert.equal(getTimelineWidgetLayoutHeight(node, widget, timeline, contentHeight, true), contentHeight);
+  assert.equal(getTimelineWidgetLayoutHeight(node, widget, timeline, contentHeight, false), 4800);
+
+  const settings = new Map([["Comfy.Graph.Renderer", "Vue (Nodes 2.0)"]]);
+  const app = { extensionManager: { setting: { get: (name) => settings.get(name) } } };
+  assert.equal(timelineUsesVueLayout(app), true);
+  settings.set("Comfy.Graph.Renderer", "LiteGraph");
+  assert.equal(timelineUsesVueLayout(app), false);
 }
 
 function testAudioLanesExpandViewportToContent() {
@@ -373,7 +393,8 @@ function testSectionPreviewUsesContainedRepeatedFrames() {
   assert.equal(rendererSource.includes("this.container.style.maxWidth = `${stableWidth}px`;"), true);
   assert.equal(rendererSource.includes("this.container.parentElement.style.width = `${stableWidth}px`;"), true);
   assert.equal(rendererSource.includes("this.container.parentElement.style.maxWidth = `${stableWidth}px`;"), true);
-  assert.equal(rendererSource.includes("this.container.parentElement.style.height = `${stableHeight}px`;"), true);
+  assert.equal(rendererSource.includes('this.container.parentElement.style.height = this.vueLayout ? "100%" : `${stableHeight}px`;'), true);
+  assert.equal(rendererSource.includes('this.container.style.maxHeight = this.vueLayout ? "none"'), true);
   assert.equal(rendererSource.includes("root.style.width = `${this.viewportWidth}px`;"), true);
   assert.equal(rendererSource.includes("nodeBodyWidth(node)"), true);
   assert.equal(rendererSource.includes("if (nodeWidth > 0) return Math.max(1, nodeWidth);"), true);
@@ -1634,6 +1655,7 @@ testTimelineHeightIsTripled();
 testClearTimelineButtonEnablementHelper();
 testSelectedPromptUsesShotAwareInspectorHeight();
 testTimelineWidgetUsesNodeHeightAndGrowsWhenTooSmall();
+testVueTimelineWidgetHeightDoesNotFeedBackNodeHeight();
 testAudioLanesExpandViewportToContent();
 testPromptEditsUpdateLiveSectionAfterStateReplacement();
 testInspectorControlsUpdateLiveSectionAfterStateReplacement();

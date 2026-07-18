@@ -34,6 +34,11 @@ ENVELOPE_VERSION = 1
 ALGORITHM = "AES-256-GCM"
 KEY_FILE_NAME = "privacy_key.json"
 BYTE_CHUNK_SIZE = 64 * 1024 * 1024
+ERROR_KEY_MISSING = "PRIVACY_KEY_MISSING"
+ERROR_KEY_INVALID = "PRIVACY_KEY_INVALID"
+ERROR_KEY_MISMATCH = "PRIVACY_KEY_MISMATCH"
+ERROR_DECRYPT_FAILED = "PRIVACY_DECRYPT_FAILED"
+ERROR_PAYLOAD_INVALID = "PRIVACY_PAYLOAD_INVALID"
 _LEGACY_KEY_LOCK = threading.Lock()
 
 
@@ -148,9 +153,13 @@ def decrypt_state(payload: Any, base_dir: str | os.PathLike[str] | None = None) 
         try:
             payload = json.loads(payload)
         except Exception as exc:
-            raise PrivacyError(f"Encrypted Timeline Director data is not valid JSON: {exc}") from exc
+            raise PrivacyError(
+                f"{ERROR_PAYLOAD_INVALID}: Encrypted Timeline Director data is not valid JSON: {exc}"
+            ) from exc
     if not is_encrypted_payload(payload):
-        raise PrivacyError("Timeline Director data is not an encrypted privacy payload.")
+        raise PrivacyError(
+            f"{ERROR_PAYLOAD_INVALID}: Timeline Director data is not an encrypted privacy payload."
+        )
     key_id = str(payload.get("keyId", ""))
     key = _key_for_payload(
         key_id,
@@ -165,9 +174,13 @@ def decrypt_state(payload: Any, base_dir: str | os.PathLike[str] | None = None) 
     except PrivacyError:
         raise
     except Exception as exc:  # noqa: BLE001 - auth/tag/key failures should be user-readable.
-        raise PrivacyError(f"Could not decrypt Timeline Director data: {exc}") from exc
+        raise PrivacyError(
+            f"{ERROR_DECRYPT_FAILED}: Could not decrypt Timeline Director data: {exc}"
+        ) from exc
     if not isinstance(loaded, Mapping):
-        raise PrivacyError("Encrypted Timeline Director data did not contain a state object.")
+        raise PrivacyError(
+            f"{ERROR_PAYLOAD_INVALID}: Encrypted Timeline Director data did not contain a state object."
+        )
     return dict(loaded)
 
 
@@ -202,7 +215,7 @@ def _load_or_create_key(base_dir: str | os.PathLike[str] | None = None, create: 
         if path.exists():
             return _read_legacy_key(path)
         if not create:
-            raise PrivacyError(f"Privacy key file is missing: {path}")
+            raise PrivacyError(f"{ERROR_KEY_MISSING}: Privacy key file is missing: {path}")
 
         key = secrets.token_bytes(32)
         key_id = _b64url_encode(hashlib.sha256(key).digest()[:12])
@@ -224,9 +237,9 @@ def _read_legacy_key(path: Path) -> tuple[bytes, str]:
         key = _b64url_decode(str(payload.get("key", "")))
         key_id = str(payload.get("keyId", "")).strip()
     except Exception as exc:  # noqa: BLE001 - bad local key should become a readable privacy error.
-        raise PrivacyError(f"Could not read privacy key file '{path}': {exc}") from exc
+        raise PrivacyError(f"{ERROR_KEY_INVALID}: Could not read privacy key file '{path}': {exc}") from exc
     if len(key) != 32 or not key_id:
-        raise PrivacyError(f"Privacy key file '{path}' is malformed.")
+        raise PrivacyError(f"{ERROR_KEY_INVALID}: Privacy key file '{path}' is malformed.")
     return key, key_id
 
 
@@ -240,7 +253,7 @@ def _key_for_payload(payload_key_id: str, base_dir: str | os.PathLike[str] | Non
         alt = privacy_keystore.session_key_for(payload_key_id)
         if alt is not None:
             return alt
-    raise PrivacyError(mismatch_error)
+    raise PrivacyError(f"{ERROR_KEY_MISMATCH}: {mismatch_error}")
 
 
 def initialize_privacy_keystore(password: str) -> dict[str, Any]:
