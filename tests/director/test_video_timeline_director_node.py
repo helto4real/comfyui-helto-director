@@ -172,7 +172,7 @@ def test_director_outputs_validation_for_invalid_timeline():
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
-def test_director_decrypts_private_timeline_json():
+def test_director_decrypts_private_timeline_json(unlocked_privacy_keystore):
     VideoTimelineDirector = get_video_timeline_director()
     timeline = create_default_video_timeline()
     timeline["director_track"]["sections"].append(

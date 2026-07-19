@@ -27,6 +27,16 @@ def test_resolve_model_known_alias_and_fallback_status():
     assert fallback["status"] == "ready"
 
 
+def test_remote_model_sources_use_immutable_revisions():
+    for spec in optimizer.MODEL_REGISTRY.values():
+        if spec.backend in {"qwen", "florence"}:
+            assert len(spec.revision) == 40
+            assert all(character in "0123456789abcdef" for character in spec.revision)
+        for model_file in optimizer.model_files_for(spec):
+            assert len(model_file.revision) == 40
+            assert all(character in "0123456789abcdef" for character in model_file.revision)
+
+
 def test_snapshot_model_downloaded_requires_transformers_weights(monkeypatch, tmp_path):
     spec = optimizer.OptimizerModelSpec("partial_qwen", "owner/Partial-Qwen", "qwen", "VLM")
     monkeypatch.setattr(optimizer, "_models_dir", lambda: tmp_path)
@@ -67,10 +77,18 @@ def test_snapshot_model_downloaded_requires_all_index_shards(monkeypatch, tmp_pa
 
 
 def test_ensure_model_downloaded_rejects_incomplete_snapshot(monkeypatch, tmp_path):
-    spec = optimizer.OptimizerModelSpec("partial_qwen", "owner/Partial-Qwen", "qwen", "VLM")
+    spec = optimizer.OptimizerModelSpec(
+        "partial_qwen",
+        "owner/Partial-Qwen",
+        "qwen",
+        "VLM",
+        revision="a" * 40,
+    )
     monkeypatch.setattr(optimizer, "_models_dir", lambda: tmp_path)
+    download_kwargs = {}
 
     def fake_snapshot_download(**kwargs):
+        download_kwargs.update(kwargs)
         local_dir = Path(kwargs["local_dir"])
         local_dir.mkdir(parents=True)
         (local_dir / "README.md").write_text("partial download", encoding="utf-8")
@@ -79,6 +97,16 @@ def test_ensure_model_downloaded_rejects_incomplete_snapshot(monkeypatch, tmp_pa
     with mock.patch("huggingface_hub.snapshot_download", side_effect=fake_snapshot_download):
         with pytest.raises(optimizer.PromptOptimizerError, match="missing config.json or model weight files"):
             optimizer.ensure_model_downloaded(spec)
+
+    assert download_kwargs["revision"] == "a" * 40
+
+
+def test_snapshot_download_requires_immutable_revision(monkeypatch, tmp_path):
+    spec = optimizer.OptimizerModelSpec("mutable_qwen", "owner/Mutable-Qwen", "qwen", "VLM")
+    monkeypatch.setattr(optimizer, "_models_dir", lambda: tmp_path)
+
+    with pytest.raises(optimizer.PromptOptimizerError, match="no immutable Hugging Face revision"):
+        optimizer.ensure_model_downloaded(spec)
 
 
 def test_settings_save_clear_template_and_token(tmp_path):

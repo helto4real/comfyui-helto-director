@@ -40,3 +40,9 @@ def suite_isolated_privacy_keystore(tmp_path_factory, monkeypatch):
     # Also isolate the legacy plaintext key path, or tests that fall back to
     # legacy mode would mint real key files in the repo's config directory.
     monkeypatch.setattr(shared_privacy, "config_dir", lambda: root / "legacy_config")
+
+
+@pytest.fixture
+def unlocked_privacy_keystore(suite_isolated_privacy_keystore):
+    """Opt-in synthetic session for tests that exercise private runtime I/O."""
+    return privacy_keystore.initialize_keystore("synthetic privacy password")

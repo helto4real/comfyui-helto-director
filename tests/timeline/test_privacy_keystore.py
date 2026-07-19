@@ -85,14 +85,14 @@ def test_initialize_twice_is_rejected():
 
 
 def test_legacy_key_is_imported_and_retired():
-    legacy_envelope = encrypt_state({"old": "workflow"})
+    legacy_envelope = encrypt_state({"old": "workflow"}, base_dir=privacy.config_dir())
     legacy_path = privacy.key_path()
     assert legacy_path.exists()
 
     initialize_privacy_keystore(PASSWORD)
 
     assert not legacy_path.exists()
-    assert legacy_path.with_name(legacy_path.name + ".migrated").exists()
+    assert not legacy_path.with_name(legacy_path.name + ".migrated").exists()
     # Envelopes written by the legacy key stay readable while unlocked...
     assert decrypt_state(legacy_envelope) == {"old": "workflow"}
     # ...and new envelopes use the fresh primary key, not the imported one.

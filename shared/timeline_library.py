@@ -32,6 +32,7 @@ CHARACTER_LIBRARY_ITEM_TYPE = "CHARACTER_LIBRARY_ITEM"
 ENTRY_KINDS = (PROJECT_KIND, CHARACTER_KIND)
 PREVIEW_ASSET_LIMIT = 3
 PRIVATE_PROJECT_NAME = "Private Project"
+PRIVATE_CHARACTER_NAME = "Private Character"
 DEFAULT_PROJECT_LIBRARY_NAME = "Untitled Project"
 
 _SENSITIVE_STRING_PREFIXES = ("data:", "blob:")
@@ -104,6 +105,17 @@ def list_items(base_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]
     }
 
 
+def item_is_private(
+    kind: str,
+    item_id: str,
+    *,
+    base_dir: str | os.PathLike[str] | None = None,
+) -> bool:
+    kind = _normalize_kind(kind)
+    library = load_library(base_dir)
+    return bool(_find_entry(library, kind, item_id).get("private"))
+
+
 def create_item(
     kind: str,
     payload: Mapping[str, Any],
@@ -162,7 +174,7 @@ def replace_item(
         item_id=item_id,
         name=name,
         description=_coerce_text(metadata.get("description")),
-        tags=_coerce_tags(metadata.get("tags", entry.get("tags", []))),
+        tags=_coerce_tags(metadata.get("tags", _unpack_tags(entry, base_dir=base_dir))),
         private=bool(metadata.get("private", entry.get("private", False))),
         payload=normalized_payload,
         summary=summary,
@@ -197,7 +209,7 @@ def patch_item(
         item_id=item_id,
         name=name,
         description=_coerce_text(metadata.get("description", _unpack_description(entry, base_dir=base_dir))),
-        tags=_coerce_tags(metadata.get("tags", entry.get("tags", []))),
+        tags=_coerce_tags(metadata.get("tags", _unpack_tags(entry, base_dir=base_dir))),
         private=bool(metadata.get("private", entry.get("private", False))),
         payload=next_payload,
         summary=summary,
@@ -232,7 +244,7 @@ def duplicate_item(
         item_id=str(metadata.get("id") or _new_id(kind)),
         name=name,
         description=description,
-        tags=_coerce_tags(metadata.get("tags", source.get("tags", []))),
+        tags=_coerce_tags(metadata.get("tags", _unpack_tags(source, base_dir=base_dir))),
         private=bool(metadata.get("private", source.get("private", False))),
         payload=payload,
         summary=_summary_for(kind, payload),
@@ -289,6 +301,8 @@ def preview_project_item(
     payload = _unpack_payload(entry, base_dir=base_dir)
     item = _public_item(entry)
     item["name"] = _unpack_name(entry, base_dir=base_dir)
+    item["tags"] = _unpack_tags(entry, base_dir=base_dir)
+    item["summary"] = {**_summary_for(PROJECT_KIND, payload), "is_private": bool(entry.get("private"))}
     preview_assets = preview_assets_for_timeline(payload)
     if preview_assets:
         item["preview_assets"] = copy.deepcopy(preview_assets)
@@ -305,6 +319,9 @@ def preview_character_item(
     payload = _unpack_payload(entry, base_dir=base_dir)
     character = preview_character_shell(payload)
     item = _public_item(entry)
+    item["name"] = _unpack_name(entry, base_dir=base_dir)
+    item["tags"] = _unpack_tags(entry, base_dir=base_dir)
+    item["summary"] = {**_summary_for(CHARACTER_KIND, payload), "is_private": bool(entry.get("private"))}
     item["description"] = character.get("description", "")
     item["character"] = copy.deepcopy(character)
     return {"item": item, "character": character}
@@ -329,17 +346,20 @@ def _pack_entry(
         "kind": kind,
         "type": _type_for_kind(kind),
         "name": _public_entry_name(kind, name, private),
-        "tags": tags,
+        "tags": [] if private else tags,
         "private": bool(private),
         "is_private": bool(private),
-        "summary": {**dict(summary), "is_private": bool(private)},
+        "summary": {"is_private": True} if private else {**dict(summary), "is_private": False},
         "created_at": created_at,
         "updated_at": updated_at,
     }
     if private:
-        state = {"payload": payload, "description": description}
-        if kind == PROJECT_KIND:
-            state["name"] = name
+        state = {
+            "payload": payload,
+            "description": description,
+            "name": name,
+            "tags": tags,
+        }
         entry["encrypted_payload"] = encrypt_state(state, base_dir=base_dir)
     else:
         entry["description"] = description
@@ -353,6 +373,8 @@ def _with_payload(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] 
     item["description"] = _unpack_description(entry, base_dir=base_dir)
     item["payload"] = payload
     item["name"] = _unpack_name(entry, base_dir=base_dir)
+    item["tags"] = _unpack_tags(entry, base_dir=base_dir)
+    item["summary"] = {**_summary_for(item["kind"], payload), "is_private": bool(entry.get("private"))}
     if item["kind"] == PROJECT_KIND:
         item["project"] = payload
     else:
@@ -361,19 +383,21 @@ def _with_payload(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] 
 
 
 def _public_item(entry: Mapping[str, Any]) -> dict[str, Any]:
+    private = bool(entry.get("private") or entry.get("is_private"))
+    kind = _normalize_kind(entry.get("kind"))
     item = {
         "id": str(entry.get("id") or ""),
-        "kind": _normalize_kind(entry.get("kind")),
+        "kind": kind,
         "type": str(entry.get("type") or _type_for_kind(entry.get("kind"))),
-        "name": str(entry.get("name") or ""),
-        "description": "" if entry.get("private") else str(entry.get("description") or ""),
-        "tags": _coerce_tags(entry.get("tags")),
-        "private": bool(entry.get("private")),
-        "is_private": bool(entry.get("private") or entry.get("is_private")),
-        "summary": copy.deepcopy(entry.get("summary") if isinstance(entry.get("summary"), dict) else {}),
-        "created_at": str(entry.get("created_at") or ""),
-        "updated_at": str(entry.get("updated_at") or ""),
-        "last_used_at": entry.get("last_used_at") if entry.get("last_used_at") else None,
+        "name": _private_entry_name(kind) if private else str(entry.get("name") or ""),
+        "description": "" if private else str(entry.get("description") or ""),
+        "tags": [] if private else _coerce_tags(entry.get("tags")),
+        "private": private,
+        "is_private": private,
+        "summary": {"is_private": True} if private else copy.deepcopy(entry.get("summary") if isinstance(entry.get("summary"), dict) else {}),
+        "created_at": "" if private else str(entry.get("created_at") or ""),
+        "updated_at": "" if private else str(entry.get("updated_at") or ""),
+        "last_used_at": None if private else (entry.get("last_used_at") if entry.get("last_used_at") else None),
     }
     if item["kind"] == PROJECT_KIND and not item["is_private"]:
         preview_assets = preview_assets_for_timeline(entry.get("payload"))
@@ -400,10 +424,22 @@ def _unpack_description(entry: Mapping[str, Any], *, base_dir: str | os.PathLike
 
 def _unpack_name(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] | None = None) -> str:
     kind = _normalize_kind(entry.get("kind"))
-    if kind == PROJECT_KIND and entry.get("private"):
+    if entry.get("private"):
         state = decrypt_state(entry.get("encrypted_payload"), base_dir=base_dir)
-        return _coerce_text(state.get("name")) or _default_name(kind, _unpack_payload(entry, base_dir=base_dir))
+        return (
+            _coerce_text(state.get("name"))
+            or _legacy_private_name(entry, kind)
+            or _default_name(kind, _unpack_payload(entry, base_dir=base_dir))
+        )
     return _coerce_text(entry.get("name"))
+
+
+def _unpack_tags(entry: Mapping[str, Any], *, base_dir: str | os.PathLike[str] | None = None) -> list[str]:
+    if entry.get("private"):
+        state = decrypt_state(entry.get("encrypted_payload"), base_dir=base_dir)
+        if "tags" in state:
+            return _coerce_tags(state.get("tags"))
+    return _coerce_tags(entry.get("tags"))
 
 
 def _normalize_payload(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -725,7 +761,7 @@ def _normalize_library(payload: Any) -> dict[str, Any]:
 
 
 def _save_library(library: Mapping[str, Any], base_dir: str | os.PathLike[str] | None = None) -> None:
-    payload = _normalize_library(library)
+    payload = _harden_private_library(_normalize_library(library), base_dir=base_dir)
     path = library_path(base_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -804,7 +840,7 @@ def _entry_name(
         return requested
     if existing_entry is not None:
         existing = _unpack_name(existing_entry, base_dir=base_dir)
-        if existing and existing != PRIVATE_PROJECT_NAME:
+        if existing and existing != _private_entry_name(kind):
             return existing
     return _default_name(kind, payload)
 
@@ -843,17 +879,54 @@ def _fork_project_payload_identity(kind: str, payload: dict[str, Any], name: str
 
 
 def _public_entry_name(kind: str, name: str, private: bool) -> str:
-    if kind == PROJECT_KIND and private:
-        return PRIVATE_PROJECT_NAME
+    if private:
+        return _private_entry_name(kind)
     return str(name)
+
+
+def _private_entry_name(kind: str) -> str:
+    return PRIVATE_PROJECT_NAME if kind == PROJECT_KIND else PRIVATE_CHARACTER_NAME
+
+
+def _legacy_private_name(entry: Mapping[str, Any], kind: str) -> str:
+    name = _coerce_text(entry.get("name"))
+    return "" if name == _private_entry_name(kind) else name
+
+
+def _harden_private_library(
+    library: dict[str, Any],
+    *,
+    base_dir: str | os.PathLike[str] | None,
+) -> dict[str, Any]:
+    for kind in ENTRY_KINDS:
+        collection = _collection(library, kind)
+        for index, entry in enumerate(collection):
+            if not entry.get("private"):
+                continue
+            payload = _unpack_payload(entry, base_dir=base_dir)
+            name = _unpack_name(entry, base_dir=base_dir)
+            collection[index] = _pack_entry(
+                kind,
+                item_id=str(entry.get("id") or _new_id(kind)),
+                name=name,
+                description=_unpack_description(entry, base_dir=base_dir),
+                tags=_unpack_tags(entry, base_dir=base_dir),
+                private=True,
+                payload=payload,
+                summary=_summary_for(kind, payload),
+                created_at=str(entry.get("created_at") or _utc_now()),
+                updated_at=str(entry.get("updated_at") or _utc_now()),
+                base_dir=base_dir,
+            )
+            if entry.get("last_used_at"):
+                collection[index]["last_used_at"] = entry["last_used_at"]
+    return library
 
 
 def _normalized_entry(entry: Mapping[str, Any], kind: str) -> dict[str, Any]:
     normalized = dict(entry)
     normalized["kind"] = kind
     normalized["type"] = _type_for_kind(kind)
-    if kind == PROJECT_KIND and normalized.get("private"):
-        normalized["name"] = PRIVATE_PROJECT_NAME
     return normalized
 
 
@@ -909,6 +982,7 @@ __all__ = [
     "delete_item",
     "duplicate_item",
     "library_path",
+    "item_is_private",
     "list_items",
     "load_library",
     "patch_item",

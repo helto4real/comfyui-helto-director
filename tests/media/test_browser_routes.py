@@ -717,7 +717,11 @@ def test_image_and_video_browser_thumbnails_return_cached_webp(tmp_path, monkeyp
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for encrypted preview tests")
-def test_image_browser_thumbnail_privacy_returns_bytes_and_encrypted_cache(tmp_path, monkeypatch):
+def test_image_browser_thumbnail_privacy_returns_bytes_and_encrypted_cache(
+    tmp_path,
+    monkeypatch,
+    unlocked_privacy_keystore,
+):
     monkeypatch.setattr(media_browser, "CONFIG_DIR", tmp_path / "config")
     original_input = folder_paths.get_input_directory()
     original_temp = folder_paths.get_temp_directory()

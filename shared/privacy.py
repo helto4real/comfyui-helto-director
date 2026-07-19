@@ -60,7 +60,6 @@ def crypto_status(base_dir: str | os.PathLike[str] | None = None) -> dict[str, A
         "available": CRYPTO_AVAILABLE,
         "algorithm": ALGORITHM,
         "keyExists": path.exists(),
-        "keyPath": str(path),
         "error": "" if CRYPTO_AVAILABLE else f"Python package 'cryptography' is required: {CRYPTO_IMPORT_ERROR}",
         **privacy_keystore.keystore_status(),
     }
@@ -188,10 +187,15 @@ def _load_or_create_key(base_dir: str | os.PathLike[str] | None = None, create: 
     if not CRYPTO_AVAILABLE:
         raise PrivacyError(f"Python package 'cryptography' is required for privacy mode: {CRYPTO_IMPORT_ERROR}")
 
-    # Explicit base_dir callers (tests, tools) keep the legacy per-directory
-    # key file. Otherwise the password-protected keystore wins once it has
-    # been initialized; installs that never opted in keep the legacy file.
-    if base_dir is None and privacy_keystore.keystore_exists():
+    # Explicit base_dir callers are limited to migration tools and isolated
+    # tests. Normal runtime encryption must use the password-protected shared
+    # keystore and must never create a plaintext fallback key.
+    if base_dir is None:
+        if not privacy_keystore.keystore_exists():
+            raise PrivacyError(
+                f"{privacy_keystore.ERROR_UNINITIALIZED}: Privacy keystore has not been created yet. "
+                "Open the Helto privacy dialog and set a privacy password."
+            )
         try:
             return privacy_keystore.primary_session_key()
         except PrivacyKeystoreError as exc:
@@ -268,7 +272,7 @@ def initialize_privacy_keystore(password: str) -> dict[str, Any]:
     path = key_path()
     if path.exists():
         try:
-            legacy_key, legacy_key_id = _load_or_create_key(create=False)
+            legacy_key, legacy_key_id = _read_legacy_key(path)
             legacy_keys.append((legacy_key_id, legacy_key))
         except PrivacyError as exc:
             raise PrivacyError(
@@ -281,11 +285,9 @@ def initialize_privacy_keystore(password: str) -> dict[str, Any]:
         raise PrivacyError(str(exc)) from exc
 
     if legacy_keys:
-        # Keep a recoverable copy but stop treating it as the active key.
-        migrated = path.with_name(path.name + ".migrated")
         try:
-            path.replace(migrated)
-            os.chmod(migrated, 0o600)
+            path.unlink(missing_ok=True)
+            path.with_name(path.name + ".migrated").unlink(missing_ok=True)
         except OSError:
             pass
     return result

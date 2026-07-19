@@ -569,7 +569,7 @@ def test_segment_spill_store_plain_round_trips_and_cleans_up(tmp_path):
     assert summary["files_deleted"] == 1
 
 
-def test_segment_spill_store_encrypted_round_trips_without_plaintext(tmp_path):
+def test_segment_spill_store_encrypted_round_trips_without_plaintext(tmp_path, unlocked_privacy_keystore):
     if not CRYPTO_AVAILABLE:
         return
     store = SegmentSpillStore(privacy_mode=True, root=tmp_path)
@@ -589,7 +589,11 @@ def test_segment_spill_store_encrypted_round_trips_without_plaintext(tmp_path):
     assert "path" not in summary["records"][0]
 
 
-def test_segment_spill_store_encrypted_chunked_round_trips(monkeypatch, tmp_path):
+def test_segment_spill_store_encrypted_chunked_round_trips(
+    monkeypatch,
+    tmp_path,
+    unlocked_privacy_keystore,
+):
     if not CRYPTO_AVAILABLE:
         return
     monkeypatch.setattr(privacy, "BYTE_CHUNK_SIZE", 64)

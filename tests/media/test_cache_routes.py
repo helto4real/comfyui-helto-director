@@ -328,6 +328,7 @@ def test_simultaneous_identical_thumbnail_writes_are_atomic(
     tmp_path,
     monkeypatch,
     privacy_mode,
+    unlocked_privacy_keystore,
 ):
     if privacy_mode and not CRYPTO_AVAILABLE:
         pytest.skip("cryptography package is required for encrypted preview tests")
@@ -374,6 +375,7 @@ def test_simultaneous_identical_waveform_writes_are_atomic(
     tmp_path,
     monkeypatch,
     privacy_mode,
+    unlocked_privacy_keystore,
 ):
     if privacy_mode and not CRYPTO_AVAILABLE:
         pytest.skip("cryptography package is required for encrypted preview tests")
@@ -488,7 +490,7 @@ def test_thumbnail_cache_writes_webp_under_comfy_temp(tmp_path):
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for encrypted preview tests")
-def test_private_thumbnail_cache_writes_only_encrypted_webp(tmp_path):
+def test_private_thumbnail_cache_writes_only_encrypted_webp(tmp_path, unlocked_privacy_keystore):
     original_temp = folder_paths.get_temp_directory()
     folder_paths.set_temp_directory(str(tmp_path / "temp"))
     try:
@@ -529,7 +531,7 @@ def test_waveform_cache_writes_peak_json_under_comfy_temp(tmp_path):
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for encrypted preview tests")
-def test_private_waveform_cache_writes_only_encrypted_json(tmp_path):
+def test_private_waveform_cache_writes_only_encrypted_json(tmp_path, unlocked_privacy_keystore):
     original_temp = folder_paths.get_temp_directory()
     folder_paths.set_temp_directory(str(tmp_path / "temp"))
     try:

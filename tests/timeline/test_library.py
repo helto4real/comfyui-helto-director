@@ -1,7 +1,11 @@
+import asyncio
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from aiohttp import web as aiohttp_web
 
 from routes import timeline_library as timeline_library_routes
 from shared.privacy import CRYPTO_AVAILABLE
@@ -331,6 +335,7 @@ def test_private_timeline_encrypts_sensitive_payload_without_cleartext_leak(tmp_
             "id": "private-timeline",
             "name": "Secret Project Name",
             "description": "secret description",
+            "tags": ["secret-tag"],
             "private": True,
         },
         base_dir=tmp_path,
@@ -341,16 +346,22 @@ def test_private_timeline_encrypts_sensitive_payload_without_cleartext_leak(tmp_
     assert "/private/secret-reference.png" not in stored_text
     assert "secret description" not in stored_text
     assert "Secret Project Name" not in stored_text
+    assert "secret-tag" not in stored_text
     assert "encrypted_payload" in stored_text
     assert "payload" not in load_library(tmp_path)["projects"][0]
     public_item = list_items(tmp_path)["projects"][0]
     assert public_item["name"] == "Private Project"
+    assert public_item["tags"] == []
+    assert public_item["summary"] == {"is_private": True}
+    assert public_item["created_at"] == ""
+    assert public_item["updated_at"] == ""
     assert "preview_assets" not in public_item
     assert "/private/secret-reference.png" not in json.dumps(public_item)
     assert "Secret Project Name" not in json.dumps(public_item)
     assert created["name"] == "Secret Project Name"
     assert created["project"]["director_track"]["sections"][0]["prompt"] == "secret prompt"
     assert created["description"] == "secret description"
+    assert created["tags"] == ["secret-tag"]
 
     used = use_item("project", "private-timeline", base_dir=tmp_path)
     assert used["name"] == "Secret Project Name"
@@ -423,7 +434,12 @@ def test_private_character_preview_decrypts_without_mutating_or_leaking_items_sh
     create_item(
         "character",
         character,
-        metadata={"id": "private-character", "name": "Private Hero", "private": True},
+        metadata={
+            "id": "private-character",
+            "name": "Private Hero",
+            "tags": ["secret-character-tag"],
+            "private": True,
+        },
         base_dir=tmp_path,
     )
 
@@ -433,13 +449,21 @@ def test_private_character_preview_decrypts_without_mutating_or_leaking_items_sh
     after = load_library(tmp_path)["characters"][0]
 
     assert public_item["description"] == ""
+    assert public_item["name"] == "Private Character"
+    assert public_item["tags"] == []
+    assert public_item["summary"] == {"is_private": True}
     assert "character" not in public_item
     assert "/private/hero-reference.png" not in json.dumps(public_item)
     assert "private hero notes" not in json.dumps(public_item)
+    stored_text = library_path(tmp_path).read_text(encoding="utf-8")
+    assert "Private Hero" not in stored_text
+    assert "secret-character-tag" not in stored_text
     assert "last_used_at" not in before
     assert "last_used_at" not in after
     assert before == after
     assert preview["item"]["is_private"] is True
+    assert preview["item"]["name"] == "Private Hero"
+    assert preview["item"]["tags"] == ["secret-character-tag"]
     assert preview["item"]["description"] == "private hero notes"
     assert preview["item"]["character"] == preview["character"]
     assert preview["character"] == {
@@ -477,6 +501,63 @@ def test_route_prefix_and_registration_shape():
     assert "preview_project_item(request.match_info" in route_source
     assert '/characters" + "/{item_id}/preview"' in route_source
     assert "preview_character_item(request.match_info" in route_source
+
+
+def test_private_library_route_requires_token_before_reading_payload(monkeypatch):
+    class RecordingRoutes:
+        def __init__(self):
+            self.handlers = {}
+
+        def _record(self, method, path):
+            def decorator(handler):
+                self.handlers[(method, path)] = handler
+                return handler
+
+            return decorator
+
+        def get(self, path):
+            return self._record("GET", path)
+
+        def post(self, path):
+            return self._record("POST", path)
+
+        def put(self, path):
+            return self._record("PUT", path)
+
+        def patch(self, path):
+            return self._record("PATCH", path)
+
+        def delete(self, path):
+            return self._record("DELETE", path)
+
+    class UnreadableRequest:
+        match_info = {"item_id": "private-project"}
+
+        async def json(self):
+            raise AssertionError("unauthorized private request must not read its payload")
+
+    routes = RecordingRoutes()
+    monkeypatch.setitem(
+        sys.modules,
+        "server",
+        SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(routes=routes))),
+    )
+    monkeypatch.setattr(timeline_library_routes, "web", aiohttp_web)
+    monkeypatch.setattr(timeline_library_routes, "_ROUTES_REGISTERED", False)
+    monkeypatch.setattr(timeline_library_routes, "item_is_private", lambda *_args: True)
+    denied = aiohttp_web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(timeline_library_routes, "check_privacy_token", lambda _request: denied)
+    assert timeline_library_routes.register_timeline_library_routes() is True
+
+    handler = routes.handlers[
+        ("PUT", f"{timeline_library_routes.ROUTE_PREFIX}/projects/{{item_id}}")
+    ]
+    response = asyncio.run(handler(UnreadableRequest()))
+
+    assert response is denied
 
 
 def sample_timeline(prompt="hello", path="/media/ref.png"):

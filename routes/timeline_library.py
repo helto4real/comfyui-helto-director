@@ -13,6 +13,7 @@ try:
         create_item,
         delete_item,
         duplicate_item,
+        item_is_private,
         list_items,
         patch_item,
         preview_character_item,
@@ -28,6 +29,7 @@ except Exception:
         create_item,
         delete_item,
         duplicate_item,
+        item_is_private,
         list_items,
         patch_item,
         preview_character_item,
@@ -35,6 +37,11 @@ except Exception:
         replace_item,
         use_item,
     )
+
+try:
+    from .privacy import check_privacy_token
+except Exception:
+    from routes.privacy import check_privacy_token
 
 
 ROUTE_PREFIX = "/helto_director/library"
@@ -71,6 +78,9 @@ def register_timeline_library_routes() -> bool:
         try:
             data = await _json_payload(request)
             kind = _kind_from_payload(data)
+            denied = _private_write_denied(request, requested_private=bool(data.get("private")))
+            if denied is not None:
+                return denied
             item = create_item(kind, _entry_payload(data, kind), metadata=data)
             return web.json_response({"ok": True, "item": item})
         except Exception as exc:
@@ -123,6 +133,9 @@ def register_timeline_library_routes() -> bool:
     @routes.post(f"{ROUTE_PREFIX}/projects" + "/{item_id}/preview")
     async def preview_project(request):
         try:
+            denied = _stored_private_denied(request, PROJECT_KIND, request.match_info["item_id"])
+            if denied is not None:
+                return denied
             preview = preview_project_item(request.match_info["item_id"])
             return web.json_response({"ok": True, **preview})
         except Exception as exc:
@@ -135,6 +148,9 @@ def register_timeline_library_routes() -> bool:
     @routes.post(f"{ROUTE_PREFIX}/characters" + "/{item_id}/preview")
     async def preview_character(request):
         try:
+            denied = _stored_private_denied(request, CHARACTER_KIND, request.match_info["item_id"])
+            if denied is not None:
+                return denied
             preview = preview_character_item(request.match_info["item_id"])
             return web.json_response({"ok": True, **preview})
         except Exception as exc:
@@ -147,6 +163,9 @@ def register_timeline_library_routes() -> bool:
 async def _create_typed_item(request, kind: str):
     try:
         data = await _json_payload(request)
+        denied = _private_write_denied(request, requested_private=bool(data.get("private")))
+        if denied is not None:
+            return denied
         item = create_item(kind, _entry_payload(data, kind), metadata=data)
         return web.json_response({"ok": True, "item": item})
     except Exception as exc:
@@ -155,10 +174,17 @@ async def _create_typed_item(request, kind: str):
 
 async def _replace_typed_item(request, kind: str):
     try:
+        item_id = request.match_info["item_id"]
+        denied = _stored_private_denied(request, kind, item_id)
+        if denied is not None:
+            return denied
         data = await _json_payload(request)
+        denied = _private_write_denied(request, requested_private=bool(data.get("private")))
+        if denied is not None:
+            return denied
         item = replace_item(
             kind,
-            request.match_info["item_id"],
+            item_id,
             _entry_payload(data, kind),
             metadata=data,
         )
@@ -169,11 +195,18 @@ async def _replace_typed_item(request, kind: str):
 
 async def _patch_typed_item(request, kind: str):
     try:
+        item_id = request.match_info["item_id"]
+        denied = _stored_private_denied(request, kind, item_id)
+        if denied is not None:
+            return denied
         data = await _json_payload(request)
+        denied = _private_write_denied(request, requested_private=bool(data.get("private")))
+        if denied is not None:
+            return denied
         payload = _optional_entry_payload(data, kind)
         item = patch_item(
             kind,
-            request.match_info["item_id"],
+            item_id,
             metadata=data,
             payload=payload,
         )
@@ -184,8 +217,15 @@ async def _patch_typed_item(request, kind: str):
 
 async def _duplicate_typed_item(request, kind: str):
     try:
+        item_id = request.match_info["item_id"]
+        denied = _stored_private_denied(request, kind, item_id)
+        if denied is not None:
+            return denied
         data = await _json_payload(request, empty_ok=True)
-        item = duplicate_item(kind, request.match_info["item_id"], metadata=data)
+        denied = _private_write_denied(request, requested_private=bool(data.get("private")))
+        if denied is not None:
+            return denied
+        item = duplicate_item(kind, item_id, metadata=data)
         return web.json_response({"ok": True, "item": item})
     except Exception as exc:
         return _error_response(exc)
@@ -193,7 +233,11 @@ async def _duplicate_typed_item(request, kind: str):
 
 async def _delete_typed_item(request, kind: str):
     try:
-        deleted = delete_item(kind, request.match_info["item_id"])
+        item_id = request.match_info["item_id"]
+        denied = _stored_private_denied(request, kind, item_id)
+        if denied is not None:
+            return denied
+        deleted = delete_item(kind, item_id)
         return web.json_response({"ok": True, **deleted})
     except Exception as exc:
         return _error_response(exc)
@@ -201,7 +245,11 @@ async def _delete_typed_item(request, kind: str):
 
 async def _use_typed_item(request, kind: str):
     try:
-        item = use_item(kind, request.match_info["item_id"])
+        item_id = request.match_info["item_id"]
+        denied = _stored_private_denied(request, kind, item_id)
+        if denied is not None:
+            return denied
+        item = use_item(kind, item_id)
         response = {"ok": True, "item": item}
         response[kind] = item["payload"]
         return web.json_response(response)
@@ -254,6 +302,14 @@ def _error_response(exc: Exception):
     status = 400 if isinstance(exc, (TimelineLibraryError, ValueError)) else 500
     logging.debug("Helto Director library route failed: %s", exc, exc_info=status >= 500)
     return web.json_response({"ok": False, "error": str(exc)}, status=status)
+
+
+def _private_write_denied(request, *, requested_private: bool):
+    return check_privacy_token(request) if requested_private else None
+
+
+def _stored_private_denied(request, kind: str, item_id: str):
+    return check_privacy_token(request) if item_is_private(kind, item_id) else None
 
 
 __all__ = [

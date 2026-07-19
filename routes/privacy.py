@@ -32,6 +32,7 @@ ROUTE_PREFIX = "/helto_director/privacy"
 PRIVACY_TOKEN_HEADER = "X-Helto-Privacy-Token"
 PRIVACY_TOKEN_COOKIE = "helto_privacy_token"
 _ROUTES_REGISTERED = False
+_PASSWORD_OPERATION_SEMAPHORE = asyncio.Semaphore(1)
 
 
 def _token_error() -> web.Response:
@@ -101,7 +102,8 @@ def register_privacy_routes() -> bool:
     async def post_privacy_keystore_init(request):
         try:
             payload = await request.json()
-            result = await _to_thread(initialize_privacy_keystore, str(payload.get("password") or ""))
+            async with _PASSWORD_OPERATION_SEMAPHORE:
+                result = await _to_thread(initialize_privacy_keystore, str(payload.get("password") or ""))
             return web.json_response({"ok": True, **result})
         except (PrivacyError, PrivacyKeystoreError) as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
@@ -113,7 +115,8 @@ def register_privacy_routes() -> bool:
         try:
             payload = await request.json()
             # scrypt is deliberately slow; keep it off the event loop.
-            result = await _to_thread(privacy_keystore.unlock_keystore, str(payload.get("password") or ""))
+            async with _PASSWORD_OPERATION_SEMAPHORE:
+                result = await _to_thread(privacy_keystore.unlock_keystore, str(payload.get("password") or ""))
             return web.json_response({"ok": True, **result})
         except PrivacyKeystoreError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
@@ -131,11 +134,12 @@ def register_privacy_routes() -> bool:
     async def post_privacy_change_password(request):
         try:
             payload = await request.json()
-            result = await _to_thread(
-                privacy_keystore.change_keystore_password,
-                str(payload.get("current_password") or ""),
-                str(payload.get("new_password") or ""),
-            )
+            async with _PASSWORD_OPERATION_SEMAPHORE:
+                result = await _to_thread(
+                    privacy_keystore.change_keystore_password,
+                    str(payload.get("current_password") or ""),
+                    str(payload.get("new_password") or ""),
+                )
             return web.json_response({"ok": True, **result})
         except PrivacyKeystoreError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)

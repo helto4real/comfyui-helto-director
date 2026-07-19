@@ -21,7 +21,7 @@ from shared.timeline import create_default_video_timeline
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography package is required for privacy encryption tests")
-def test_timeline_privacy_envelope_round_trips_without_clear_text():
+def test_timeline_privacy_envelope_round_trips_without_clear_text(unlocked_privacy_keystore):
     timeline = create_default_video_timeline()
     timeline["project"]["global_prompt"]["prompt"] = "private global"
     timeline["assets"].append(
