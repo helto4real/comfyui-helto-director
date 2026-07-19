@@ -137,7 +137,13 @@ def register_media_cache_routes() -> bool:
 
     @routes.get(f"{ROUTE_PREFIX}/view")
     async def get_view(request):
+        privacy_mode = True
         try:
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             path = resolve_media_path(
                 request.rel_url.query.get("path", ""),
                 request.rel_url.query.get("type"),
@@ -147,15 +153,18 @@ def register_media_cache_routes() -> bool:
             return web.FileResponse(
                 path,
                 headers={
-                    "Cache-Control": "private, max-age=300",
+                    "Cache-Control": "private, no-store" if privacy_mode else "private, max-age=300",
                     "Content-Type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
                 },
             )
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _media_error_response(exc, privacy_mode)
 
     @routes.post(f"{ROUTE_PREFIX}/cache/clear")
-    async def post_clear_cache(_request):
+    async def post_clear_cache(request):
+        denied = check_privacy_token(request)
+        if denied is not None:
+            return denied
         try:
             clear_media_cache()
             return web.json_response({"status": "ok"})

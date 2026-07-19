@@ -151,6 +151,119 @@ def test_browser_thumbnail_route_uses_global_privacy_when_request_omits_or_disab
     assert checked_requests == [request]
 
 
+def test_private_browser_items_require_authorization_before_folder_access(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_browser_test_routes(monkeypatch)
+    denied = media_browser_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(media_browser_routes, "check_privacy_token", lambda _request: denied)
+
+    def unexpected_folder_access(*_args):
+        raise AssertionError("unauthorized item listing must not resolve a folder")
+
+    monkeypatch.setattr(media_browser_routes, "folder_by_alias", unexpected_folder_access)
+    request = _FakeRequest(query={"alias": "private", "privacy": "false"})
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_browser_routes.ROUTE_PREFIX}/{{media_type}}/items")](request)
+    )
+
+    assert response is denied
+
+
+def test_authorized_private_browser_items_emit_private_view_urls(monkeypatch):
+    routes = _register_media_browser_test_routes(monkeypatch)
+    monkeypatch.setattr(media_browser_routes, "check_privacy_token", lambda _request: None)
+    monkeypatch.setattr(
+        media_browser_routes,
+        "folder_by_alias",
+        lambda *_args: SimpleNamespace(enabled=True, path="/synthetic/private"),
+    )
+    monkeypatch.setattr(
+        media_browser_routes,
+        "list_media",
+        lambda *_args, **_kwargs: [
+            {"filename": "secret.png", "mtime": 1, "path": "/synthetic/private/secret.png"}
+        ],
+    )
+
+    async def direct_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(media_browser_routes.asyncio, "to_thread", direct_to_thread)
+    request = _FakeRequest(query={"alias": "private", "privacy": "1"})
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_browser_routes.ROUTE_PREFIX}/{{media_type}}/items")](request)
+    )
+    payload = json.loads(response.body)
+
+    assert response.status == 200
+    assert "privacy=1" in payload["images"][0]["view_url"]
+    assert "privacy=1" in payload["images"][0]["thumb_url"]
+
+
+def test_folder_mutations_require_authorization_before_reading_payload(monkeypatch):
+    routes = _register_media_browser_test_routes(monkeypatch)
+    denied = media_browser_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(media_browser_routes, "check_privacy_token", lambda _request: denied)
+    request = _FakeRequest(payload={"path": "/synthetic/media"})
+
+    response = asyncio.run(
+        routes.handlers[("POST", f"{media_browser_routes.ROUTE_PREFIX}/{{media_type}}/folders")](request)
+    )
+
+    assert response is denied
+
+
+def test_project_take_delete_requires_authorization_before_reading_payload(monkeypatch):
+    routes = _register_media_browser_test_routes(monkeypatch)
+    denied = media_browser_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(media_browser_routes, "check_privacy_token", lambda _request: denied)
+
+    class UnreadableRequest:
+        async def json(self):
+            raise AssertionError("unauthorized delete must not read its payload")
+
+    response = asyncio.run(
+        routes.handlers[("POST", f"{media_browser_routes.ROUTE_PREFIX}/project_takes/delete")](
+            UnreadableRequest()
+        )
+    )
+
+    assert response is denied
+
+
+def test_private_browser_view_requires_authorization_before_path_resolution(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_browser_test_routes(monkeypatch)
+    denied = media_browser_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(media_browser_routes, "check_privacy_token", lambda _request: denied)
+
+    def unexpected_resolution(*_args):
+        raise AssertionError("unauthorized view must not resolve a path")
+
+    monkeypatch.setattr(media_browser_routes, "resolve_browser_media_path", unexpected_resolution)
+    request = _FakeRequest(query={"alias": "private", "filename": "secret.png"})
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_browser_routes.ROUTE_PREFIX}/{{media_type}}/view")](request)
+    )
+
+    assert response is denied
+
+
 def test_project_take_route_uses_global_privacy_for_redaction(monkeypatch):
     timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
     routes = _register_media_browser_test_routes(monkeypatch)

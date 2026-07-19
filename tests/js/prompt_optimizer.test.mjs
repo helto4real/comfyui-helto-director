@@ -48,6 +48,7 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
   assert.equal(optimizerSource.includes('const ROUTE_PREFIX = "/helto_director/prompt_optimizer";'), true);
+  assert.equal(optimizerSource.includes("ensureStoredPrivacyTokenCookie(documentRef);"), true);
   assert.equal(optimizerSource.includes('body: JSON.stringify({'), true);
   assert.equal(optimizerSource.includes("segments,"), true);
   assert.equal(optimizerSource.includes("references: []"), true);

@@ -202,6 +202,49 @@ def test_authorized_global_privacy_disable_is_saved(monkeypatch):
     assert timeline_global_settings.global_privacy_mode() is False
 
 
+def test_changing_global_asset_root_requires_authorization(tmp_path, monkeypatch):
+    original_root = tmp_path / "original"
+    timeline_global_settings.save_global_settings(
+        {"storage": {"asset_root_directory": str(original_root)}, "privacy": {"mode": False}}
+    )
+    denied = media_cache_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(global_settings_routes, "check_privacy_token", lambda _request: denied)
+
+    response = global_settings_routes.apply_global_settings_patch(
+        _FakeRequest(),
+        {"storage": {"asset_root_directory": str(tmp_path / "replacement")}},
+    )
+
+    assert response is denied
+    assert timeline_global_settings.load_global_settings()["storage"]["asset_root_directory"] == str(original_root)
+
+
+def test_unchanged_global_asset_root_does_not_require_authorization(tmp_path, monkeypatch):
+    original_root = tmp_path / "original"
+    timeline_global_settings.save_global_settings(
+        {"storage": {"asset_root_directory": str(original_root)}, "privacy": {"mode": False}}
+    )
+
+    def unexpected_authorization(_request):
+        raise AssertionError("unchanged root must not require authorization")
+
+    monkeypatch.setattr(global_settings_routes, "check_privacy_token", unexpected_authorization)
+
+    response = global_settings_routes.apply_global_settings_patch(
+        _FakeRequest(),
+        {
+            "storage": {"asset_root_directory": str(original_root)},
+            "display": {"show_thumbnails": False},
+        },
+    )
+
+    assert response is None
+    assert timeline_global_settings.load_global_settings()["display"]["show_thumbnails"] is False
+
+
 def test_enabling_global_privacy_purges_only_plaintext_preview_caches(tmp_path):
     original_temp = folder_paths.get_temp_directory()
     folder_paths.set_temp_directory(str(tmp_path / "temp"))
@@ -640,14 +683,91 @@ def test_resolve_media_path_supports_enabled_media_browser_folder_paths(tmp_path
     assert resolved == media_path.resolve()
 
 
-def test_media_view_route_serves_resolved_files_with_private_cache_header():
-    source = (Path(__file__).resolve().parents[2] / "routes" / "media_cache.py").read_text(encoding="utf-8")
+def test_private_media_view_requires_authorization_before_path_resolution(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_cache_test_routes(monkeypatch)
+    denied = media_cache_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(media_cache_routes, "check_privacy_token", lambda _request: denied)
 
-    assert '@routes.get(f"{ROUTE_PREFIX}/view")' in source
-    assert 'path = resolve_media_path(' in source
-    assert "web.FileResponse(" in source
-    assert '"Cache-Control": "private, max-age=300"' in source
-    assert "mimetypes.guess_type(path.name)[0]" in source
+    def unexpected_resolution(*_args):
+        raise AssertionError("unauthorized view must not resolve a path")
+
+    monkeypatch.setattr(media_cache_routes, "resolve_media_path", unexpected_resolution)
+    request = _FakeRequest(query={"path": "/synthetic/private.png", "privacy": "false"})
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_cache_routes.ROUTE_PREFIX}/view")](request)
+    )
+
+    assert response is denied
+
+
+def test_authorized_private_media_view_disables_browser_cache(monkeypatch):
+    timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
+    routes = _register_media_cache_test_routes(monkeypatch)
+    monkeypatch.setattr(media_cache_routes, "check_privacy_token", lambda _request: None)
+    monkeypatch.setattr(
+        media_cache_routes,
+        "resolve_media_path",
+        lambda *_args: Path("/synthetic/private.png"),
+    )
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_cache_routes.ROUTE_PREFIX}/view")](
+            _FakeRequest(query={"path": "ignored.png"})
+        )
+    )
+
+    assert response.status == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+
+
+def test_public_media_view_preserves_short_browser_cache(monkeypatch):
+    routes = _register_media_cache_test_routes(monkeypatch)
+
+    def unexpected_authorization(_request):
+        raise AssertionError("public view must not require privacy authorization")
+
+    monkeypatch.setattr(media_cache_routes, "check_privacy_token", unexpected_authorization)
+    monkeypatch.setattr(
+        media_cache_routes,
+        "resolve_media_path",
+        lambda *_args: Path("/synthetic/public.png"),
+    )
+
+    response = asyncio.run(
+        routes.handlers[("GET", f"{media_cache_routes.ROUTE_PREFIX}/view")](
+            _FakeRequest(query={"path": "ignored.png"})
+        )
+    )
+
+    assert response.status == 200
+    assert response.headers["Cache-Control"] == "private, max-age=300"
+
+
+def test_media_cache_clear_requires_authorization(monkeypatch):
+    routes = _register_media_cache_test_routes(monkeypatch)
+    denied = media_cache_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(media_cache_routes, "check_privacy_token", lambda _request: denied)
+
+    def unexpected_clear():
+        raise AssertionError("unauthorized request must not clear caches")
+
+    monkeypatch.setattr(media_cache_routes, "clear_media_cache", unexpected_clear)
+
+    response = asyncio.run(
+        routes.handlers[("POST", f"{media_cache_routes.ROUTE_PREFIX}/cache/clear")](
+            _FakeRequest()
+        )
+    )
+
+    assert response is denied
 
 
 def write_test_wav(path):

@@ -110,6 +110,7 @@ export async function fetchProjectTakeCaptures(timeline, shotId, privacyMode = f
 }
 
 export async function deleteProjectTakeCapture(timeline, shotId, path, options = {}) {
+  ensureStoredPrivacyTokenCookie();
   const response = await fetch(`${MEDIA_BROWSER_ROUTE_PREFIX}/project_takes/delete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

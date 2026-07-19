@@ -33,6 +33,11 @@ try:
 except Exception:  # noqa: BLE001 - direct unit-test imports.
     resolve_browser_media_path = None
 
+try:
+    from .media_cache import resolve_media_path
+except Exception:  # noqa: BLE001 - direct unit-test imports.
+    resolve_media_path = None
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 QWEN_DEPS = ("transformers", "huggingface_hub", "accelerate", "qwen_vl_utils")
@@ -1537,11 +1542,18 @@ def decode_image(segment: dict[str, Any]) -> Image.Image | None:
     media_path = str(segment.get("mediaPath") or segment.get("path") or "").strip()
     media_type = segment_type(segment)
     if media_path:
-        candidate = Path(media_path).expanduser()
-        if candidate.exists():
-            if media_type == "video":
-                return _load_video_preview(candidate)
-            return _load_rgb_image(candidate)
+        if resolve_media_path is None:
+            raise PromptOptimizerError("Media path validation is unavailable.")
+        try:
+            candidate = resolve_media_path(
+                media_path,
+                "video" if media_type == "video" else "image",
+            )
+        except Exception as exc:  # noqa: BLE001 - redact the rejected path from route errors.
+            raise PromptOptimizerError("Media path is outside approved roots or unavailable.") from exc
+        if media_type == "video":
+            return _load_video_preview(candidate)
+        return _load_rgb_image(candidate)
 
     folder_alias = segment.get("imageFolderAlias") or segment.get("mediaFolderAlias")
     image_file = segment.get("imageFile") or segment.get("mediaFile")

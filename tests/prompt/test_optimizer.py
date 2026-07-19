@@ -1,13 +1,16 @@
+import asyncio
 import base64
 import io
 import math
 import struct
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import av
 import pytest
+from aiohttp import web as aiohttp_web
 from PIL import Image
 
 from routes import prompt_optimizer as prompt_optimizer_routes
@@ -415,6 +418,38 @@ def test_decode_image_supports_direct_video_path(tmp_path):
     assert preview.size == (32, 32)
 
 
+def test_decode_image_resolves_direct_paths_through_approved_media_roots(tmp_path, monkeypatch):
+    image_path = tmp_path / "guide.png"
+    Image.new("RGB", (32, 16), color=(10, 20, 30)).save(image_path)
+    observed = {}
+
+    def approved_path(path, source_type):
+        observed.update(path=path, source_type=source_type)
+        return image_path
+
+    monkeypatch.setattr(optimizer, "resolve_media_path", approved_path)
+
+    preview = optimizer.decode_image({"id": "path", "type": "Image", "mediaPath": "/synthetic/guide.png"})
+
+    assert preview.size == (32, 16)
+    assert observed == {"path": "/synthetic/guide.png", "source_type": "image"}
+
+
+def test_decode_image_redacts_rejected_media_paths(monkeypatch):
+    def reject_path(*_args):
+        raise ValueError("Security error: /private/secret.png is outside approved roots")
+
+    monkeypatch.setattr(optimizer, "resolve_media_path", reject_path)
+
+    with pytest.raises(
+        optimizer.PromptOptimizerError,
+        match="Media path is outside approved roots or unavailable",
+    ) as exc_info:
+        optimizer.decode_image({"id": "path", "type": "Image", "mediaPath": "/private/secret.png"})
+
+    assert "/private/secret.png" not in str(exc_info.value)
+
+
 def test_fallback_optimize_segments_timeline_only():
     result = optimizer.optimize_segments(
         {
@@ -579,6 +614,52 @@ def test_unload_optimizer_model_removes_loaded_alias_and_clears_cuda():
 def test_route_module_uses_helto_prefix():
     assert prompt_optimizer_routes.ROUTE_PREFIX == "/helto_director/prompt_optimizer"
     assert callable(prompt_optimizer_routes.register_prompt_optimizer_routes)
+
+
+def test_optimizer_start_route_requires_authorization_before_reading_payload(monkeypatch):
+    class RecordingRoutes:
+        def __init__(self):
+            self.handlers = {}
+
+        def _record(self, method, path):
+            def decorator(handler):
+                self.handlers[(method, path)] = handler
+                return handler
+
+            return decorator
+
+        def get(self, path):
+            return self._record("GET", path)
+
+        def post(self, path):
+            return self._record("POST", path)
+
+    class UnreadableRequest:
+        async def json(self):
+            raise AssertionError("unauthorized optimizer request must not read its payload")
+
+    routes = RecordingRoutes()
+    monkeypatch.setattr(
+        prompt_optimizer_routes,
+        "server",
+        SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(routes=routes))),
+    )
+    monkeypatch.setattr(prompt_optimizer_routes, "web", aiohttp_web)
+    monkeypatch.setattr(prompt_optimizer_routes, "_ROUTES_REGISTERED", False)
+    denied = prompt_optimizer_routes.web.json_response(
+        {"ok": False, "error": "PRIVACY_TOKEN_REQUIRED"},
+        status=401,
+    )
+    monkeypatch.setattr(prompt_optimizer_routes, "check_privacy_token", lambda _request: denied)
+    assert prompt_optimizer_routes.register_prompt_optimizer_routes() is True
+
+    response = asyncio.run(
+        routes.handlers[("POST", f"{prompt_optimizer_routes.ROUTE_PREFIX}/optimize/start")](
+            UnreadableRequest()
+        )
+    )
+
+    assert response is denied
 
 
 def data_url_image():

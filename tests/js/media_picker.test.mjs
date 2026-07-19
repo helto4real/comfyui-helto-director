@@ -351,6 +351,8 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
   assert.equal(pickerSource.includes("hover-hide"), false);
   assert.equal(pickerSource.includes("privacyMode = false"), true);
   assert.equal(pickerSource.includes("if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);"), true);
+  assert.equal(pickerSource.includes('const privacyQuery = privacyMode ? "?privacy=1" : "";'), true);
+  assert.equal(pickerSource.includes("ensureStoredPrivacyTokenCookie(documentRef);\n  return new Promise"), true);
   assert.equal(pickerSource.includes("pr-image-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("pr-audio-browser-dialog.privacy-mode"), true);
   assert.equal(pickerSource.includes("showMediaPreview(documentRef"), true);
@@ -372,6 +374,8 @@ function testMediaPickerPrivacyUsesSingleDirectorMode() {
   assert.equal((pickerSource.match(/showFolderManager\(/g) ?? []).length, 3);
   assert.equal((pickerSource.match(/folder-manage/g) ?? []).length >= 4, true);
   assert.equal(mediaActionsSource.includes("if (privacyMode) ensureStoredPrivacyTokenCookie();"), true);
+  assert.equal(mediaActionsSource.includes("export async function deleteProjectTakeCapture"), true);
+  assert.equal(mediaActionsSource.includes("export async function deleteProjectTakeCapture(timeline, shotId, path, options = {}) {\n  ensureStoredPrivacyTokenCookie();"), true);
 }
 
 testImagePickerSelectionCreatesSectionAndAsset();

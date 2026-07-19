@@ -205,7 +205,8 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
     };
 
     const loadFolders = async (preferredAlias = null) => {
-      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`);
+      const privacyQuery = privacyMode ? "?privacy=1" : "";
+      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders${privacyQuery}`);
       folderSelect.innerHTML = data.folders.map((folder) => (
         `<option value="${escapeHtml(folder.alias)}" title="${escapeHtml(folder.path || folder.alias)}">${escapeHtml(folderDisplayName(folder))}${folder.exists ? "" : " (missing)"}</option>`
       )).join("");
@@ -242,6 +243,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
           documentRef,
           mediaType,
           currentAlias: folderSelect.value,
+          privacyMode,
         });
         if (preferredAlias) {
           await loadFolders(preferredAlias);
@@ -301,6 +303,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
 
 async function showAudioPicker({ node, documentRef, privacyMode = false }) {
   closeMediaPicker(documentRef);
+  if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);
   return new Promise((resolve) => {
     const overlay = documentRef.createElement("div");
     overlay.className = `pr-image-browser-dialog pr-audio-browser-dialog${privacyMode ? " privacy-mode" : ""}`;
@@ -448,7 +451,8 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
     };
 
     const loadFolders = async (preferredAlias = null) => {
-      const data = await fetchJson(`${ROUTE_PREFIX}/audio/folders`);
+      const privacyQuery = privacyMode ? "?privacy=1" : "";
+      const data = await fetchJson(`${ROUTE_PREFIX}/audio/folders${privacyQuery}`);
       folderSelect.innerHTML = data.folders.map((folder) => (
         `<option value="${escapeHtml(folder.alias)}" title="${escapeHtml(folder.path || folder.alias)}">${escapeHtml(folderDisplayName(folder))}${folder.exists ? "" : " (missing)"}</option>`
       )).join("");
@@ -467,6 +471,7 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
         alias: folderSelect.value,
         recursive: recursive ? "1" : "0",
       });
+      if (privacyMode) params.set("privacy", "1");
       const data = await fetchJson(`${ROUTE_PREFIX}/audio/items?${params.toString()}`);
       availableAudios = data.audios ?? [];
       selectedAudio = null;
@@ -494,6 +499,7 @@ async function showAudioPicker({ node, documentRef, privacyMode = false }) {
           documentRef,
           mediaType: "audio",
           currentAlias: folderSelect.value,
+          privacyMode,
         });
         if (preferredAlias) {
           await loadFolders(preferredAlias);
@@ -537,7 +543,8 @@ async function fetchJson(url, options) {
   return data;
 }
 
-function showFolderManager({ documentRef, mediaType, currentAlias = "input" }) {
+function showFolderManager({ documentRef, mediaType, currentAlias = "input", privacyMode = false }) {
+  ensureStoredPrivacyTokenCookie(documentRef);
   return new Promise((resolve) => {
     const overlay = documentRef.createElement("div");
     overlay.className = "pr-folder-manager-dialog";
@@ -594,7 +601,8 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "input" }) {
     };
 
     const loadFolders = async () => {
-      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`);
+      const privacyQuery = privacyMode ? "?privacy=1" : "";
+      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders${privacyQuery}`);
       renderFolders(data.folders ?? []);
     };
 

@@ -93,15 +93,24 @@ def register_media_browser_routes() -> bool:
 
     @routes.get(f"{ROUTE_PREFIX}" + "/{media_type}/folders")
     async def get_folders(request):
+        privacy_mode = True
         try:
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             media_type = normalize_media_type(request.match_info["media_type"])
             payload = await asyncio.to_thread(folder_payload, media_type)
             return web.json_response({"folders": payload})
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _browser_error_response(exc, privacy_mode)
 
     @routes.post(f"{ROUTE_PREFIX}" + "/{media_type}/folders")
     async def post_folder(request):
+        denied = check_privacy_token(request)
+        if denied is not None:
+            return denied
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
             data = await request.json()
@@ -113,6 +122,9 @@ def register_media_browser_routes() -> bool:
 
     @routes.delete(f"{ROUTE_PREFIX}" + "/{media_type}/folders")
     async def delete_folder(request):
+        denied = check_privacy_token(request)
+        if denied is not None:
+            return denied
         try:
             media_type = normalize_media_type(request.match_info["media_type"])
             remove_folder(media_type, request.rel_url.query.get("alias", ""))
@@ -129,6 +141,10 @@ def register_media_browser_routes() -> bool:
             alias = request.rel_url.query.get("alias", "")
             recursive = request.rel_url.query.get("recursive", "1").lower() not in {"0", "false", "no"}
             privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             folder = folder_by_alias(media_type, alias)
             if not folder.enabled:
                 return _browser_error_response(
@@ -145,6 +161,8 @@ def register_media_browser_routes() -> bool:
                     "filename": item["filename"],
                     "t": int(item.get("mtime") or 0),
                 }
+                if privacy_mode:
+                    params["privacy"] = "1"
                 encoded = urllib.parse.urlencode(params)
                 item["view_url"] = f"{ROUTE_PREFIX}/{media_type}/view?{encoded}"
                 if media_type in {"image", "video"}:
@@ -162,6 +180,10 @@ def register_media_browser_routes() -> bool:
         try:
             data = await request.json()
             privacy_mode = requested_privacy_mode(data.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             payload = await asyncio.to_thread(
                 list_project_take_captures,
                 data.get("project") if isinstance(data.get("project"), dict) else {},
@@ -174,6 +196,8 @@ def register_media_browser_routes() -> bool:
                     "type": "Video",
                     "t": int(item.get("mtime") or 0),
                 }
+                if privacy_mode:
+                    params["privacy"] = "1"
                 encoded = urllib.parse.urlencode(params)
                 item["view_url"] = f"{MEDIA_ROUTE_PREFIX}/view?{encoded}"
                 thumb_params = dict(params)
@@ -187,6 +211,9 @@ def register_media_browser_routes() -> bool:
     @routes.post(f"{ROUTE_PREFIX}/project_takes/delete")
     async def post_project_take_delete(request):
         privacy_mode = True
+        denied = check_privacy_token(request)
+        if denied is not None:
+            return denied
         try:
             data = await request.json()
             privacy_mode = requested_privacy_mode(data.get("privacy"))
@@ -244,19 +271,25 @@ def register_media_browser_routes() -> bool:
 
     @routes.get(f"{ROUTE_PREFIX}" + "/{media_type}/view")
     async def get_view(request):
+        privacy_mode = True
         try:
+            privacy_mode = requested_privacy_mode(request.rel_url.query.get("privacy"))
+            if privacy_mode:
+                denied = check_privacy_token(request)
+                if denied is not None:
+                    return denied
             media_type = normalize_media_type(request.match_info["media_type"])
             filename = urllib.parse.unquote(request.rel_url.query.get("filename", ""))
             path = resolve_browser_media_path(media_type, request.rel_url.query.get("alias", ""), filename)
             return web.FileResponse(
                 path,
                 headers={
-                    "Cache-Control": "private, max-age=300",
+                    "Cache-Control": "private, no-store" if privacy_mode else "private, max-age=300",
                     "Content-Type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
                 },
             )
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            return _browser_error_response(exc, privacy_mode)
 
     _ROUTES_REGISTERED = True
     return True

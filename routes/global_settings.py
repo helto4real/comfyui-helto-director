@@ -11,6 +11,7 @@ try:
         GlobalSettingsError,
         global_privacy_mode,
         global_settings_status,
+        load_global_settings,
         patch_global_settings,
     )
 except Exception:
@@ -19,6 +20,7 @@ except Exception:
         GlobalSettingsError,
         global_privacy_mode,
         global_settings_status,
+        load_global_settings,
         patch_global_settings,
     )
 
@@ -53,7 +55,14 @@ def apply_global_settings_patch(request, payload: Mapping | None) -> web.Respons
     safe_payload = payload if isinstance(payload, Mapping) else {}
     current_mode, next_mode = privacy_mode_transition(safe_payload)
 
-    if current_mode and not next_mode:
+    storage_patch = safe_payload.get("storage")
+    root_changed = False
+    if isinstance(storage_patch, Mapping) and "asset_root_directory" in storage_patch:
+        current_root = str(load_global_settings()["storage"]["asset_root_directory"] or "").strip()
+        next_root = str(storage_patch.get("asset_root_directory") or "").strip()
+        root_changed = current_root != next_root
+
+    if (current_mode and not next_mode) or root_changed:
         denied = check_privacy_token(request)
         if denied is not None:
             return denied

@@ -11,11 +11,13 @@ import {
 } from "./media_preview.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 import { setupOverlayDialog } from "./dialog.js";
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
 
 const ROUTE_PREFIX = "/helto_director/prompt_optimizer";
 
 export function showPromptOptimizer(options) {
   const documentRef = options.documentRef ?? globalThis.document;
+  ensureStoredPrivacyTokenCookie(documentRef);
   installPromptOptimizerStyles(documentRef);
   closePromptOptimizer(documentRef);
 
