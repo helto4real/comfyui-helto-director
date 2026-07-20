@@ -44,9 +44,23 @@ except Exception:  # noqa: BLE001 - route registration is best-effort inside Com
     web = None
     server = None
 
+try:
+    from .privacy import check_privacy_token
+except Exception:
+    try:
+        from routes.privacy import check_privacy_token
+    except Exception:
+        check_privacy_token = None
+
 
 ROUTE_PREFIX = "/helto_director/prompt_optimizer"
 _ROUTES_REGISTERED = False
+
+
+def require_optimizer_access(request):
+    if check_privacy_token is None:
+        raise RuntimeError("Privacy authorization is unavailable.")
+    return check_privacy_token(request)
 
 
 def register_prompt_optimizer_routes() -> bool:
@@ -104,6 +118,9 @@ def register_prompt_optimizer_routes() -> bool:
 
     @routes.post(f"{ROUTE_PREFIX}/optimize")
     async def post_prompt_optimizer_optimize(request):
+        denied = require_optimizer_access(request)
+        if denied is not None:
+            return denied
         try:
             payload = await request.json()
             result = await asyncio.to_thread(optimize_segments, payload)
@@ -115,6 +132,9 @@ def register_prompt_optimizer_routes() -> bool:
 
     @routes.post(f"{ROUTE_PREFIX}/optimize/start")
     async def post_prompt_optimizer_start(request):
+        denied = require_optimizer_access(request)
+        if denied is not None:
+            return denied
         try:
             payload = await request.json()
             return web.json_response({"ok": True, "job_id": start_optimizer_job(payload)})
@@ -123,6 +143,9 @@ def register_prompt_optimizer_routes() -> bool:
 
     @routes.get(f"{ROUTE_PREFIX}/optimize/status")
     async def get_prompt_optimizer_status(request):
+        denied = require_optimizer_access(request)
+        if denied is not None:
+            return denied
         try:
             job_id = request.query.get("job_id", "")
             return web.json_response(get_optimizer_job_status(job_id))

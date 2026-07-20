@@ -7,6 +7,7 @@ import {
 } from "../../web/timeline/state.js";
 import { normalizeVideoTimeline } from "../../web/timeline/migration.js";
 import { normalizeGlobalSettings, settingsPayload } from "../../web/timeline/global_settings.js";
+import { PRIVACY_SCHEMA } from "../../web/timeline/privacy.js";
 import {
   ASSET_SOURCE_GENERATED,
   ASSET_TYPE_VIDEO,
@@ -101,6 +102,48 @@ function mountController(node, options = {}) {
 
 function getHiddenTimeline(node) {
   return JSON.parse(node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value);
+}
+
+function installPrivacyXhrStub() {
+  const previous = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = class PrivacyXhrStub {
+    open(_method, _url, _async) {
+      this.status = 200;
+      this.statusText = "OK";
+    }
+
+    setRequestHeader() {}
+
+    send(body) {
+      this.responseText = JSON.stringify({
+        ok: true,
+        envelope: {
+          version: 1,
+          schema: PRIVACY_SCHEMA,
+          encrypted: true,
+          algorithm: "AES-256-GCM",
+          keyId: "test",
+          nonce: "nonce",
+          ciphertext: Buffer.from(String(body || "")).toString("base64"),
+        },
+      });
+    }
+  };
+  return () => {
+    globalThis.XMLHttpRequest = previous;
+  };
+}
+
+function encryptedTimelineEnvelope(keyId = "old-key") {
+  return {
+    version: 1,
+    schema: PRIVACY_SCHEMA,
+    encrypted: true,
+    algorithm: "AES-256-GCM",
+    keyId,
+    nonce: "nonce",
+    ciphertext: "ciphertext",
+  };
 }
 
 function longMultilinePrompt() {
@@ -448,34 +491,6 @@ async function testFlushBeforeSerializationWritesPendingPromptWithoutRerender() 
   assert.equal(getHiddenTimeline(node).director_track.sections[0].prompt, prompt);
   assert.equal(renderCount, 0);
   assert.equal(node.dirtyCalls.length, 0);
-
-  const serialized = node.widgets.find((widget) => widget.name === "video_timeline_json").value;
-  const revision = controller.timeline.ui_state.state_revision;
-  controller.flushTimelineBeforeSerialization();
-  assert.equal(
-    node.widgets.find((widget) => widget.name === "video_timeline_json").value,
-    serialized,
-  );
-  assert.equal(
-    controller.timeline.ui_state.state_revision,
-    revision,
-    "settled serialization must not create a new edit generation",
-  );
-}
-
-async function testPreparedGenerationPersistsWithoutRevisionOrValidationDrift() {
-  const node = createNode();
-  const controller = createController(node);
-  controller.timeline.project.global_prompt.prompt = "prepared generation";
-
-  controller.prepareTimelineGeneration();
-  const preparedRevision = controller.timeline.ui_state.state_revision;
-  const preparedValidation = JSON.stringify(controller.timeline.validation);
-  controller.commitTimelineChange("prompt typing", { preparedGeneration: true });
-
-  assert.equal(controller.timeline.ui_state.state_revision, preparedRevision);
-  assert.equal(JSON.stringify(controller.timeline.validation), preparedValidation);
-  assert.deepEqual(getHiddenTimeline(node), controller.timeline);
 }
 
 async function testExtensionFlushesBeforeNodeSerialize() {
@@ -737,48 +752,283 @@ async function testReplaceTimelineClearsLibraryLinkAndIsUndoable() {
   assert.equal(restored.director_track.sections.length, 1);
 }
 
-async function testPrivateMutationFailsClosedUntilSharedCoordinatorBinds() {
-  const node = createNode();
-  const original = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
-  const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
-  assert.throws(
-    () => controller.updateTimeline((timeline) => {
-      timeline.project.global_prompt.prompt = "SYNTHETIC_PRIVATE_CANARY";
-    }, "privacy"),
-    /PRIVACY_DIRECTOR_INSTALLATION_BLOCKED/,
-  );
-  const hiddenValue = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
-  assert.equal(hiddenValue, original);
-  assert.equal(hiddenValue.includes("SYNTHETIC_PRIVATE_CANARY"), false);
-  assert.equal(controller.timeline, null);
+async function testPrivacyModeWritesEncryptedHiddenWidget() {
+  const restoreXhr = installPrivacyXhrStub();
+  try {
+    const node = createNode();
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
+
+    controller.updateTimeline((timeline) => {
+      timeline.project.global_prompt.prompt = "private global";
+      timeline.assets.push({
+        asset_id: "asset_001",
+        type: "Image",
+        source_kind: "FilePath",
+        path: "/private/reference.png",
+        name: "reference.png",
+      });
+      timeline.assets.push({
+        asset_id: "asset_video_001",
+        type: ASSET_TYPE_VIDEO,
+        source_kind: ASSET_SOURCE_GENERATED,
+        path: "/private/generated.mp4",
+        name: "generated.mp4",
+      });
+      timeline.director_track.sections.push({
+        item_id: "section_001",
+        type: "Image",
+        start_time: 0,
+        end_time: 1,
+        prompt: "private prompt",
+        image: { asset_id: "asset_001" },
+      });
+      timeline.sequence.shots.push({
+        shot_id: "shot_private",
+        name: "private shot",
+        type: "Generated",
+        start_time: 0,
+        end_time: 1,
+        section_ids: ["section_001"],
+        lora_overrides: {
+          enabled: true,
+          merge_mode: "Replace Global",
+          targets: {
+            [MODEL_LORA_MODEL_LTX_2_3]: {
+              [MODEL_LORA_TARGET_MAIN]: {
+                version: 1,
+                loras: [{ enabled: true, name: "private-lora.safetensors", strength_model: 1, strength_clip: 1 }],
+                ui: { show_strengths: "single", match: "private lora" },
+              },
+            },
+          },
+        },
+        takes: [{
+          take_id: "take_private",
+          asset_id: "asset_video_001",
+          status: "Candidate",
+          resolved_loras: {
+            model_family: "LTX",
+            model_version: "2.3",
+            targets: {
+              [MODEL_LORA_TARGET_MAIN]: [{ enabled: true, name: "private-take-lora.safetensors", strength_model: 1, strength_clip: 1 }],
+            },
+          },
+          metadata: { prompt: "private take prompt" },
+        }],
+        accepted_take_id: null,
+        clip_instance: { asset_id: "asset_video_001", source_in: 0, source_out: null, speed: 1, enabled: true },
+        metadata: {},
+      });
+    }, "privacy");
+
+    const hiddenValue = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
+    const payload = JSON.parse(hiddenValue);
+    assert.equal(payload.encrypted, true);
+    assert.equal(payload.schema, PRIVACY_SCHEMA);
+    assert.equal(hiddenValue.includes("private prompt"), false);
+    assert.equal(hiddenValue.includes("reference.png"), false);
+    assert.equal(hiddenValue.includes("private shot"), false);
+    assert.equal(hiddenValue.includes("private-lora.safetensors"), false);
+    assert.equal(hiddenValue.includes("private-take-lora.safetensors"), false);
+    assert.equal(hiddenValue.includes("private take prompt"), false);
+    assert.equal(hiddenValue.includes("generated.mp4"), false);
+  } finally {
+    restoreXhr();
+  }
 }
 
-async function testNewPrivateNodeDoesNotWriteBeforeSharedCoordinatorBinds() {
-  const node = createNode({ timelineValue: "" });
-  const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
-  assert.equal(node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value, "");
-  assert.equal(controller.managedPrivacy, null);
+async function testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget() {
+  const restoreXhr = installPrivacyXhrStub();
+  try {
+    const node = createNode({ timelineValue: "" });
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
+
+    const hiddenValue = node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value;
+    const payload = JSON.parse(hiddenValue);
+    const request = JSON.parse(Buffer.from(payload.ciphertext, "base64").toString("utf8"));
+    assert.equal("privacy" in controller.timeline.project, false);
+    assert.equal(payload.encrypted, true);
+    assert.equal(payload.schema, PRIVACY_SCHEMA);
+    assert.equal("privacy" in request.state.timeline.project, false);
+  } finally {
+    restoreXhr();
+  }
 }
 
-async function testEncryptedWorkflowLoadStaysLockedForSharedCoordinator() {
+async function testEncryptedWorkflowLoadDecryptsBeforeRender() {
   const previousFetch = globalThis.fetch;
-  let fetchCalls = 0;
   const node = createNode();
   node.widgets.find((widget) => widget.name === VIDEO_TIMELINE_WIDGET).value = JSON.stringify({
     version: 1,
-    schema: "helto.timeline-director",
+    schema: PRIVACY_SCHEMA,
     encrypted: true,
     algorithm: "AES-256-GCM",
     keyId: "test",
     nonce: "nonce",
     ciphertext: "cipher",
   });
-  globalThis.fetch = async () => { fetchCalls += 1; throw new Error("unexpected fetch"); };
+  globalThis.fetch = async () => ({
+    ok: true,
+    statusText: "OK",
+    text: async () => JSON.stringify({
+      ok: true,
+      state: {
+        timeline: {
+          type: "VIDEO_TIMELINE",
+          project: { privacy: { mode: true } },
+          director_track: {
+            sections: [{
+              item_id: "section_001",
+              type: "Text",
+              start_time: 0,
+              end_time: 1,
+              prompt: "decrypted prompt",
+            }],
+          },
+        },
+      },
+    }),
+  });
   try {
     const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
-    assert.equal(controller.timeline, null);
-    assert.equal(controller.privacyError, "Private timeline locked");
-    assert.equal(fetchCalls, 0);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(controller.timeline.director_track.sections[0].prompt, "decrypted prompt");
+    assert.equal("privacy" in controller.timeline.project, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testMissingPrivacyKeyIsPreservedWhenResetIsDeclined() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  const original = JSON.stringify(encryptedTimelineEnvelope("missing-key"));
+  widget.value = original;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_KEY_MISSING: old key is unavailable" }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, {
+      globalSettings: PRIVATE_GLOBAL_SETTINGS,
+      confirmUnreadablePrivacyReset: async () => false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(widget.value, original);
+    assert.equal(controller.globalSettings.privacy.mode, true);
+    assert.equal(controller.timeline.director_track.sections.length, 0);
+    assert.match(controller.privacyError, /encrypted value was preserved/i);
+    assert.equal(node.dirtyCalls.length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testMissingPrivacyKeyResetsTimelineAndDisablesPrivacyWhenConfirmed() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  widget.value = JSON.stringify(encryptedTimelineEnvelope());
+  const savedSettings = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_KEY_MISSING: old key is unavailable" }),
+      };
+    }
+    if (String(url).endsWith("/global_settings") && options.method === "POST") {
+      const settings = JSON.parse(options.body);
+      savedSettings.push(settings);
+      return { ok: true, json: async () => ({ ok: true, settings }) };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, {
+      globalSettings: PRIVATE_GLOBAL_SETTINGS,
+      confirmUnreadablePrivacyReset: async () => true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(controller.globalSettings.privacy.mode, false);
+    assert.equal(savedSettings.at(-1).privacy.mode, false);
+    assert.equal(JSON.parse(widget.value).encrypted, undefined);
+    assert.equal(controller.timeline.director_track.sections.length, 0);
+    assert.match(controller.privacyError, /reset to defaults/i);
+    assert(node.dirtyCalls.length > 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testWrongPrivacyKeyReencryptsDefaultTimelineWhenResetIsConfirmed() {
+  const previousFetch = globalThis.fetch;
+  const restoreXhr = installPrivacyXhrStub();
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  widget.value = JSON.stringify(encryptedTimelineEnvelope("wrong-key"));
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_KEY_MISMATCH: wrong key" }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, {
+      globalSettings: PRIVATE_GLOBAL_SETTINGS,
+      confirmUnreadablePrivacyReset: async () => true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const payload = JSON.parse(widget.value);
+    assert.equal(payload.encrypted, true);
+    assert.equal(payload.keyId, "test");
+    assert.equal(controller.globalSettings.privacy.mode, true);
+    assert.equal(controller.timeline.director_track.sections.length, 0);
+    assert.match(controller.privacyError, /reset to defaults/i);
+  } finally {
+    restoreXhr();
+    globalThis.fetch = previousFetch;
+  }
+}
+
+async function testLockedPrivacyKeyPreservesEncryptedTimeline() {
+  const previousFetch = globalThis.fetch;
+  const node = createNode();
+  const widget = node.widgets.find((candidate) => candidate.name === VIDEO_TIMELINE_WIDGET);
+  const original = JSON.stringify(encryptedTimelineEnvelope("locked-key"));
+  widget.value = original;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/decrypt")) {
+      return {
+        ok: false,
+        statusText: "Error",
+        text: async () => JSON.stringify({ error: "PRIVACY_LOCKED: unlock required" }),
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    const controller = createController(node, { globalSettings: PRIVATE_GLOBAL_SETTINGS });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(widget.value, original);
+    assert.match(controller.privacyError, /locked/i);
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -794,7 +1044,6 @@ await testUndoRedoUpdatesStateAndWidget();
 await testSequenceTakeAndLoraStructuresSerializeAndUndoRedo();
 await testDebouncedCommit();
 await testFlushBeforeSerializationWritesPendingPromptWithoutRerender();
-await testPreparedGenerationPersistsWithoutRevisionOrValidationDrift();
 await testExtensionFlushesBeforeNodeSerialize();
 await testGestureMouseupCommitBoundary();
 await testDeleteKeyRemovesSelectedItem();
@@ -807,8 +1056,12 @@ await testDeleteKeyIsIgnoredInsideDirectorLibraryDialog();
 await testDeleteKeyIsIgnoredWhileTyping();
 await testUndoRestoresDeleteKeyRemoval();
 await testReplaceTimelineClearsLibraryLinkAndIsUndoable();
-await testPrivateMutationFailsClosedUntilSharedCoordinatorBinds();
-await testNewPrivateNodeDoesNotWriteBeforeSharedCoordinatorBinds();
-await testEncryptedWorkflowLoadStaysLockedForSharedCoordinator();
+await testPrivacyModeWritesEncryptedHiddenWidget();
+await testNewNodeDefaultsPrivateAndWritesEncryptedHiddenWidget();
+await testEncryptedWorkflowLoadDecryptsBeforeRender();
+await testMissingPrivacyKeyIsPreservedWhenResetIsDeclined();
+await testMissingPrivacyKeyResetsTimelineAndDisablesPrivacyWhenConfirmed();
+await testWrongPrivacyKeyReencryptsDefaultTimelineWhenResetIsConfirmed();
+await testLockedPrivacyKeyPreservesEncryptedTimeline();
 
 console.log("timeline state tests passed");

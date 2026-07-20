@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from copy import deepcopy
 from fractions import Fraction
 import json
@@ -25,13 +24,7 @@ from ...shared.timeline.project_storage import (
 from ...shared.timeline.take_registration import (
     TakeRegistrationError,
     prepare_take_registration,
-)
-from ...shared.timeline.managed_execution import consume_director_subject_mode_for_binding
-from ...shared.timeline.managed_install import director_privacy_pack
-from ...shared.timeline.managed_take_privacy import (
-    DirectorManagedTakeService,
-    TAKE_CAPTURE_SUBJECT_MODE_BINDING_ID,
-    TAKE_OPERATION_RESOURCE_ID,
+    register_generated_take,
 )
 
 
@@ -105,13 +98,6 @@ class TimelineTakeCapture(io.ComfyNode):
                     default=True,
                     socketless=True,
                 ),
-                io.String.Input(
-                    "privacy_mode_reference",
-                    default="",
-                    socketless=True,
-                    advanced=True,
-                    extra_dict={"hidden": True},
-                ),
             ],
             outputs=[
                 VIDEO_TIMELINE.Output("video_timeline", display_name="VIDEO_TIMELINE"),
@@ -122,7 +108,6 @@ class TimelineTakeCapture(io.ComfyNode):
             ],
             is_output_node=True,
             not_idempotent=True,
-            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -172,8 +157,6 @@ class TimelineTakeCapture(io.ComfyNode):
         filename_prefix: str = DEFAULT_FILENAME_PREFIX,
         accept: bool = False,
         update_clip_instance: bool = True,
-        privacy_mode_reference: str = "",
-        _subject_mode_lease: object = None,
     ) -> io.NodeOutput:
         video_timeline = normalize_video_timeline(video_timeline)
         runtime_context = None if runtime_context is _MISSING else runtime_context
@@ -203,32 +186,6 @@ class TimelineTakeCapture(io.ComfyNode):
                     "",
                     _registration_not_ready_debug_info(video_timeline, runtime_context, registration_status),
                     ui=None,
-                )
-        subject_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
-        if _subject_mode_lease is None:
-            if not privacy_mode_reference or subject_id is None:
-                raise TakeRegistrationError(
-                    "TAKE_CAPTURE_PRIVACY_REFERENCE_REQUIRED: Shared privacy reference is required."
-                )
-            with consume_director_subject_mode_for_binding(
-                privacy_mode_reference,
-                TAKE_CAPTURE_SUBJECT_MODE_BINDING_ID,
-                subject_id,
-            ) as lease:
-                return cls.execute(
-                    video_timeline,
-                    runtime_context,
-                    video,
-                    images,
-                    audio,
-                    frame_rate,
-                    take_registration_json,
-                    generated_asset_path,
-                    shot_id_override,
-                    filename_prefix,
-                    accept,
-                    update_clip_instance,
-                    _subject_mode_lease=lease,
                 )
         registration_input = _registration_from_inputs(
             runtime_context=runtime_context,
@@ -265,46 +222,38 @@ class TimelineTakeCapture(io.ComfyNode):
             update_clip_instance=bool(update_clip_instance),
         )
         registration = _merge_media_metadata_into_registration(registration, media_payload)
-        sidecar = build_generated_take_capture_sidecar(
+        result = register_generated_take(video_timeline, registration)
+        sidecar_path = _write_capture_sidecar(
+            media_path,
             registration,
-            media={
-                **media_payload,
-                "path": media_path,
-                "filename": media_payload.get("filename") or Path(media_path).name,
-                "mime_type": media_payload.get("mime_type")
-                or mimetypes.guess_type(media_path)[0]
-                or "video/mp4",
-            },
+            media_payload=media_payload,
+            asset_id=result["asset_id"],
+            take_id=result["take_id"],
+            timeline=result["timeline"],
         )
-        deferred = asyncio.run(
-            DirectorManagedTakeService(
-                operations=director_privacy_pack().operations(TAKE_OPERATION_RESOURCE_ID)
-            ).capture(
-                video_timeline,
-                registration,
-                subject_mode=_subject_mode_lease,
-                generated_asset_path=media_path,
-                accept=bool(accept),
-                update_clip_instance=bool(update_clip_instance),
-                sidecar=sidecar,
-                preview=None,
-            )
+        debug_info = _debug_info(
+            result,
+            media_payload=media_payload,
+            sidecar_path=sidecar_path,
+            saved_result=saved_result,
         )
-        safe_debug = {
-            "type": "DEBUG_INFO",
-            "source": "Timeline Take Capture",
-            "summary": dict(deferred.safe_ui),
-        }
+        preview = _take_capture_preview_ui(result["timeline"], saved_result)
+        preview = _with_take_capture_result_ui(
+            preview,
+            _take_capture_result_ui_payload(
+                result,
+                registration=registration,
+                media_payload=media_payload,
+                debug_info=debug_info,
+            ),
+        )
         return io.NodeOutput(
-            video_timeline,
+            result["timeline"],
             video_output,
-            "",
-            "",
-            safe_debug,
-            ui={
-                "helto_take_capture_managed_association": [deferred.association.id],
-                "helto_take_capture_safe": [dict(deferred.safe_ui)],
-            },
+            result["asset_id"],
+            result["take_id"],
+            debug_info,
+            ui=preview,
         )
 
 

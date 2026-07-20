@@ -23,10 +23,13 @@ import {
   mediaLabel,
   resolveMediaReference,
 } from "./media.js";
-import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS } from "./media_cache.js";
+import { MAX_WAVEFORM_PEAKS, MIN_WAVEFORM_PEAKS, mediaViewUrl, thumbnailUrl } from "./media_cache.js";
 import {
+  addPickedMediaItem,
+  attachPickedGeneratedVideoAsTake,
   deleteProjectTakeCapture,
   fetchProjectTakeCaptures,
+  replacePickedSectionMedia,
 } from "./media_actions.js";
 import {
   cloneProjectForDirectorLibrary,
@@ -37,6 +40,14 @@ import { showMediaPicker } from "./media_picker.js";
 import { showMediaPreview } from "./media_preview.js";
 import { showPromptOptimizer } from "./prompt_optimizer.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
+import {
+  ensureStoredPrivacyTokenCookie,
+  fetchPrivacyStatus,
+  hasPrivacyTokenCookie,
+  hasStoredPrivacyToken,
+  lockPrivacyKeystore,
+} from "./privacy.js";
+import { showPrivacyKeystoreDialog } from "./privacy_unlock.js";
 import {
   PROMPT_REFERENCE_TRIGGER,
   addCharacterReference,
@@ -74,7 +85,6 @@ import {
 } from "./global_settings.js";
 import {
   acceptTake,
-  addAudioClip,
   attachVideoAssetAsTake,
   addSection,
   adjacentShotPairs,
@@ -125,6 +135,7 @@ const INSPECTOR_EDITOR_HEIGHT = 260;
 const ROOT_GAP = 6;
 const NODE_BODY_HORIZONTAL_PADDING = 20;
 const NODE_BODY_BOTTOM_PADDING = NODE_BODY_HORIZONTAL_PADDING;
+const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";
 const CLEAR_TIMELINE_CONFIRMATION = "Clear current timeline? This will replace the current timeline with a new blank timeline and remove its Director Library link. Saved library items and media files will not be deleted.";
 const DELETE_MENU_LABELS = {
   Image: "Delete Image",
@@ -290,7 +301,6 @@ export class TimelineRenderer {
   }
 
   render(timeline = this.controller.timeline) {
-    if (!timeline) return this.renderLocked();
     this.closeContextMenu({ rerender: false });
     this.contentHeight = getTimelineWidgetHeight(timeline);
     this.ensureNodeFitsContent(timeline);
@@ -331,23 +341,6 @@ export class TimelineRenderer {
     this.container.append(root);
     this.updateMeasuredContentHeight(timeline);
     this.scheduleViewportRemeasure();
-  }
-
-  renderLocked() {
-    this.closeContextMenu({ rerender: false });
-    this.cancelViewportRemeasure();
-    this.contentHeight = TOOLBAR_HEIGHT + ROOT_GAP * 2;
-    this.viewportWidth = this.measureViewportWidth();
-    this.applyViewportContainerWidth(this.viewportWidth);
-    this.applyWidgetContainerHeight(this.contentHeight, this.contentHeight);
-    this.container.replaceChildren();
-    const root = el("div", "htd-root is-private");
-    root.style.width = `${this.viewportWidth}px`;
-    const status = el("div", "htd-privacy-status");
-    status.textContent = this.controller.privacyError || "Private timeline locked";
-    status.setAttribute("role", "status");
-    root.append(status);
-    this.container.append(root);
   }
 
   setPrivacyRevealActive(active) {
@@ -1157,11 +1150,8 @@ export class TimelineRenderer {
       items: [],
     };
     if (options.rerender) this.render();
-    fetchProjectTakeCaptures(
-      timeline,
-      shot.shot_id,
-      this.controller.managedPrivacy?.media,
-    )
+    const privacyMode = Boolean(this.isGlobalPrivacyMode() && !this.isPrivacyRevealed(timeline));
+    fetchProjectTakeCaptures(timeline, shot.shot_id, privacyMode)
       .then((payload) => {
         if (this.availableCaptures.key !== key) return;
         this.availableCaptures = {
@@ -1404,16 +1394,17 @@ export class TimelineRenderer {
     });
     remove.classList.add("is-danger");
     const attach = iconButton("insert", existing ? "Capture already attached" : "Attach Project Capture As Take", () => {
-      this.attachManagedProjectCapture(shot, item, false);
+      this.commitMutation((currentTimeline) => {
+        attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
+      }, "attach project capture");
     }, { disabled: Boolean(existing) });
     const accept = iconButton("accept", existing?.status === "Accepted" ? "Capture already accepted" : existing ? "Accept attached capture" : "Attach And Accept Project Capture", () => {
-      if (existing) {
-        this.commitMutation((currentTimeline) => {
-          acceptTake(currentTimeline, shot.shot_id, existing.take_id);
-        }, "accept project capture");
-      } else {
-        this.attachManagedProjectCapture(shot, item, true);
-      }
+      this.commitMutation((currentTimeline) => {
+        const liveShot = findShot(currentTimeline, shot.shot_id);
+        const liveExisting = findAttachedTakeForCapture(currentTimeline, liveShot, item);
+        const result = liveExisting ? { take: liveExisting } : attachPickedGeneratedVideoAsTake(currentTimeline, shot.shot_id, item);
+        if (result?.take) acceptTake(currentTimeline, shot.shot_id, result.take.take_id);
+      }, "accept project capture");
     }, { disabled: existing?.status === "Accepted" });
     const reject = iconButton("reject", !existing ? "Attach capture before rejecting" : existing.status === "Rejected" ? "Capture already rejected" : "Mark Take Rejected", () => {
       if (!existing) return;
@@ -2002,25 +1993,18 @@ export class TimelineRenderer {
     thumb.type = "button";
     thumb.title = image?.path || reference.label || "Character reference";
     if (image?.path) {
-      const thumbnail = this.node?._timelineMediaCache?.requestThumbnail?.(image, 180);
-      if (thumbnail) {
-        const img = el("img");
-        img.src = thumbnail;
-        img.alt = reference.label || "Character reference";
-        thumb.append(img);
-      } else {
-        thumb.append(createIconElement("references"));
-      }
-      thumb.addEventListener("click", async (event) => {
+      const img = el("img");
+      img.src = thumbnailUrl(image, 180, privacyMode);
+      img.alt = reference.label || "Character reference";
+      thumb.append(img);
+      thumb.addEventListener("click", (event) => {
         if (!event.ctrlKey) return;
         event.preventDefault();
         event.stopPropagation();
         if (privacyMode && !card.matches(":hover")) return;
-        const url = await this.node?._timelineMediaCache?.acquireViewUrl?.(image);
-        if (!url) return;
         showMediaPreview(this.container.ownerDocument ?? globalThis.document, {
           type: ASSET_TYPE_IMAGE,
-          url,
+          url: mediaViewUrl(image),
           caption: reference.label || image.name || image.path,
         });
       });
@@ -2121,12 +2105,12 @@ export class TimelineRenderer {
     if (!liveReference) return;
     await withDisabledControl(control, async () => {
       try {
-        const payload = referenceLibraryPayload(liveReference, privacyMode);
-        const receipt = await this.requireManagedLibrary().characters.create(
-          payload.character,
-          { name: payload.name, description: payload.description },
-        );
-        const itemId = String(receipt?.recordId ?? "").trim();
+        const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(referenceLibraryPayload(liveReference, privacyMode)),
+        });
+        const itemId = String(data?.item?.id ?? "").trim();
         if (!itemId) throw new Error("Director Library did not return a character id.");
         this.commitMutation((timeline) => {
           stampReferenceLibraryItemId(timeline, reference, itemId);
@@ -2144,12 +2128,11 @@ export class TimelineRenderer {
     if (!liveReference) return;
     await withDisabledControl(control, async () => {
       try {
-        const payload = referenceLibraryPayload(liveReference, this.isGlobalPrivacyMode());
-        await this.requireManagedLibrary().characters.replace(
-          itemId,
-          payload.character,
-          { name: payload.name, description: payload.description },
-        );
+        await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(referenceLibraryPayload(liveReference, this.isGlobalPrivacyMode())),
+        });
       } catch (error) {
         this.alertReferenceLibraryError(error);
       }
@@ -2173,23 +2156,22 @@ export class TimelineRenderer {
     await withDisabledControl(control, async () => {
       try {
         if (itemId) {
-          const payload = projectLibraryPayload(this.controller.timeline, itemId, null, this.isGlobalPrivacyMode());
-          await this.requireManagedLibrary().projects.replace(
-            itemId,
-            payload.project,
-            { name: payload.name },
-          );
+          await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId, null, this.isGlobalPrivacyMode())),
+          });
           this.stampCurrentProjectLibraryItemId(itemId, { rerender: false });
           return;
         }
         const name = promptForProjectName(this.container.ownerDocument, this.controller.timeline);
         if (!name) return;
-        const payload = projectLibraryPayload(this.controller.timeline, "", name, this.isGlobalPrivacyMode());
-        const receipt = await this.requireManagedLibrary().projects.create(
-          payload.project,
-          { name: payload.name },
-        );
-        const nextItemId = String(receipt?.recordId ?? "").trim();
+        const data = await fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name, this.isGlobalPrivacyMode())),
+        });
+        const nextItemId = String(data?.item?.id ?? "").trim();
         if (!nextItemId) throw new Error("Director Library did not return a project id.");
         stampProjectName(this.controller.timeline, name);
         this.stampCurrentProjectLibraryItemId(nextItemId);
@@ -2209,12 +2191,6 @@ export class TimelineRenderer {
   alertProjectLibraryError(error) {
     const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
     alertFn?.(error?.message || "Could not update Director Library project.");
-  }
-
-  requireManagedLibrary() {
-    const library = this.controller.managedPrivacy?.library;
-    if (!library) throw new Error("PRIVACY_DIRECTOR_INSTALLATION_BLOCKED");
-    return library;
   }
 
   openReferenceManager() {
@@ -2368,16 +2344,52 @@ export class TimelineRenderer {
     const row = settingRow("Privacy Keystore");
     const wrap = el("div", "htd-privacy-keystore-setting");
     const status = el("span", "htd-privacy-keystore-setting-status");
-    const state = this.controller.managedPrivacy?.pack?.session?.state?.state;
-    status.textContent = state === "unlocked"
-      ? "Unlocked · managed by Helto Privacy"
-      : state === "setup-required"
-        ? "Setup required · use Helto Privacy controls"
-        : state === "locked"
-          ? "Locked · use Helto Privacy controls"
-          : "Shared privacy unavailable";
+    status.textContent = "Checking...";
     wrap.append(status);
     row.append(wrap);
+
+    const documentRef = this.container.ownerDocument ?? globalThis.document;
+    const refresh = () => this.render();
+    fetchPrivacyStatus()
+      .then((info) => {
+        status.textContent = !info.keystoreInitialized
+          ? "Not password protected"
+          : info.keystoreLocked
+            ? "Locked"
+            : "Unlocked";
+        const actions = [];
+        if (!info.keystoreInitialized) {
+          actions.push(button("Set Password", "Protect the privacy key with a password", async () => {
+            if (await showPrivacyKeystoreDialog("setup", { documentRef })) refresh();
+          }));
+        } else if (info.keystoreLocked) {
+          actions.push(button("Unlock", "Unlock the privacy keystore", async () => {
+            if (await showPrivacyKeystoreDialog("unlock", { documentRef })) refresh();
+          }));
+        } else {
+          if (!hasPrivacyTokenCookie(documentRef)) {
+            if (hasStoredPrivacyToken()) {
+              ensureStoredPrivacyTokenCookie(documentRef);
+            } else {
+              status.textContent = "Unlocked on server; unlock here to refresh media previews";
+              actions.push(button("Unlock", "Refresh this browser's privacy token", async () => {
+                if (await showPrivacyKeystoreDialog("unlock", { documentRef })) refresh();
+              }));
+            }
+          }
+          actions.push(button("Lock", "Lock the privacy keystore now", async () => {
+            await lockPrivacyKeystore();
+            refresh();
+          }));
+          actions.push(button("Change Password", "Change the privacy keystore password", async () => {
+            if (await showPrivacyKeystoreDialog("change", { documentRef })) refresh();
+          }));
+        }
+        wrap.append(...actions);
+      })
+      .catch((error) => {
+        status.textContent = `Status unavailable: ${error.message}`;
+      });
     return row;
   }
 
@@ -2813,7 +2825,7 @@ export class TimelineRenderer {
     const timeline = this.controller.timeline;
     if (this.isGlobalPrivacyMode() && (!this.privacyRevealActive || this.privacyExternalModalOpen)) return null;
     const asset = resolveMediaReference(timeline, section.image);
-    const url = this.node?._timelineMediaCache?.requestView?.(asset);
+    const url = mediaViewUrl(asset);
     if (!url) return null;
     return {
       type: ASSET_TYPE_IMAGE,
@@ -2825,7 +2837,7 @@ export class TimelineRenderer {
   takeVideoPreviewData(timeline, take, asset = null, privacyRevealed = this.isPrivacyRevealed(timeline)) {
     const resolvedAsset = asset ?? assetForId(timeline, take?.asset_id);
     if (!resolvedAsset || resolvedAsset.type !== ASSET_TYPE_VIDEO) return null;
-    const url = this.node?._timelineMediaCache?.requestView?.(resolvedAsset);
+    const url = mediaViewUrl(resolvedAsset);
     if (!url) return null;
     return {
       type: ASSET_TYPE_VIDEO,
@@ -2846,7 +2858,7 @@ export class TimelineRenderer {
       name: item?.name ?? item?.filename ?? registrationAsset.name ?? "Captured video",
       source_type: item?.source_type ?? registrationAsset.source_type ?? "",
     };
-    const url = this.node?._timelineMediaCache?.requestView?.(asset);
+    const url = mediaViewUrl(asset);
     if (!url) return null;
     return {
       type: ASSET_TYPE_VIDEO,
@@ -2878,35 +2890,8 @@ export class TimelineRenderer {
     const path = String(options.path ?? captureMediaPath(item)).trim();
     await this.deleteProjectTakePath(shot?.shot_id, path, {
       takeId: options.takeId || captureTakeId(item),
-      takeReference: item?.takeReference,
       label: options.label || captureSummaryLabel(item, this.isPrivacyRevealed(this.controller.timeline)),
     });
-  }
-
-  async attachManagedProjectCapture(shot, item, accept = false) {
-    const timeline = this.controller.timeline;
-    const projectRecordId = String(
-      timeline?.project?.metadata?.library_item_id ?? "",
-    ).trim();
-    const media = this.controller.managedPrivacy?.media;
-    if (
-      !media?.attachProjectTake
-      || !item?.sourceReference
-      || !item?.takeReference
-    ) {
-      throw new Error("PRIVACY_DIRECTOR_PROJECT_TAKE_ATTACH_UNAVAILABLE");
-    }
-    await media.attachProjectTake(
-      this.node,
-      deepClone(timeline),
-      item.sourceReference,
-      item.takeReference,
-      {
-        accept: accept === true,
-        projectRecordId,
-        shotId: shot?.shot_id,
-      },
-    );
   }
 
   async deleteProjectTakeFromTimelineTake(shot, take, asset, options = {}) {
@@ -2922,18 +2907,18 @@ export class TimelineRenderer {
     const privacyRevealed = this.isPrivacyRevealed(timeline);
     const label = privacyRevealed ? (options.label || "this take") : "this private take";
     const confirmFn = this.container.ownerDocument.defaultView?.confirm ?? globalThis.confirm;
-    if (!path && !options.takeId && !options.takeReference) {
+    if (!path && !options.takeId) {
       const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
       alertFn?.("Could not delete project take files.");
       return false;
     }
     if (!confirmFn?.(`Remove ${label} from the timeline and delete any remaining project take files?`)) return false;
     try {
-      if (options.takeReference) {
-        await deleteProjectTakeCapture(
-          this.controller.managedPrivacy?.media,
-          options.takeReference,
-        );
+      if (path) {
+        await deleteProjectTakeCapture(timeline, shotId, path, {
+          takeId: options.takeId,
+          privacyMode: Boolean(this.isGlobalPrivacyMode() && !privacyRevealed),
+        });
       }
       if (path || options.takeId) {
         this.commitMutation((currentTimeline) => {
@@ -2983,34 +2968,18 @@ export class TimelineRenderer {
         documentRef: this.container.ownerDocument,
         mode: options.mode ?? "add",
         privacyMode: this.isGlobalPrivacyMode(),
-        managedMedia: this.controller.managedPrivacy?.media,
       });
       if (!item) return;
-      const managedMedia = this.controller.managedPrivacy?.media;
-      if (!managedMedia?.attachSource || !item.reference) {
-        throw new Error("PRIVACY_DIRECTOR_MEDIA_UNAVAILABLE");
-      }
-      if (options.mode === "attach-generated-take") {
-        throw new Error("PRIVACY_DIRECTOR_PROJECT_TAKE_ATTACH_UNAVAILABLE");
-      }
-      const timeline = deepClone(this.controller.timeline);
-      let itemId = options.itemId;
-      if (options.mode !== "replace") {
-        const target = assetType === ASSET_TYPE_AUDIO
-          ? addAudioClip(
-            timeline,
-            Number(timeline.ui_state?.playhead_time ?? 0),
-            Number.isFinite(item.duration_seconds) && item.duration_seconds > 0
-              ? item.duration_seconds : 1,
-          )
-          : addSection(timeline, assetType);
-        itemId = target?.item_id;
-      }
-      if (!itemId) throw new Error("PRIVACY_DIRECTOR_MEDIA_TARGET_UNAVAILABLE");
-      await managedMedia.attachSource(this.node, timeline, item.reference, {
-        assetType,
-        itemId,
-      });
+      const reason = options.mode === "replace" ? "replace media" : "add";
+      this.commitMutation((timeline) => {
+        if (options.mode === "replace") {
+          replacePickedSectionMedia(timeline, options.itemId, assetType, item);
+        } else if (options.mode === "attach-generated-take") {
+          attachPickedGeneratedVideoAsTake(timeline, options.shotId, item);
+        } else {
+          addPickedMediaItem(timeline, assetType, item);
+        }
+      }, options.mode === "attach-generated-take" ? "attach generated take" : reason);
     } catch (error) {
       const alertFn = this.container.ownerDocument.defaultView?.alert ?? globalThis.alert;
       alertFn?.(error.message);
@@ -3030,7 +2999,6 @@ export class TimelineRenderer {
       app: this.app,
       documentRef: this.container.ownerDocument,
       privacyMode,
-      mediaCache: this.node?._timelineMediaCache,
       onClose: () => {
         if (!this.privacyExternalModalOpen) return;
         this.privacyExternalModalOpen = false;
@@ -3062,7 +3030,6 @@ export class TimelineRenderer {
       controller: this.controller,
       documentRef: this.container.ownerDocument,
       privacyMode,
-      mediaCache: this.node?._timelineMediaCache,
       onClose: () => {
         if (!this.privacyExternalModalOpen) return;
         this.privacyExternalModalOpen = false;
@@ -3821,6 +3788,19 @@ function promptForProjectName(documentRef, timeline) {
 
 function cloneReferenceForLibrary(reference) {
   return JSON.parse(JSON.stringify(reference ?? {}));
+}
+
+async function fetchDirectorLibraryJson(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || response.statusText || `HTTP ${response.status}`);
+  }
+  if (!response.ok || data.error) throw new Error(data.error || response.statusText || `HTTP ${response.status}`);
+  return data;
 }
 
 async function withDisabledControl(control, action) {

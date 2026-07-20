@@ -53,6 +53,7 @@ from shared.timeline import (
     validate_video_timeline,
 )
 from shared.timeline.take_capture import TAKE_CAPTURE_TYPE, build_take_capture_metadata
+import shared.timeline.take_capture as take_capture_module
 import shared.timeline.global_settings as timeline_global_settings
 
 
@@ -1188,6 +1189,11 @@ def test_ltx_take_registration_metadata_redacts_lora_names_in_privacy_mode(monke
 
     monkeypatch.setattr(lora_config_module, "_available_loras", lambda: ["private_style.safetensors"])
     monkeypatch.setattr(ltx_runtime, "apply_lora_config", fake_apply_lora_config)
+    monkeypatch.setattr(
+        take_capture_module.privacy_keystore,
+        "primary_session_key",
+        lambda: (b"synthetic-private-hash-key" * 2, "synthetic-key"),
+    )
     plan = _shot_text_plan(prompt="private prompt", privacy_mode=True)
     plan["model_specific"]["ltx"]["lora_resolution"]["single_generation_loras"] = {
         MODEL_LORA_TARGET_MAIN: _lora_stack("private_style.safetensors"),

@@ -7,12 +7,12 @@ from ...timeline.references import parse_reference_tags
 from ...timeline.global_settings import global_privacy_mode
 from ...ltx.identity import crop_images_to_frame_count, crop_latent_to_frame_count
 from ...segmented_executor import (
+    SegmentSpillStore,
     blend_segment_seam,
     build_segment_plan,
     cleanup_spill_store_once,
     decode_latent_images,
     external_sigmas_step_count,
-    managed_segment_spill_store,
     post_decode_memory_cleanup,
     previous_tail,
     sample_latent,
@@ -81,7 +81,7 @@ def build_ltx_segmented_executor_outputs(
     status_reporter.report("timeline.prepare", f"LTX Executor: preparing {len(segments)} segment(s)")
     privacy_mode = global_privacy_mode()
     sampling_debug = _sampling_schedule_debug(sigmas, steps, scheduler)
-    store = managed_segment_spill_store(privacy_mode=privacy_mode)
+    store = SegmentSpillStore(privacy_mode=privacy_mode)
     cleanup_state: dict[str, Any] = {}
     spill_records = []
     previous_images = None

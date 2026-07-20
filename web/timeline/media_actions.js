@@ -16,6 +16,9 @@ import {
   findSection,
 } from "./operations.js";
 import { attachMediaAsset, createFilePathAsset } from "./media.js";
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
+
+const MEDIA_BROWSER_ROUTE_PREFIX = "/helto_director/media_browser";
 
 
 export function createPickedMediaAsset(assetType, item) {
@@ -88,39 +91,42 @@ export function attachPickedGeneratedVideoAsTake(timeline, shotId, item, takeDat
   return take ? { asset: savedAsset, take } : null;
 }
 
-export async function fetchProjectTakeCaptures(timeline, shotId, managedMedia) {
-  if (typeof managedMedia?.listProjectTakes !== "function") {
-    throw new Error("PRIVACY_DIRECTOR_MEDIA_UNAVAILABLE");
-  }
-  const projectRecordId = String(timeline?.project?.metadata?.library_item_id ?? "").trim();
-  if (!/^hp-rec-[A-Za-z0-9_-]{32}$/.test(projectRecordId)) {
-    throw new Error("Save this project to Director Library before browsing project captures.");
-  }
-  const result = await managedMedia.listProjectTakes({
-    project_record_id: projectRecordId,
-    shot_id: String(shotId ?? ""),
+export async function fetchProjectTakeCaptures(timeline, shotId, privacyMode = false) {
+  if (privacyMode) ensureStoredPrivacyTokenCookie();
+  const response = await fetch(`${MEDIA_BROWSER_ROUTE_PREFIX}/project_takes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project: timeline?.project ?? {},
+      shot_id: shotId,
+      privacy: Boolean(privacyMode),
+    }),
   });
-  const details = Array.isArray(result?.data?.captures) ? result.data.captures : [];
-  const sources = result?.references?.sources ?? [];
-  const takes = result?.references?.takes ?? [];
-  if (sources.length !== takes.length) {
-    throw new Error("PRIVACY_DIRECTOR_MEDIA_INVALID");
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || "Failed to load project take captures.");
   }
-  return {
-    captures: sources.map((sourceReference, index) => ({
-      ...(details[index] ?? {}),
-      filename: details[index]?.filename || `Private capture ${index + 1}`,
-      sourceReference,
-      takeReference: takes[index],
-    })),
-  };
+  return payload;
 }
 
-export async function deleteProjectTakeCapture(managedMedia, takeReference) {
-  if (typeof managedMedia?.deleteProjectTake !== "function" || !takeReference) {
-    throw new Error("PRIVACY_DIRECTOR_MEDIA_UNAVAILABLE");
+export async function deleteProjectTakeCapture(timeline, shotId, path, options = {}) {
+  ensureStoredPrivacyTokenCookie();
+  const response = await fetch(`${MEDIA_BROWSER_ROUTE_PREFIX}/project_takes/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project: timeline?.project ?? {},
+      shot_id: shotId,
+      path,
+      take_id: options.takeId ?? "",
+      privacy: Boolean(options.privacyMode),
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || "Failed to delete project take.");
   }
-  return managedMedia.deleteProjectTake(takeReference);
+  return payload;
 }
 
 export function registerGeneratedTakePayload(timeline, shotId, payload) {

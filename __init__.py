@@ -62,27 +62,44 @@ LTXTimelineIdentityAnchorLatentAware = _identity_module.LTXTimelineIdentityAncho
 LTXTimelineIdentityAnchorFace = _identity_module.LTXTimelineIdentityAnchorFace
 LTXTimelineIdentityAnchorCombine = _identity_module.LTXTimelineIdentityAnchorCombine
 LTXTimelineApplyIdentityAnchor = _identity_module.LTXTimelineApplyIdentityAnchor
+register_media_cache_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.media_cache"
+).register_media_cache_routes
+register_media_browser_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.media_browser"
+).register_media_browser_routes
 register_prompt_optimizer_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.prompt_optimizer"
 ).register_prompt_optimizer_routes
+register_privacy_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.privacy"
+).register_privacy_routes
 register_global_settings_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.global_settings"
 ).register_global_settings_routes
+register_timeline_library_routes = importlib.import_module(
+    f"{_PACKAGE_NAME}.routes.timeline_library"
+).register_timeline_library_routes
 register_lora_info_routes = importlib.import_module(
     f"{_PACKAGE_NAME}.routes.lora_info"
 ).register_lora_info_routes
-install_director_privacy = importlib.import_module(
-    f"{_PACKAGE_NAME}.shared.timeline.managed_install"
-).install_director_privacy
-register_director_managed_privacy_routes = importlib.import_module(
-    f"{_PACKAGE_NAME}.routes.managed_privacy"
-).register_director_managed_privacy_routes
 
-_director_privacy_pack = install_director_privacy()
-register_director_managed_privacy_routes(_director_privacy_pack)
+register_privacy_routes()
 register_global_settings_routes()
+register_media_cache_routes()
+register_media_browser_routes()
 register_prompt_optimizer_routes()
+register_timeline_library_routes()
 register_lora_info_routes()
+
+try:
+    from helto_privacy import register_helto_privacy_ui
+
+    register_helto_privacy_ui(legacy_key_dir=_PACKAGE_ROOT / "config")
+except Exception as _helto_privacy_exc:  # noqa: BLE001 - shared UI is optional; local routes still work.
+    import logging
+
+    logging.debug("Helto shared privacy UI unavailable: %s", _helto_privacy_exc)
 
 
 WEB_DIRECTORY = "./web"
@@ -175,11 +192,13 @@ __all__ = [
     "WANTimelinePlanner",
     "WANTimelineRuntime",
     "WANTimelineSegmentedExecutor",
+    "register_media_browser_routes",
+    "register_media_cache_routes",
     "register_global_settings_routes",
+    "register_privacy_routes",
     "register_prompt_optimizer_routes",
+    "register_timeline_library_routes",
     "register_lora_info_routes",
-    "register_director_managed_privacy_routes",
-    "install_director_privacy",
     "HeltoTimelineLoraConfiguration",
     "TimelineTakeCapture",
     "TimelineSequenceAssembler",

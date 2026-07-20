@@ -1,45 +1,24 @@
-# Managed Privacy Boundaries
+# Privacy Mode Limitations
 
-Privacy Mode is enabled by default for new Director projects and is governed by
-the verified shared Helto privacy suite.
+Privacy Mode is enabled by default for new Director projects. It is a local workflow-state and preview-cache protection feature for this nodepack.
 
-## Protected by the Director profile
+## Protected
 
-- Timeline state is saved and queued through the managed workflow snapshot;
-  locked or unreadable private state is preserved byte-for-byte and never
-  replaced with defaults.
-- Project and character library data uses managed records with minimal locked
-  shells and authorized preview/use operations.
-- Folder settings, capture state, take metadata, sidecars, thumbnails,
-  waveforms, and timeline segment spills use declared singleton, operation, or
-  artifact resources with the global Director privacy mode as their floor.
-- Browser media uses opaque references and short-lived shared leases. Raw paths
-  and private names are not placed in thumbnail, waveform, or view URLs.
-- Private prompts, labels, media, and diagnostics are concealed or redacted by
-  the managed browser adapters until the shared session permits their intended
-  product view.
-- Privacy-mode transitions include all declared Director participants and
-  either complete with verified read-back or leave the prior mode authoritative.
+- The hidden `video_timeline_json` widget is encrypted before workflow serialization.
+- Timeline prompts, media references, filenames, assets, and picker-derived timeline metadata are inside that encrypted payload.
+- Director timeline content is visually masked when the cursor is outside the node.
+- Picker and prompt optimizer media/text content is visually masked outside their panels.
+- When global Privacy Mode is enabled, Director-generated thumbnails and waveforms are stored encrypted in ComfyUI temp under `helto_timeline_director`. Media requests may opt into this protection, but cannot opt out of the global setting.
+- Enabling global Privacy Mode removes existing plaintext Director thumbnail and waveform caches before the setting is saved. If cleanup fails, Privacy Mode is not changed.
 
-## Outside this profile
+## Not Protected
 
-- Original user media remains in its existing location. Director validates
-  allowed roots but does not move or encrypt the original file.
-- Other ComfyUI node packs are protected only by their own profiles in the same
-  exact suite.
-- Model weights, ordinary ComfyUI outputs, GPU memory, and third-party node
-  behavior are outside the Director profile.
-- A trusted local ComfyUI process and OS account remain part of the threat
-  boundary. Do not expose an unencrypted, unauthenticated ComfyUI endpoint to
-  an untrusted network.
+- Original media files remain in their original locations and are not encrypted or moved.
+- Other ComfyUI nodes and their widget values are not encrypted by this nodepack.
+- Public Director widgets such as duration, frame rate, aspect ratio, orientation, and quality preset remain clear text.
+- Runtime tensors and normal ComfyUI execution artifacts are outside this feature's scope.
+- Without a privacy keystore (see `docs/privacy_keystore.md`), anyone who can reach the ComfyUI HTTP port can call `POST /helto_director/privacy/decrypt` and recover the plaintext of any envelope, because ComfyUI has no authentication and the key lives on the server. With a keystore, those routes additionally require the session token issued at unlock. Privacy Mode protects data at rest (saved workflows, shared JSON, preview caches) — it assumes the ComfyUI server itself is trusted and reachable only by you (localhost, or a network you control). Do not expose the server with `--listen` on untrusted networks and expect Privacy Mode to hold; passwords and tokens travel over the plain HTTP connection.
 
-## Fail-closed behavior
+If privacy encryption or decryption fails, the Director should fail clearly rather than silently saving private timeline content as clear text.
 
-A missing or mismatched shared package, inactive suite, incomplete adapter set,
-locked session, transition in progress, invalid reference, or failed managed
-write blocks the operation. The supported Director candidate has no positive
-local privacy fallback and never intentionally serializes private timeline
-content as plaintext after a privacy failure.
-
-Existing workflows explicitly saved in public mode remain public until an
-authorized complete transition changes their authoritative mode.
+Existing workflows that explicitly saved Privacy Mode off remain public until the user turns it back on.

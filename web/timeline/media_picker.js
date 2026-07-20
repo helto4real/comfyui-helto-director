@@ -9,6 +9,10 @@ import {
 } from "./media_preview.js";
 import { htdScrollbarBlock, htdTokenBlock } from "./design_tokens.js";
 import { setupOverlayDialog } from "./dialog.js";
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
+
+
+const ROUTE_PREFIX = "/helto_director/media_browser";
 const COLUMN_STORAGE_KEY = "helto_director_media_picker_columns";
 const COLUMN_DEFAULT = 4;
 const COLUMN_MIN = 2;
@@ -35,73 +39,9 @@ export function closeMediaPicker(documentRef = globalThis.document) {
   closeMediaPreview(documentRef);
 }
 
-function managedMediaProvider(value) {
-  const required = [
-    "addFolder", "listFolders", "listItems", "removeFolder", "viewSource",
-  ];
-  if (!value || required.some((name) => typeof value[name] !== "function")) {
-    throw new Error("PRIVACY_DIRECTOR_MEDIA_UNAVAILABLE");
-  }
-  return Object.freeze({
-    async listFolders(mediaType) {
-      const result = await value.listFolders({ media_type: mediaType });
-      const details = Array.isArray(result?.data?.folders) ? result.data.folders : [];
-      return (result?.references?.folders ?? []).map((reference, index) => {
-        const detail = details[index] ?? {};
-        return Object.freeze({
-          ...detail,
-          alias: reference.id,
-          media_type: mediaType,
-          display_name: detail.display_name || `Private folder ${index + 1}`,
-          path: detail.path || "",
-          exists: detail.exists !== false,
-          removable: detail.alias !== "input",
-          reference,
-        });
-      });
-    },
-    async listItems(folder, recursive) {
-      const result = await value.listItems(folder.reference, { recursive: recursive !== false });
-      const details = Array.isArray(result?.data?.items) ? result.data.items : [];
-      return Promise.all((result?.references?.sources ?? []).map(async (reference, index) => {
-        const detail = details[index] ?? {};
-        const view = await value.viewSource(reference);
-        const preview = folder.media_type === "audio"
-          ? view
-          : await value.previewSource(reference);
-        const label = detail.filename || `Private media ${index + 1}`;
-        return Object.freeze({
-          ...detail,
-          filename: label,
-          name: detail.name || label,
-          thumb_url: preview.url,
-          view_url: view.url,
-          reference,
-        });
-      }));
-    },
-    async addFolder(mediaType, directory) {
-      const result = await value.addFolder({ media_type: mediaType, directory });
-      const reference = result?.references?.folders?.[0];
-      if (!reference) throw new Error("PRIVACY_DIRECTOR_MEDIA_INVALID");
-      return Object.freeze({
-        alias: reference.id,
-        display_name: "Private folder",
-        path: "",
-        exists: true,
-        removable: true,
-        reference,
-      });
-    },
-    async removeFolder(folder) {
-      return value.removeFolder(folder.reference);
-    },
-  });
-}
-
-async function showVisualPicker({ assetType, node, documentRef, mode = "add", privacyMode = false, managedMedia }) {
+async function showVisualPicker({ assetType, node, documentRef, mode = "add", privacyMode = false }) {
   closeMediaPicker(documentRef);
-  const media = managedMediaProvider(managedMedia);
+  if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);
   const mediaType = mediaTypeForAsset(assetType);
   const isReference = mode === "reference";
   const isGeneratedTake = mode === "attach-generated-take";
@@ -264,21 +204,29 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
       syncGridVisibility();
     };
 
-    let loadedFolders = [];
     const loadFolders = async (preferredAlias = null) => {
-      loadedFolders = await media.listFolders(mediaType);
-      folderSelect.innerHTML = loadedFolders.map((folder) => (
+      const privacyQuery = privacyMode ? "?privacy=1" : "";
+      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders${privacyQuery}`);
+      folderSelect.innerHTML = data.folders.map((folder) => (
         `<option value="${escapeHtml(folder.alias)}" title="${escapeHtml(folder.path || folder.alias)}">${escapeHtml(folderDisplayName(folder))}${folder.exists ? "" : " (missing)"}</option>`
       )).join("");
-      const lastAlias = preferredAlias;
-      if (lastAlias && loadedFolders.some((folder) => folder.alias === lastAlias)) {
+      const propertyName = `helto_director_last_${mediaType}_folder_alias`;
+      const lastAlias = preferredAlias || node?.properties?.[propertyName];
+      if (lastAlias && data.folders.some((folder) => folder.alias === lastAlias)) {
         folderSelect.value = lastAlias;
       }
     };
 
     const loadItems = async () => {
-      const folder = loadedFolders.find((item) => item.alias === folderSelect.value);
-      availableItems = folder ? await media.listItems(folder, recursive) : [];
+      node.properties = node.properties || {};
+      node.properties[`helto_director_last_${mediaType}_folder_alias`] = folderSelect.value;
+      const params = new URLSearchParams({
+        alias: folderSelect.value,
+        recursive: recursive ? "1" : "0",
+      });
+      if (privacyMode) params.set("privacy", "1");
+      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/items?${params.toString()}`);
+      availableItems = data[mediaType === "image" ? "images" : "videos"] ?? [];
       selectedItem = null;
       renderGrid();
     };
@@ -295,7 +243,7 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
           documentRef,
           mediaType,
           currentAlias: folderSelect.value,
-          managedMedia,
+          privacyMode,
         });
         if (preferredAlias) {
           await loadFolders(preferredAlias);
@@ -353,9 +301,9 @@ async function showVisualPicker({ assetType, node, documentRef, mode = "add", pr
   });
 }
 
-async function showAudioPicker({ node, documentRef, privacyMode = false, managedMedia }) {
+async function showAudioPicker({ node, documentRef, privacyMode = false }) {
   closeMediaPicker(documentRef);
-  const media = managedMediaProvider(managedMedia);
+  if (privacyMode) ensureStoredPrivacyTokenCookie(documentRef);
   return new Promise((resolve) => {
     const overlay = documentRef.createElement("div");
     overlay.className = `pr-image-browser-dialog pr-audio-browser-dialog${privacyMode ? " privacy-mode" : ""}`;
@@ -502,23 +450,30 @@ async function showAudioPicker({ node, documentRef, privacyMode = false, managed
       syncPreviewButtons();
     };
 
-    let loadedFolders = [];
     const loadFolders = async (preferredAlias = null) => {
-      loadedFolders = await media.listFolders("audio");
-      folderSelect.innerHTML = loadedFolders.map((folder) => (
+      const privacyQuery = privacyMode ? "?privacy=1" : "";
+      const data = await fetchJson(`${ROUTE_PREFIX}/audio/folders${privacyQuery}`);
+      folderSelect.innerHTML = data.folders.map((folder) => (
         `<option value="${escapeHtml(folder.alias)}" title="${escapeHtml(folder.path || folder.alias)}">${escapeHtml(folderDisplayName(folder))}${folder.exists ? "" : " (missing)"}</option>`
       )).join("");
-      const lastAlias = preferredAlias;
-      if (lastAlias && loadedFolders.some((folder) => folder.alias === lastAlias)) {
+      const lastAlias = preferredAlias || node?.properties?.helto_director_last_audio_folder_alias;
+      if (lastAlias && data.folders.some((folder) => folder.alias === lastAlias)) {
         folderSelect.value = lastAlias;
       }
     };
 
     const loadAudios = async () => {
+      node.properties = node.properties || {};
+      node.properties.helto_director_last_audio_folder_alias = folderSelect.value;
       previewAudio.pause();
       playingFilename = null;
-      const folder = loadedFolders.find((item) => item.alias === folderSelect.value);
-      availableAudios = folder ? await media.listItems(folder, recursive) : [];
+      const params = new URLSearchParams({
+        alias: folderSelect.value,
+        recursive: recursive ? "1" : "0",
+      });
+      if (privacyMode) params.set("privacy", "1");
+      const data = await fetchJson(`${ROUTE_PREFIX}/audio/items?${params.toString()}`);
+      availableAudios = data.audios ?? [];
       selectedAudio = null;
       renderAudioList();
     };
@@ -544,7 +499,7 @@ async function showAudioPicker({ node, documentRef, privacyMode = false, managed
           documentRef,
           mediaType: "audio",
           currentAlias: folderSelect.value,
-          managedMedia,
+          privacyMode,
         });
         if (preferredAlias) {
           await loadFolders(preferredAlias);
@@ -575,8 +530,21 @@ async function showAudioPicker({ node, documentRef, privacyMode = false, managed
   });
 }
 
-function showFolderManager({ documentRef, mediaType, currentAlias = "", managedMedia }) {
-  const media = managedMediaProvider(managedMedia);
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(text || response.statusText || `HTTP ${response.status}`);
+  }
+  if (!response.ok || data.error) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+function showFolderManager({ documentRef, mediaType, currentAlias = "input", privacyMode = false }) {
+  ensureStoredPrivacyTokenCookie(documentRef);
   return new Promise((resolve) => {
     const overlay = documentRef.createElement("div");
     overlay.className = "pr-folder-manager-dialog";
@@ -614,7 +582,7 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "", managedM
     const status = overlay.querySelector(".pr-folder-manager-status");
 
     let changed = false;
-    let preferredAlias = currentAlias || "";
+    let preferredAlias = currentAlias || "input";
 
     const close = () => {
       overlay.remove();
@@ -633,7 +601,9 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "", managedM
     };
 
     const loadFolders = async () => {
-      renderFolders(await media.listFolders(mediaType));
+      const privacyQuery = privacyMode ? "?privacy=1" : "";
+      const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders${privacyQuery}`);
+      renderFolders(data.folders ?? []);
     };
 
     const renderFolders = (folders) => {
@@ -645,7 +615,7 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "", managedM
       }
 
       for (const folder of folders) {
-        const isDefault = folder.removable === false;
+        const isDefault = folder.alias === "input";
         const folderPath = folder.path || folder.alias;
         const item = documentRef.createElement("div");
         item.className = `pr-folder-manager-item${folder.exists ? "" : " is-missing"}`;
@@ -659,9 +629,9 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "", managedM
           if (isDefault) return;
           try {
             setStatus(`Removing ${folder.alias}...`);
-            await media.removeFolder(folder);
+            await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders?alias=${encodeURIComponent(folder.alias)}`, { method: "DELETE" });
             changed = true;
-            if (preferredAlias === folder.alias) preferredAlias = "";
+            if (preferredAlias === folder.alias) preferredAlias = "input";
             setStatus(`Removed ${folder.alias}.`);
             await loadFolders();
           } catch (error) {
@@ -681,12 +651,17 @@ function showFolderManager({ documentRef, mediaType, currentAlias = "", managedM
       try {
         addButton.disabled = true;
         setStatus(`Adding ${folderNameFromPath(path)}...`);
-        const added = await media.addFolder(mediaType, path);
+        const data = await fetchJson(`${ROUTE_PREFIX}/${mediaType}/folders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
         changed = true;
-        preferredAlias = added?.alias || preferredAlias;
+        const addedFolder = (data.folders ?? []).find((folder) => normalizePathForCompare(folder.path) === normalizePathForCompare(path));
+        preferredAlias = addedFolder?.alias || preferredAlias;
         pathInput.value = "";
         setStatus(`Added ${folderNameFromPath(path)}.`);
-        await loadFolders();
+        renderFolders(data.folders ?? []);
       } catch (error) {
         setStatus(error.message, true);
       } finally {

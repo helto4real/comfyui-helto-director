@@ -1,3 +1,5 @@
+import { ensureStoredPrivacyTokenCookie } from "./privacy.js";
+
 export const GLOBAL_SETTINGS_ROUTE = "/helto_director/global_settings";
 
 export const DEFAULT_GLOBAL_SETTINGS = {
@@ -89,6 +91,7 @@ export async function fetchGlobalSettings() {
 }
 
 export async function saveGlobalSettings(settings) {
+  ensureStoredPrivacyTokenCookie();
   const response = await fetch(GLOBAL_SETTINGS_ROUTE, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

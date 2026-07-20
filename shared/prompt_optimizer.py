@@ -29,9 +29,14 @@ except Exception:  # noqa: BLE001 - tests can import this module outside ComfyUI
     folder_paths = None
 
 try:
-    from .media_domain import resolve_legacy_browser_media_path
+    from .media_browser import resolve_browser_media_path
 except Exception:  # noqa: BLE001 - direct unit-test imports.
-    resolve_legacy_browser_media_path = None
+    resolve_browser_media_path = None
+
+try:
+    from .media_cache import resolve_media_path
+except Exception:  # noqa: BLE001 - direct unit-test imports.
+    resolve_media_path = None
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -54,15 +59,17 @@ OLLAMA_NUMERIC_OPTION_KEYS = (
     "num_predict",
 )
 GEMMA4_E4B_FP8_URL = (
-    "https://huggingface.co/Comfy-Org/gemma-4/blob/main/"
+    "https://huggingface.co/Comfy-Org/gemma-4/blob/c8b198a1279c02c9cf8aaa08171db4e2b0d15af9/"
     "text_encoders/gemma4_e4b_it_fp8_scaled.safetensors"
 )
 GEMMA4_E4B_UNCENSORED_Q8_GGUF_URL = (
-    "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/blob/main/"
+    "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/blob/"
+    "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d/"
     "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf"
 )
 GEMMA4_E4B_UNCENSORED_MMPROJ_URL = (
-    "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/blob/main/"
+    "https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/blob/"
+    "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d/"
     "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf"
 )
 CONFIG_DIR = PACKAGE_ROOT / "config"
@@ -134,6 +141,7 @@ class OptimizerModelSpec:
     model_subdir: str
     dependencies: tuple[str, ...] = ()
     file_urls: tuple[str, ...] = ()
+    revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -151,6 +159,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "qwen",
         "VLM",
         QWEN_DEPS,
+        revision="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
     ),
     "qwen3_vl_4b_fast": OptimizerModelSpec(
         "qwen3_vl_4b_fast",
@@ -158,6 +167,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "qwen",
         "VLM",
         QWEN_DEPS,
+        revision="ebb281ec70b05090aa6165b016eac8ec08e71b17",
     ),
     "qwen3_vl_4b_unredacted": OptimizerModelSpec(
         "qwen3_vl_4b_unredacted",
@@ -165,6 +175,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "qwen",
         "VLM",
         QWEN_DEPS,
+        revision="d2685a843353fcb74062a6ce8839db08ba60a4e7",
     ),
     "qwen3_vl_8b_nsfw_caption": OptimizerModelSpec(
         "qwen3_vl_8b_nsfw_caption",
@@ -172,6 +183,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "qwen",
         "VLM",
         QWEN_DEPS,
+        revision="62cf836d2370e7f884e570fb4fd45d47bb594ea6",
     ),
     "qwen2_5_vl_7b_abliterated_legacy": OptimizerModelSpec(
         "qwen2_5_vl_7b_abliterated_legacy",
@@ -179,6 +191,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "qwen",
         "VLM",
         QWEN_DEPS,
+        revision="70fecb10af3ee9aad7b832ddf264414337555010",
     ),
     "florence2_fast_caption": OptimizerModelSpec(
         "florence2_fast_caption",
@@ -186,6 +199,7 @@ MODEL_REGISTRY: dict[str, OptimizerModelSpec] = {
         "florence",
         "LLM",
         FLORENCE_DEPS,
+        revision="59b6e4bf75d0f3e8a6b1a14211f6a50fcdd48d63",
     ),
     "gemma4_e4b_it_fp8_scaled": OptimizerModelSpec(
         "gemma4_e4b_it_fp8_scaled",
@@ -1437,12 +1451,18 @@ def ensure_model_downloaded(
         return _download_exact_model_files(spec, status)
     from huggingface_hub import snapshot_download
 
+    if not re.fullmatch(r"[0-9a-f]{40}", spec.revision):
+        raise PromptOptimizerError(
+            f"Model '{spec.alias}' has no immutable Hugging Face revision configured."
+        )
+
     path.parent.mkdir(parents=True, exist_ok=True)
     reporter = DownloadProgressReporter(status, units="items")
     try:
         status(f"Downloading {spec.repo_id} into {path}")
         snapshot_download(
             repo_id=spec.repo_id,
+            revision=spec.revision,
             local_dir=str(path),
             local_dir_use_symlinks=False,
             token=hf_auth_token(),
@@ -1537,17 +1557,24 @@ def decode_image(segment: dict[str, Any]) -> Image.Image | None:
     media_path = str(segment.get("mediaPath") or segment.get("path") or "").strip()
     media_type = segment_type(segment)
     if media_path:
-        candidate = Path(media_path).expanduser()
-        if candidate.exists():
-            if media_type == "video":
-                return _load_video_preview(candidate)
-            return _load_rgb_image(candidate)
+        if resolve_media_path is None:
+            raise PromptOptimizerError("Media path validation is unavailable.")
+        try:
+            candidate = resolve_media_path(
+                media_path,
+                "video" if media_type == "video" else "image",
+            )
+        except Exception as exc:  # noqa: BLE001 - redact the rejected path from route errors.
+            raise PromptOptimizerError("Media path is outside approved roots or unavailable.") from exc
+        if media_type == "video":
+            return _load_video_preview(candidate)
+        return _load_rgb_image(candidate)
 
     folder_alias = segment.get("imageFolderAlias") or segment.get("mediaFolderAlias")
     image_file = segment.get("imageFile") or segment.get("mediaFile")
-    if folder_alias and image_file and resolve_legacy_browser_media_path is not None:
+    if folder_alias and image_file and resolve_browser_media_path is not None:
         resolved_type = "video" if media_type == "video" else "image"
-        path = resolve_legacy_browser_media_path(resolved_type, str(folder_alias), str(image_file))
+        path = resolve_browser_media_path(resolved_type, str(folder_alias), str(image_file))
         if resolved_type == "video":
             return _load_video_preview(path)
         return _load_rgb_image(path)
@@ -1754,7 +1781,7 @@ def _load_qwen_model(spec: OptimizerModelSpec, path: Path, status_cb: Any = None
             device_map="auto",
             attn_implementation="sdpa",
         ).eval()
-        processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(str(path), local_files_only=True)
         loaded = {"model": model, "processor": processor, "torch": torch}
         _LOADED_MODELS[cache_key] = loaded
         status(f"Loaded Qwen model '{spec.alias}'.")
@@ -1803,11 +1830,16 @@ def _load_florence_model(spec: OptimizerModelSpec, path: Path, status_cb: Any = 
         model = AutoModelForCausalLM.from_pretrained(
             str(path),
             trust_remote_code=True,
+            local_files_only=True,
             torch_dtype="auto",
         ).eval()
         if torch.cuda.is_available():
             model = model.to("cuda")
-        processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(
+            str(path),
+            trust_remote_code=True,
+            local_files_only=True,
+        )
         loaded = {"model": model, "processor": processor, "torch": torch}
         _LOADED_MODELS[cache_key] = loaded
         status(f"Loaded Florence model '{spec.alias}'.")

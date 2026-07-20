@@ -1,25 +1,28 @@
 from __future__ import annotations
 
 import gc
+import io
+import json
+import os
+import shutil
+import secrets
 from copy import deepcopy
-from typing import Any, Callable, Protocol
+from pathlib import Path
+from typing import Any, Callable
 
 import torch
+
+from .media_cache import cache_root
+from .privacy import decrypt_bytes, encrypt_bytes
+
 
 SEED_MODES = (
     "Increment Per Segment",
     "Reuse Seed",
 )
+SEGMENT_CACHE_PURPOSE = "timeline-segment-cache"
 SEGMENT_SEAM_BLEND_FRAME_OPTIONS = (0, 3, 5)
 DEFAULT_SEGMENT_SEAM_BLEND_FRAMES = 3
-
-
-class SegmentSpillStore(Protocol):
-    """Minimal store surface consumed by generic segment stitching."""
-
-    def read_segment(self, record: dict[str, Any]) -> torch.Tensor: ...
-
-    def cleanup(self) -> dict[str, Any]: ...
 
 
 def segment_seed(seed: int, segment_index: int, seed_mode: str) -> int:
@@ -156,15 +159,121 @@ def stitch_segment_images(
     return output
 
 
-def managed_segment_spill_store(*, privacy_mode: bool):
-    from .timeline.managed_install import director_privacy_pack
-    from .timeline.managed_segment_spills import (
-        SEGMENT_ARTIFACT_RESOURCE_ID,
-        DirectorManagedSegmentSpillStore,
-    )
+class SegmentSpillStore:
+    def __init__(self, *, privacy_mode: bool, run_id: str | None = None, root: str | os.PathLike[str] | None = None):
+        self.privacy_mode = bool(privacy_mode)
+        self.run_id = run_id or secrets.token_hex(12)
+        base = Path(root) if root is not None else cache_root() / "segments"
+        self.root = base / self.run_id
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.root, 0o700)
+        except OSError:
+            pass
+        self.records: list[dict[str, Any]] = []
+        self.cleanup_warnings: list[str] = []
+        self.files_written = 0
+        self.files_read = 0
+        self.files_deleted = 0
 
-    handle = director_privacy_pack().artifacts(SEGMENT_ARTIFACT_RESOURCE_ID)
-    return DirectorManagedSegmentSpillStore(handle, private=privacy_mode)
+    def write_segment(self, segment: dict[str, Any], images: torch.Tensor) -> dict[str, Any]:
+        if not torch.is_tensor(images):
+            raise ValueError(f"Segment {segment.get('id') or '?'} did not decode to an IMAGE tensor.")
+        segment_id = _safe_segment_id(segment.get("id") or f"segment_{len(self.records) + 1:03d}")
+        suffix = ".pt.enc" if self.privacy_mode else ".pt"
+        path = self.root / f"{len(self.records) + 1:03d}_{segment_id}{suffix}"
+        tensor = images.detach().cpu().contiguous()
+        payload = {
+            "segment_id": segment_id,
+            "tensor": tensor,
+        }
+        buffer = io.BytesIO()
+        torch.save(payload, buffer)
+        data = buffer.getvalue()
+        if self.privacy_mode:
+            path.write_text(
+                json.dumps(encrypt_bytes(data, SEGMENT_CACHE_PURPOSE), separators=(",", ":"), sort_keys=True),
+                encoding="utf-8",
+            )
+        else:
+            path.write_bytes(data)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        record = {
+            "segment_id": segment_id,
+            "path": str(path),
+            "encrypted": self.privacy_mode,
+            "frame_count": int(tensor.shape[0]),
+            "shape": [int(dim) for dim in tensor.shape],
+            "dtype": str(tensor.dtype),
+        }
+        self.records.append(record)
+        self.files_written += 1
+        return record
+
+    def read_segment(self, record: dict[str, Any]) -> torch.Tensor:
+        path = Path(str(record.get("path") or ""))
+        try:
+            if bool(record.get("encrypted")):
+                data = decrypt_bytes(path.read_text(encoding="utf-8"), SEGMENT_CACHE_PURPOSE)
+            else:
+                data = path.read_bytes()
+            loaded = _torch_load_bytes(data)
+            tensor = loaded.get("tensor") if isinstance(loaded, dict) else loaded
+            if not torch.is_tensor(tensor):
+                raise ValueError("segment payload did not contain a tensor")
+            self.files_read += 1
+            return tensor.cpu()
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read spilled segment '{record.get('segment_id') or '?'}' "
+                f"({'encrypted' if record.get('encrypted') else 'plain'}): {exc}"
+            ) from exc
+
+    def cleanup(self) -> dict[str, Any]:
+        for record in list(self.records):
+            path = Path(str(record.get("path") or ""))
+            if not path.exists():
+                continue
+            try:
+                path.unlink()
+                self.files_deleted += 1
+            except Exception as exc:
+                self.cleanup_warnings.append(f"Could not delete spilled segment {record.get('segment_id')}: {exc}")
+        try:
+            shutil.rmtree(self.root)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            self.cleanup_warnings.append(f"Could not delete spill directory: {exc}")
+        return self.debug_summary(include_paths=False)
+
+    def debug_summary(self, *, include_paths: bool = False) -> dict[str, Any]:
+        records = []
+        for record in self.records:
+            entry = {
+                "segment_id": record.get("segment_id"),
+                "encrypted": bool(record.get("encrypted")),
+                "frame_count": int(record.get("frame_count") or 0),
+                "shape": list(record.get("shape") or []),
+                "dtype": record.get("dtype"),
+            }
+            if include_paths and not self.privacy_mode:
+                entry["path"] = record.get("path")
+            records.append(entry)
+        return {
+            "segment_storage": "memory_spill",
+            "privacy_mode": self.privacy_mode,
+            "encrypted": self.privacy_mode,
+            "run_id": self.run_id,
+            "files_written": self.files_written,
+            "files_read": self.files_read,
+            "files_deleted": self.files_deleted,
+            "records": records,
+            "cleanup_warnings": list(self.cleanup_warnings),
+        }
 
 
 def cleanup_spill_store_once(store: SegmentSpillStore, state: dict[str, Any]) -> dict[str, Any] | None:
@@ -321,6 +430,22 @@ def _copy_segment_frames(output: torch.Tensor, tensor: torch.Tensor, cursor: int
     count = min(int(tensor.shape[0]), int(output.shape[0]) - int(cursor))
     output[cursor: cursor + count] = tensor[:count]
     return cursor + count
+
+
+def _safe_segment_id(value: Any) -> str:
+    text = str(value or "segment").strip()
+    return "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in text) or "segment"
+
+
+def _torch_load_bytes(data: bytes):
+    # Spill payloads are plain {str: tensor} dicts, so the restricted
+    # weights-only unpickler is enough; only very old torch lacks the kwarg.
+    buffer = io.BytesIO(data)
+    try:
+        return torch.load(buffer, map_location="cpu", weights_only=True)
+    except TypeError:
+        buffer.seek(0)
+        return torch.load(buffer, map_location="cpu")
 
 
 def build_segment_plan(

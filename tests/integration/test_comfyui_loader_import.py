@@ -3,7 +3,6 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -128,7 +127,6 @@ def test_comfyui_style_loader_includes_timeline_take_capture_node():
         "filename_prefix",
         "accept",
         "update_clip_instance",
-        "privacy_mode_reference",
     ]
 
 
@@ -248,11 +246,9 @@ def test_timeline_take_capture_skips_non_ready_runtime_registration_without_writ
     assert not (tmp_path / "takes").exists()
 
 
-def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_registration_is_not_ready(tmp_path, monkeypatch):
+def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_registration_is_not_ready(tmp_path):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
-    node_module = sys.modules[node.__module__]
-    captures = _install_fake_managed_take_capture(monkeypatch, node_module)
     timeline_input = _timeline_with_shot()
     timeline_global_settings.save_global_settings({"storage": {"asset_root_directory": str(tmp_path / "takes")}, "privacy": {"mode": False}})
     runtime_context = {
@@ -283,18 +279,15 @@ def test_timeline_take_capture_shot_override_allows_manual_capture_when_runtime_
         shot_id_override="shot_001",
         video=FakeVideo(),
         filename_prefix="manual/%shot_id%/%take_id%",
-        _subject_mode_lease=object(),
     )
 
     timeline = output[0]
-    saved_path = Path(captures[0]["generated_asset_path"])
-    assert output[2] == ""
-    assert output[3] == ""
+    saved_path = Path(timeline["assets"][0]["path"])
+    assert output[2] == "asset_generated_001"
+    assert output[3] == "take_001"
     assert saved_path.is_file()
-    assert not saved_path.with_suffix(".helto_take.json").exists()
-    assert timeline["assets"] == []
-    assert timeline["sequence"]["shots"][0].get("takes", []) == []
-    assert output.ui["helto_take_capture_managed_association"] == [f"hp-assoc-{'A' * 32}"]
+    assert saved_path.with_suffix(".helto_take.json").is_file()
+    assert timeline["sequence"]["shots"][0]["takes"][0]["take_id"] == "take_001"
 
 
 def test_timeline_sequence_assembler_node_returns_video_components(monkeypatch):
@@ -385,11 +378,9 @@ def test_timeline_sequence_assembler_node_preserves_error_policy(monkeypatch):
         node.execute({"type": "VIDEO_TIMELINE"}, missing_take_policy="error")
 
 
-def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_defers_sidecar(tmp_path, monkeypatch):
+def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_writes_sidecar(tmp_path):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
-    node_module = sys.modules[node.__module__]
-    captures = _install_fake_managed_take_capture(monkeypatch, node_module)
     media_path = tmp_path / "source" / "generated.mov"
     media_path.parent.mkdir()
     media_path.write_bytes(b"source video")
@@ -418,32 +409,30 @@ def test_timeline_take_capture_node_copies_asset_path_to_project_storage_and_def
         generated_asset_path=str(media_path),
         filename_prefix="copied/%shot_id%/%take_id%",
         accept=True,
-        _subject_mode_lease=object(),
     )
 
     timeline = output[0]
     assert output[1] is None
-    assert output[2] == ""
-    assert output[3] == ""
-    saved_path = Path(captures[0]["generated_asset_path"])
+    assert output[2] == "asset_capture_path"
+    assert output[3] == "take_capture_path"
+    assert output[4]["code"] == "TAKE_CAPTURE_REGISTERED"
+    saved_path = Path(timeline["assets"][0]["path"])
     assert media_path.read_bytes() == b"source video"
     assert saved_path.parent == project_directory / "takes" / "shot_001" / "copied" / "shot_001"
     assert saved_path.name.startswith("take_capture_path_")
     assert saved_path.suffix == ".mov"
     assert saved_path.read_bytes() == b"source video"
-    assert not saved_path.with_suffix(".helto_take.json").exists()
-    assert captures[0]["registration"]["asset"]["path"] == str(saved_path)
-    assert timeline["assets"] == []
-    assert timeline["sequence"]["shots"][0].get("accepted_take_id") is None
-    assert output.ui["helto_take_capture_managed_association"] == [f"hp-assoc-{'A' * 32}"]
+    assert saved_path.with_suffix(".helto_take.json").is_file()
+    assert output[4]["summary"]["storage_action"] == "copied"
+    assert output[4]["summary"]["path"] == str(saved_path)
+    assert timeline["sequence"]["shots"][0]["accepted_take_id"] == "take_capture_path"
     assert validate_video_timeline(timeline)["is_valid"] is True
 
 
-def test_timeline_take_capture_node_saves_video_and_defers_managed_association(tmp_path, monkeypatch):
+def test_timeline_take_capture_node_saves_video_and_registers_sidecar(tmp_path, monkeypatch):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     node_module = sys.modules[node.__module__]
-    captures = _install_fake_managed_take_capture(monkeypatch, node_module)
     monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(tmp_path))
     video = FakeVideo()
 
@@ -468,24 +457,36 @@ def test_timeline_take_capture_node_saves_video_and_defers_managed_association(t
         ),
         video=video,
         filename_prefix="helto_test/%shot_id%/%take_id%",
-        _subject_mode_lease=object(),
     )
 
     timeline = output[0]
-    saved_path = Path(captures[0]["generated_asset_path"])
+    saved_path = Path(timeline["assets"][0]["path"])
     project_directory = tmp_path / "helto_director_projects" / timeline["project"]["storage"]["project_directory_name"]
     assert output[1] is video
     assert saved_path.is_file()
     assert saved_path.parent == project_directory / "takes" / "shot_001" / "helto_test" / "shot_001"
     assert saved_path.name.startswith("take_capture_video_")
-    assert not saved_path.with_suffix(".helto_take.json").exists()
-    assert captures[0]["sidecar"]["media"]["frame_count"] == 12
-    assert captures[0]["registration"]["asset"]["path"] == str(saved_path)
-    assert timeline["assets"] == []
-    assert timeline["sequence"]["shots"][0].get("takes", []) == []
-    assert set(output.ui) == {"helto_take_capture_managed_association", "helto_take_capture_safe"}
-    assert output.ui["helto_take_capture_managed_association"] == [f"hp-assoc-{'A' * 32}"]
-    assert str(saved_path) not in json.dumps(output.ui)
+    assert saved_path.with_suffix(".helto_take.json").is_file()
+    assert output[4]["summary"]["sidecar_filename"] == saved_path.with_suffix(".helto_take.json").name
+    assert output[4]["ui"]["filename"] == output.ui["images"][0]["filename"]
+    assert output.ui["helto_take_capture_preview"] == [True]
+    assert output.ui["helto_privacy_mode"] == [False]
+    assert output.ui["animated"] == (True,)
+    capture_result = output.ui["helto_take_capture_result"][0]
+    assert capture_result["type"] == "HELTO_TAKE_CAPTURE_RESULT"
+    assert capture_result["schema_version"] == 1
+    assert capture_result["shot_id"] == "shot_001"
+    assert capture_result["asset_id"] == "asset_capture_video"
+    assert capture_result["take_id"] == "take_capture_video"
+    assert capture_result["summary"]["path"] == str(saved_path)
+    assert capture_result["media"]["path"] == str(saved_path)
+    assert capture_result["media"]["frame_count"] == 12
+    assert capture_result["registration"]["asset"]["path"] == str(saved_path)
+    assert capture_result["registration"]["asset"]["asset_id"] == "asset_capture_video"
+    assert capture_result["registration"]["take"]["take_id"] == "take_capture_video"
+    assert capture_result["registration"]["take"]["asset_id"] == "asset_capture_video"
+    assert timeline["assets"][0]["metadata"]["frame_count"] == 12
+    assert timeline["sequence"]["shots"][0]["takes"][0]["seed"] == 456
     assert validate_video_timeline(timeline)["is_valid"] is True
 
 
@@ -493,7 +494,6 @@ def test_timeline_take_capture_private_preview_is_tagged_and_debug_redacted(tmp_
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     node_module = sys.modules[node.__module__]
-    captures = _install_fake_managed_take_capture(monkeypatch, node_module)
     monkeypatch.setattr(node_module.folder_paths, "get_output_directory", lambda: str(tmp_path))
     timeline_input = _timeline_with_shot()
     timeline_global_settings.save_global_settings({"privacy": {"mode": True}})
@@ -518,17 +518,29 @@ def test_timeline_take_capture_private_preview_is_tagged_and_debug_redacted(tmp_
         ),
         video=video,
         filename_prefix="private/%shot_id%/%take_id%",
-        _subject_mode_lease=object(),
     )
 
     timeline = output[0]
-    saved_path = Path(captures[0]["generated_asset_path"])
-    assert saved_path.is_file()
-    assert set(output.ui) == {"helto_take_capture_managed_association", "helto_take_capture_safe"}
-    assert saved_path.name not in json.dumps(output.ui)
-    assert str(saved_path) not in json.dumps(output[4])
-    assert "private_capture" not in json.dumps(output.ui)
-    assert timeline["assets"] == []
+    saved_path = Path(timeline["assets"][0]["path"])
+    assert output.ui["helto_take_capture_preview"] == [True]
+    assert output.ui["helto_privacy_mode"] == [True]
+    assert output.ui["images"][0]["filename"] == saved_path.name
+    assert output.ui["images"][0]["subfolder"]
+    assert output.ui["animated"] == (True,)
+    capture_result = output.ui["helto_take_capture_result"][0]
+    assert capture_result["type"] == "HELTO_TAKE_CAPTURE_RESULT"
+    assert capture_result["summary"]["filename"] == "Generated video"
+    assert capture_result["summary"]["path"] == "Private path"
+    assert capture_result["media"]["path"] == str(saved_path)
+    assert capture_result["registration"]["asset"]["path"] == str(saved_path)
+    assert capture_result["registration"]["take"]["take_id"] == "take_private_video"
+    assert output[4]["summary"]["filename"] == "Generated video"
+    assert output[4]["summary"]["subfolder"] is None
+    assert output[4]["summary"]["path"] == "Private path"
+    assert output[4]["summary"]["sidecar_filename"] == "Private sidecar"
+    assert output[4]["summary"]["project_directory"] == "Private path"
+    assert output[4]["ui"] == {"private": True}
+    assert saved_path.name not in json.dumps(output[4])
     assert validate_video_timeline(timeline)["is_valid"] is True
 
 
@@ -536,7 +548,6 @@ def test_timeline_take_capture_node_saves_video_to_absolute_project_root(tmp_pat
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
     node_module = sys.modules[node.__module__]
-    captures = _install_fake_managed_take_capture(monkeypatch, node_module)
     comfy_output = tmp_path / "comfy_output"
     capture_root = tmp_path / "external_takes"
     timeline_input = _timeline_with_shot()
@@ -562,26 +573,27 @@ def test_timeline_take_capture_node_saves_video_to_absolute_project_root(tmp_pat
         ),
         video=video,
         filename_prefix="nested/%shot_id%/%take_id%",
-        _subject_mode_lease=object(),
     )
 
     timeline = output[0]
-    saved_path = Path(captures[0]["generated_asset_path"])
+    saved_path = Path(timeline["assets"][0]["path"])
     assert saved_path.parent == project_directory / "takes" / "shot_001" / "nested" / "shot_001"
     assert saved_path.name.startswith("take_capture_external_")
     assert saved_path.suffix == ".mp4"
     assert saved_path.is_file()
-    assert not saved_path.with_suffix(".helto_take.json").exists()
+    assert saved_path.with_suffix(".helto_take.json").is_file()
+    assert output[4]["summary"]["storage_action"] == "saved"
+    assert output[4]["summary"]["path"] == str(saved_path)
     assert "helto_take_capture_preview" not in output.ui
-    assert output.ui["helto_take_capture_managed_association"] == [f"hp-assoc-{'A' * 32}"]
-    assert timeline["assets"] == []
+    capture_result = output.ui["helto_take_capture_result"][0]
+    assert capture_result["type"] == "HELTO_TAKE_CAPTURE_RESULT"
+    assert capture_result["media"]["path"] == str(saved_path)
+    assert capture_result["registration"]["asset"]["path"] == str(saved_path)
 
 
-def test_timeline_take_capture_node_rejects_relative_project_asset_root(tmp_path, monkeypatch):
+def test_timeline_take_capture_node_rejects_relative_project_asset_root(tmp_path):
     module = load_nodepack_like_comfyui()
     node = module.NODE_CLASS_MAPPINGS["HeltoTimelineTakeCapture"]
-    node_module = sys.modules[node.__module__]
-    _install_fake_managed_take_capture(monkeypatch, node_module)
     timeline_input = _timeline_with_shot()
     path = timeline_global_settings.settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -599,7 +611,6 @@ def test_timeline_take_capture_node_rejects_relative_project_asset_root(tmp_path
                 }
             ),
             video=video,
-            _subject_mode_lease=object(),
         )
 
 
@@ -618,42 +629,6 @@ class FakeVideo:
 
     def get_duration(self):
         return 0.5
-
-
-def _install_fake_managed_take_capture(monkeypatch, node_module):
-    captures = []
-
-    class FakeManagedTakeService:
-        def __init__(self, *, operations):
-            assert operations is not None
-
-        async def capture(self, timeline, registration, **kwargs):
-            captures.append({
-                "timeline": timeline,
-                "registration": registration,
-                **kwargs,
-            })
-            return SimpleNamespace(
-                association=SimpleNamespace(id=f"hp-assoc-{'A' * 32}"),
-                safe_ui={
-                    "accepted": bool(kwargs.get("accept")),
-                    "asset_count": 1,
-                    "duration_seconds": 0.5,
-                    "has_preview": False,
-                    "has_sidecar": True,
-                    "ok": True,
-                    "status": "deferred",
-                    "take_count": 1,
-                },
-            )
-
-    monkeypatch.setattr(node_module, "DirectorManagedTakeService", FakeManagedTakeService)
-    monkeypatch.setattr(
-        node_module,
-        "director_privacy_pack",
-        lambda: SimpleNamespace(operations=lambda _resource_id: object()),
-    )
-    return captures
 
 
 def _timeline_with_shot() -> dict:

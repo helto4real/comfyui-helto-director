@@ -10,6 +10,20 @@ import {
   normalizeGlobalSettings,
   saveGlobalSettings,
 } from "./global_settings.js";
+import {
+  confirmUnreadablePrivacyReset,
+  encryptTimelineSync,
+  fetchPrivacyJson,
+  isEncryptedPrivacyPayload,
+  isPrivacyKeyUnavailableError,
+  isPrivacyLockedError,
+  isUnreadablePrivacyValueError,
+  parsePrivacyPayload,
+} from "./privacy.js";
+import {
+  isPrivacyKeystoreDialogOpen,
+  showPrivacyKeystoreDialog,
+} from "./privacy_unlock.js";
 
 export const VIDEO_TIMELINE_WIDGET = "video_timeline_json";
 
@@ -30,7 +44,9 @@ export class TimelineStateController {
     this.timelineKeyboardScope = null;
     this.destroyed = false;
     this.privacyError = "";
-    this.managedPrivacy = null;
+    this.decryptingPrivacy = false;
+    this.confirmUnreadablePrivacyReset = options.confirmUnreadablePrivacyReset ?? confirmUnreadablePrivacyReset;
+    this.resetPrivacyToPlaintext = false;
     this._onKeyDown = (event) => this.handleKeyDown(event);
     this._onMouseUp = () => this.endTimelineGesture("drag end");
 
@@ -38,10 +54,9 @@ export class TimelineStateController {
     this.installEventListeners();
     if (this.autoLoadGlobalSettings) this.loadGlobalSettings();
     if (this.hasEncryptedTimelineWidget()) {
-      this.timeline = null;
-      this.privacyError = "Private timeline locked";
+      this.decryptTimelineWidget();
     } else {
-      this.requestRender();
+      this.commitTimelineChange("mount", { pushUndo: false, markDirty: false });
     }
   }
 
@@ -62,8 +77,7 @@ export class TimelineStateController {
 
   loadTimelineState() {
     if (this.hasEncryptedTimelineWidget()) {
-      this.timeline = null;
-      this.privacyError = "Private timeline locked";
+      this.decryptTimelineWidget();
       return this.timeline;
     }
     this.timeline = loadTimelineState(this.node);
@@ -71,23 +85,108 @@ export class TimelineStateController {
   }
 
   hasEncryptedTimelineWidget() {
-    return isEncryptedTimelinePayload(this.hiddenWidget?.value);
+    return isEncryptedPrivacyPayload(this.hiddenWidget?.value);
   }
 
-  bindManagedPrivacy(connection) {
-    if (!connection?.mode || !connection?.workflow || !connection?.execution) {
-      throw new Error("PRIVACY_DIRECTOR_INSTALLATION_BLOCKED");
-    }
-    this.managedPrivacy = connection;
-    this.privacyError = "";
-    return this;
-  }
-
-  blockManagedPrivacy() {
-    this.managedPrivacy = null;
-    this.timeline = null;
-    this.privacyError = "Director shared privacy is unavailable";
+  async decryptTimelineWidget() {
+    if (this.decryptingPrivacy || !this.hasEncryptedTimelineWidget()) return false;
+    const payload = parsePrivacyPayload(this.hiddenWidget?.value);
+    this.decryptingPrivacy = true;
+    this.privacyError = "Decrypting private timeline data...";
     this.requestRender();
+    try {
+      const result = await fetchPrivacyJson("decrypt", { payload });
+      const state = result.state || {};
+      this.timeline = normalizeVideoTimeline(state.timeline || state || {});
+      applyVisibleNodeProperties(this.timeline, this.node);
+      this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+      this.privacyError = "";
+      this.requestRender();
+      this.refreshAsyncMediaCaches("privacy decrypt", {});
+      return true;
+    } catch (error) {
+      if (await isUnreadablePrivacyValueError(error)) {
+        if (await this.confirmUnreadablePrivacyReset()) {
+          await this.resetUnreadableTimeline(error);
+        } else {
+          this.preserveUnreadableTimeline();
+        }
+        return false;
+      }
+      this.timeline = normalizeVideoTimeline("");
+      this.privacyError = `Private timeline locked: ${error.message}`;
+      console.error("Helto Director privacy decrypt failed", error);
+      this.requestRender();
+      if (isPrivacyLockedError(error)) this.promptPrivacyUnlock();
+      return false;
+    } finally {
+      this.decryptingPrivacy = false;
+    }
+  }
+
+  preserveUnreadableTimeline() {
+    this.timeline = normalizeVideoTimeline("");
+    applyVisibleNodeProperties(this.timeline, this.node);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    this.privacyError = "Private timeline could not be decrypted. The encrypted value was preserved.";
+    this.requestRender();
+    this.refreshAsyncMediaCaches("privacy preserve", {});
+  }
+
+  async resetUnreadableTimeline(error) {
+    const disablePrivacy = await isPrivacyKeyUnavailableError(error);
+    this.timeline = normalizeVideoTimeline("");
+    applyVisibleNodeProperties(this.timeline, this.node);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    this.resetPrivacyToPlaintext = disablePrivacy;
+
+    if (disablePrivacy) {
+      const settings = normalizeGlobalSettings(this.globalSettings);
+      settings.privacy.mode = false;
+      this.globalSettings = settings;
+      try {
+        this.globalSettings = await saveGlobalSettings(settings);
+        this.globalSettingsError = "";
+      } catch (settingsError) {
+        this.globalSettingsError = `Global privacy could not be disabled after reset: ${settingsError.message}`;
+      }
+    }
+
+    try {
+      writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+      this.privacyError = "Unreadable private timeline was reset to defaults.";
+    } catch (writeError) {
+      this.privacyError = `Private timeline reset could not be saved: ${writeError.message}`;
+    }
+    markGraphDirty(this.node, this.app);
+    this.requestRender();
+    this.refreshAsyncMediaCaches("privacy reset", {});
+  }
+
+  async promptPrivacyUnlock(onUnlocked = null) {
+    const documentRef = globalThis.document;
+    if (!documentRef?.body || isPrivacyKeystoreDialogOpen(documentRef)) return false;
+    const unlocked = await showPrivacyKeystoreDialog("unlock", { documentRef });
+    if (!unlocked) return false;
+    this.privacyError = "";
+    if (onUnlocked) {
+      try {
+        return await onUnlocked();
+      } catch (error) {
+        this.privacyError = `Privacy encryption failed: ${error.message}`;
+        this.requestRender();
+        return false;
+      }
+    }
+    return this.decryptTimelineWidget();
+  }
+
+  retryPrivateWidgetWrite() {
+    writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+    this.privacyError = "";
+    markGraphDirty(this.node, this.app);
+    this.requestRender();
+    return true;
   }
 
   updateTimeline(mutator, reason, options = {}) {
@@ -97,32 +196,28 @@ export class TimelineStateController {
   }
 
   commitTimelineChange(reason, options = {}) {
-    if (isGlobalPrivacyMode(this.globalSettings) && !this.managedPrivacy) {
-      this.blockManagedPrivacy();
-      throw new Error("PRIVACY_DIRECTOR_INSTALLATION_BLOCKED");
-    }
     const previousState = options.previousState ?? deepClone(this.timeline);
-    if (options.preparedGeneration !== true) {
-      this.prepareTimelineGeneration();
-    }
+    this.timeline = normalizeVideoTimeline(this.timeline);
+    applyVisibleNodeProperties(this.timeline, this.node);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    this.timeline.ui_state.state_revision = Number(this.timeline.ui_state.state_revision ?? 0) + 1;
 
     if (options.pushUndo !== false && serializeTimeline(previousState) !== serializeTimeline(this.timeline)) {
       this.undo.push(previousState);
     }
 
-    writeTimelineWidget(this.node, this.timeline);
-    this.privacyError = "";
+    try {
+      writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+      if (!this.decryptingPrivacy) this.privacyError = "";
+    } catch (error) {
+      this.privacyError = `Privacy encryption failed: ${error.message}`;
+      this.requestRender();
+      if (isPrivacyLockedError(error)) this.promptPrivacyUnlock(() => this.retryPrivateWidgetWrite());
+      throw error;
+    }
     if (options.markDirty !== false) markGraphDirty(this.node, this.app);
     if (options.rerender !== false) this.requestRender();
     this.refreshAsyncMediaCaches(reason, options);
-    return this.timeline;
-  }
-
-  prepareTimelineGeneration() {
-    this.timeline = normalizeVideoTimeline(this.timeline);
-    applyVisibleNodeProperties(this.timeline, this.node);
-    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
-    this.timeline.ui_state.state_revision = Number(this.timeline.ui_state.state_revision ?? 0) + 1;
     return this.timeline;
   }
 
@@ -130,7 +225,8 @@ export class TimelineStateController {
     if (this.pendingDebounce) this.window?.clearTimeout?.(this.pendingDebounce);
     const setTimer = this.window?.setTimeout ?? globalThis.setTimeout;
     this.pendingDebounce = setTimer(() => {
-      this.flushDebouncedCommit(reason, options);
+      this.pendingDebounce = null;
+      this.commitTimelineChange(reason, options);
     }, options.delayMs ?? this.debounceMs);
   }
 
@@ -149,7 +245,11 @@ export class TimelineStateController {
         rerender: false,
       });
     }
-    return this.timeline;
+    return this.commitTimelineChange("serialize timeline", {
+      pushUndo: false,
+      markDirty: false,
+      rerender: false,
+    });
   }
 
   replaceTimeline(nextTimeline, reason = "replace timeline", options = {}) {
@@ -241,8 +341,21 @@ export class TimelineStateController {
   async loadGlobalSettings() {
     try {
       this.globalSettings = await fetchGlobalSettings();
+      if (this.resetPrivacyToPlaintext && isGlobalPrivacyMode(this.globalSettings)) {
+        const settings = normalizeGlobalSettings(this.globalSettings);
+        settings.privacy.mode = false;
+        this.globalSettings = await saveGlobalSettings(settings);
+      }
       this.globalSettingsError = "";
-      if (this.timeline) this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+      this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+      if (!this.hasEncryptedTimelineWidget() && !this.decryptingPrivacy) {
+        try {
+          writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+        } catch (error) {
+          this.privacyError = `Privacy encryption failed: ${error.message}`;
+          if (isPrivacyLockedError(error)) this.promptPrivacyUnlock(() => this.retryPrivateWidgetWrite());
+        }
+      }
       this.requestRender();
       this.refreshAsyncMediaCaches("global settings", {});
       return this.globalSettings;
@@ -258,24 +371,12 @@ export class TimelineStateController {
     const previousPrivacy = isGlobalPrivacyMode(this.globalSettings);
     const next = normalizeGlobalSettings(this.globalSettings);
     mutator(next);
-    const targetPrivacy = isGlobalPrivacyMode(next);
-    if (previousPrivacy !== targetPrivacy) {
-      if (!this.managedPrivacy?.mode?.transition) {
-        throw new Error("PRIVACY_DIRECTOR_INSTALLATION_BLOCKED");
-      }
-      const nonModeSettings = normalizeGlobalSettings(next);
-      nonModeSettings.privacy.mode = previousPrivacy;
-      await saveGlobalSettings(nonModeSettings);
-      await this.managedPrivacy.mode.transition(
-        this.managedPrivacy.scopeId,
-        targetPrivacy ? "private" : "public",
-      );
-      this.globalSettings = await fetchGlobalSettings();
-    } else {
-      this.globalSettings = await saveGlobalSettings(next);
-    }
+    this.globalSettings = await saveGlobalSettings(next);
     this.globalSettingsError = "";
-    if (this.timeline) this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    this.timeline.validation = validateVideoTimeline(this.timeline, this.globalSettings);
+    if (previousPrivacy !== isGlobalPrivacyMode(this.globalSettings)) {
+      writeTimelineWidget(this.node, this.timeline, this.globalSettings);
+    }
     this.requestRender();
     this.refreshAsyncMediaCaches("global settings", {});
     return this.globalSettings;
@@ -311,8 +412,8 @@ export function unmountTimelineState(node) {
 
 export function loadTimelineState(node) {
   const widget = findWidget(node, VIDEO_TIMELINE_WIDGET);
-  if (isEncryptedTimelinePayload(widget?.value)) {
-    return null;
+  if (isEncryptedPrivacyPayload(widget?.value)) {
+    return normalizeVideoTimeline("");
   }
   const timeline = normalizeVideoTimeline(widget?.value ?? "");
   applyVisibleNodeProperties(timeline, node);
@@ -320,25 +421,17 @@ export function loadTimelineState(node) {
   return timeline;
 }
 
-export function writeTimelineWidget(node, timeline) {
+export function writeTimelineWidget(node, timeline, globalSettings = null) {
   const widget = findWidget(node, VIDEO_TIMELINE_WIDGET);
-  if (widget) widget.value = serializeTimeline(timeline);
-  return widget;
-}
-
-function isEncryptedTimelinePayload(value) {
-  let parsed = value;
-  if (typeof value === "string") {
-    try { parsed = JSON.parse(value); } catch { return false; }
+  if (widget) {
+    if (isGlobalPrivacyMode(globalSettings)) {
+      const envelope = encryptTimelineSync(timeline);
+      widget.value = JSON.stringify(envelope);
+    } else {
+      widget.value = serializeTimeline(timeline);
+    }
   }
-  return Boolean(
-    parsed
-    && typeof parsed === "object"
-    && !Array.isArray(parsed)
-    && parsed.encrypted === true
-    && parsed.schema === "helto.timeline-director"
-    && parsed.algorithm === "AES-256-GCM",
-  );
+  return widget;
 }
 
 export function serializeTimeline(timeline) {

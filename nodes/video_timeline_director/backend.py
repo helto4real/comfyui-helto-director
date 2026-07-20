@@ -6,17 +6,11 @@ from ...shared.contracts.validation import (
     SEVERITY_ERROR,
     create_validation_entry,
     create_validation_result,
+    merge_validation_results,
 )
-from ...shared.timeline import create_default_video_timeline
-from ...shared.timeline.execution import (
-    apply_visible_project_fields,
-    build_timeline_outputs,
-)
-from ...shared.timeline.managed_execution import (
-    consume_director_subject_mode,
-    director_subject_requires_private_execution,
-    dispatch_director_execution,
-)
+from ...shared.timeline import create_default_video_timeline, normalize_video_timeline
+from ...shared.timeline.validate import validate_video_timeline
+from ...shared.privacy import decrypt_state, is_encrypted_payload
 
 
 def build_director_outputs(
@@ -26,57 +20,40 @@ def build_director_outputs(
     aspect_ratio: str,
     orientation: str,
     quality_preset: str,
-    privacy_mode_reference: object = "",
-    private_execution: object = "",
-    subject_id: object = None,
-    _subject_mode_lease: object = None,
 ) -> tuple[dict, dict]:
-    if _subject_mode_lease is None and privacy_mode_reference:
-        with consume_director_subject_mode(privacy_mode_reference, subject_id) as lease:
-            return build_director_outputs(
-                video_timeline_json,
-                duration_seconds,
-                frame_rate,
-                aspect_ratio,
-                orientation,
-                quality_preset,
-                private_execution=private_execution,
-                subject_id=subject_id,
-                _subject_mode_lease=lease,
-            )
-    if _subject_mode_lease is None and (private_execution or subject_id is not None):
-        raise ValueError("Director execution requires a managed subject-mode reference.")
-    if (
-        _subject_mode_lease is not None
-        and director_subject_requires_private_execution(_subject_mode_lease)
-        and not private_execution
-    ):
-        raise ValueError("Private Director execution requires a managed execution reference.")
-    if private_execution:
-        result = dispatch_director_execution(
-            private_execution,
-            {
-                "duration_seconds": duration_seconds,
-                "frame_rate": frame_rate,
-                "aspect_ratio": aspect_ratio,
-                "orientation": orientation,
-                "quality_preset": quality_preset,
-            },
-            subject_id=subject_id,
-        )
-        if not isinstance(result, tuple) or len(result) != 2:
-            raise ValueError("Director managed execution result is invalid.")
-        return result
     timeline, parse_validation = _parse_timeline_json(video_timeline_json)
-    return build_timeline_outputs(
+    apply_visible_project_fields(
         timeline,
         duration_seconds=duration_seconds,
         frame_rate=frame_rate,
         aspect_ratio=aspect_ratio,
         orientation=orientation,
         quality_preset=quality_preset,
-        initial_validation=parse_validation,
     )
+    timeline = normalize_video_timeline(timeline)
+    validation = merge_validation_results(
+        parse_validation,
+        validate_video_timeline(timeline),
+    )
+    timeline["validation"] = validation
+    return timeline, validation
+
+
+def apply_visible_project_fields(
+    timeline: dict[str, Any],
+    duration_seconds: float,
+    frame_rate: float,
+    aspect_ratio: str,
+    orientation: str,
+    quality_preset: str,
+) -> dict[str, Any]:
+    project = timeline.setdefault("project", {})
+    project["duration_seconds"] = float(duration_seconds)
+    project["frame_rate"] = float(frame_rate)
+    project["aspect_ratio"] = aspect_ratio
+    project["orientation"] = orientation
+    project["quality_preset"] = quality_preset
+    return timeline
 
 
 def serialize_video_timeline(timeline: dict[str, Any]) -> str:
@@ -85,8 +62,9 @@ def serialize_video_timeline(timeline: dict[str, Any]) -> str:
 
 def _parse_timeline_json(video_timeline_json: str | dict | None) -> tuple[dict, dict]:
     if isinstance(video_timeline_json, dict):
-        if video_timeline_json.get("encrypted") is True:
-            raise ValueError("Protected Director timeline requires managed execution.")
+        if is_encrypted_payload(video_timeline_json):
+            state = decrypt_state(video_timeline_json)
+            return state.get("timeline", state), create_validation_result()
         return video_timeline_json, create_validation_result()
 
     if video_timeline_json is None or not str(video_timeline_json).strip():
@@ -113,8 +91,9 @@ def _parse_timeline_json(video_timeline_json: str | dict | None) -> tuple[dict, 
             ),
         )
 
-    if isinstance(parsed, dict) and parsed.get("encrypted") is True:
-        raise ValueError("Protected Director timeline requires managed execution.")
+    if is_encrypted_payload(parsed):
+        state = decrypt_state(parsed)
+        parsed = state.get("timeline", state)
 
     if not isinstance(parsed, dict):
         return (

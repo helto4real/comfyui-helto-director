@@ -21,7 +21,7 @@ from .contracts.video_timeline import (
     VIDEO_TIMING_LOOP,
     VIDEO_TIMING_USE_SOURCE_TIMING,
 )
-from .media_domain import resolve_media_path
+from .media_cache import resolve_media_path
 
 
 class DecodedVideo(NamedTuple):

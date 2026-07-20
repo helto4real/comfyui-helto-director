@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import hmac
 import json
 import re
 from typing import Any
@@ -11,6 +12,7 @@ from ..contracts.video_timeline import (
     ASSET_TYPE_VIDEO,
     TAKE_STATUS_CANDIDATE,
 )
+from .. import privacy_keystore
 from .global_settings import global_privacy_mode
 
 
@@ -45,8 +47,8 @@ def build_take_capture_metadata(
 
     privacy_mode = global_privacy_mode()
     safe_resolved_loras = _safe_resolved_loras(resolved_loras, privacy_mode)
-    prompt_hash = _stable_hash(_prompt_projection(plan))
-    plan_hash = _stable_hash(
+    prompt_hash = _metadata_hash(_prompt_projection(plan), privacy_mode=privacy_mode)
+    plan_hash = _metadata_hash(
         {
             "type": plan.get("type"),
             "model_family": model_family,
@@ -57,8 +59,9 @@ def build_take_capture_metadata(
             "shot_ids": shot_ids,
             "segment": segment_context,
             "prompt_hash": prompt_hash,
-            "resolved_loras_hash": _stable_hash(safe_resolved_loras),
-        }
+            "resolved_loras_hash": _metadata_hash(safe_resolved_loras, privacy_mode=privacy_mode),
+        },
+        privacy_mode=privacy_mode,
     )
     suggested_name = _suggested_asset_name(
         model_family,
@@ -332,7 +335,7 @@ def _safe_resolved_loras(value: dict[str, Any] | None, privacy_mode: bool) -> di
                 continue
             name = row.get("name")
             if name:
-                row["name_hash"] = _short_hash(name)
+                row["name_hash"] = _private_hash(name)[:16]
                 row["name"] = f"lora_{index + 1:03d}"
     return snapshot
 
@@ -411,17 +414,30 @@ def _strip_embedded_media(value: Any) -> Any:
 
 
 def _stable_hash(value: Any) -> str:
-    data = json.dumps(
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _metadata_hash(value: Any, *, privacy_mode: bool) -> str:
+    return _private_hash(value) if privacy_mode else _stable_hash(value)
+
+
+def _private_hash(value: Any) -> str:
+    try:
+        key, _key_id = privacy_keystore.primary_session_key()
+    except privacy_keystore.PrivacyKeystoreError as exc:
+        raise RuntimeError(
+            f"{exc}: Private capture metadata requires an unlocked privacy keystore."
+        ) from exc
+    return hmac.new(key, _canonical_bytes(value), hashlib.sha256).hexdigest()
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(
         _strip_embedded_media(value),
         sort_keys=True,
         separators=(",", ":"),
         default=str,
     ).encode("utf-8")
-    return hashlib.sha256(data).hexdigest()
-
-
-def _short_hash(value: Any) -> str:
-    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:16]
 
 
 def _raw_dict(value: Any) -> dict[str, Any]:

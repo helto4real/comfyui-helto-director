@@ -19,6 +19,7 @@ import {
   replaceTimelineCharacterReferenceFromLibraryItem,
 } from "../../web/timeline/references.js";
 import {
+  ROUTE_PREFIX,
   PROJECT_REPLACE_CONFIRMATION,
   PROJECT_UPDATE_CONFIRMATION,
   applyCharacterPreviewPayload,
@@ -37,6 +38,7 @@ import {
   shouldRequestPrivateProjectPreview,
   stampProjectLibraryItemId,
 } from "../../web/timeline/library.js";
+import { thumbnailUrl } from "../../web/timeline/media_cache.js";
 
 function createWidget(name, value) {
   return { name, value, type: "string" };
@@ -304,12 +306,16 @@ function testCharacterLibraryPreviewUsesImageSourceMetadata() {
     },
   }));
   const previewAsset = libraryPreviewAssetForItem(character);
+  const url = thumbnailUrl(previewAsset, 320, false);
 
   assert.equal(previewAsset.path, "characters/hero.png");
   assert.equal(previewAsset.source_kind, "FilePath");
   assert.equal(previewAsset.source_type, "output");
   assert.equal("thumbnail" in previewAsset, false);
   assert.equal("metadata" in previewAsset, false);
+  assert.ok(url.startsWith("/helto_director/media/thumbnail?"));
+  assert.ok(url.includes("path=characters%2Fhero.png"));
+  assert.ok(url.includes("type=output"));
 }
 
 function testPrivateCharacterPreviewHydratesImageShell() {
@@ -489,6 +495,7 @@ function testRendererAndLibraryContractStrings() {
   const librarySource = readFileSync(new URL("../../web/timeline/library.js", import.meta.url), "utf8");
   const mediaPreviewSource = readFileSync(new URL("../../web/timeline/media_preview.js", import.meta.url), "utf8");
 
+  assert.equal(ROUTE_PREFIX, "/helto_director/library");
   assert.equal(
     PROJECT_REPLACE_CONFIRMATION,
     "Replace current project?\n\nThis will replace all current sections, audio tracks, settings and references. Media files are referenced by path and are not copied.",
@@ -506,10 +513,9 @@ function testRendererAndLibraryContractStrings() {
   assert.notEqual(directorLibraryButtonIndex, -1);
   assert.notEqual(timelineSaveButtonIndex, -1);
   assert.equal(rendererSource.includes("controller: this.controller,"), true);
-  assert.equal(librarySource.includes("/helto_director/library"), false);
-  assert.equal(librarySource.includes("connector.directorManagedPrivacy()"), true);
-  assert.equal(librarySource.includes("library.projects.preview(item.id)"), true);
-  assert.equal(librarySource.includes("library.characters.preview(item.id)"), true);
+  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/items`)'), true);
+  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/projects/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
+  assert.equal(librarySource.includes('fetchLibraryJson(`${ROUTE_PREFIX}/characters/${encodeURIComponent(item.id)}/preview`, { method: "POST" })'), true);
   assert.equal(librarySource.includes("card.addEventListener(\"pointerenter\", revealPreview);"), true);
   assert.equal(librarySource.includes('options.controller?.replaceTimelineFromLibrary?.(nextTimeline, "replace project from library")'), true);
   assert.equal(librarySource.includes("addCharacterLibraryItemToTimeline(timeline, item"), true);
@@ -523,12 +529,10 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_PROJECTS}:${item.id}`, "More Project Actions"'), true);
   assert.equal(librarySource.includes('renderLibraryActionMenu(documentRef, `${TAB_CHARACTERS}:${item.id}`, "More Character Actions"'), true);
   assert.equal(librarySource.includes('panel.append(header, controls, tabs, body, status, actions);'), true);
-  assert.equal(librarySource.includes('renderProjectMediaStrip(documentRef, item, context.mediaCache)'), true);
+  assert.equal(librarySource.includes('renderProjectMediaStrip(documentRef, item, privacyMode)'), true);
   assert.equal(librarySource.includes('renderCharacterDetails(documentRef, details, item, timeline, privacyMode, context)'), true);
   assert.equal(librarySource.includes('import { showMediaPreview } from "./media_preview.js";'), true);
-  assert.equal(librarySource.includes("async function openLibraryMediaPreview(documentRef, asset, caption, mediaCache)"), true);
-  assert.equal(librarySource.includes("mediaCache?.acquireViewUrl?.(asset)"), true);
-  assert.equal(librarySource.includes("/helto_director/media"), false);
+  assert.equal(librarySource.includes("function openLibraryMediaPreview(documentRef, asset, caption)"), true);
   assert.equal(librarySource.includes("return showMediaPreview(documentRef, {"), true);
   assert.equal(librarySource.includes("windowOpen(documentRef"), false);
   assert.equal(mediaPreviewSource.includes("z-index: 10050"), true);
@@ -539,7 +543,7 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(librarySource.includes('timelinePreviewAssets(item).slice(0, 3)'), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-preview img"), true);
   assert.equal(librarySource.includes(".htd-library-dialog.privacy-mode .htd-library-strip-thumb img"), true);
-  assert.equal(rendererSource.includes("/helto_director/library"), false);
+  assert.equal(rendererSource.includes('const DIRECTOR_LIBRARY_ROUTE = "/helto_director/library";'), true);
   assert.equal(rendererSource.includes("const projectLibraryItemId = projectLibraryItemIdFor(this.controller.timeline);"), true);
   assert.equal(rendererSource.includes('const projectLibraryButton = iconButton('), true);
   assert.equal(rendererSource.includes('projectLibraryItemId ? "library-update" : "library-add"'), true);
@@ -550,15 +554,19 @@ function testRendererAndLibraryContractStrings() {
   assert.equal(rendererSource.includes('async saveCurrentProjectToLibrary(control = null)'), true);
   assert.equal(rendererSource.includes('const itemId = projectLibraryItemIdFor(this.controller.timeline);'), true);
   assert.equal(rendererSource.includes("if (itemId && !confirmProjectUpdate(this.container.ownerDocument)) return false;"), true);
-  assert.equal(rendererSource.includes("this.requireManagedLibrary().projects.replace("), true);
-  assert.equal(rendererSource.includes("this.requireManagedLibrary().projects.create("), true);
-  assert.equal(rendererSource.includes('const nextItemId = String(receipt?.recordId ?? "").trim();'), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects/${encodeURIComponent(itemId)}`'), true);
+  assert.equal(rendererSource.includes('method: "PUT"'), true);
+  assert.equal(rendererSource.includes("body: JSON.stringify(projectLibraryPayload(this.controller.timeline, itemId, null, this.isGlobalPrivacyMode()))"), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/projects`'), true);
+  assert.equal(rendererSource.includes('method: "POST"'), true);
+  assert.equal(rendererSource.includes('body: JSON.stringify(projectLibraryPayload(this.controller.timeline, "", name, this.isGlobalPrivacyMode()))'), true);
+  assert.equal(rendererSource.includes('const nextItemId = String(data?.item?.id ?? "").trim();'), true);
   assert.equal(rendererSource.includes("this.stampCurrentProjectLibraryItemId(nextItemId);"), true);
   assert.equal(rendererSource.includes("stampProjectLibraryItemId(timeline, itemId)"), true);
   assert.equal(rendererSource.includes('iconButton("library-add", "Add Reference to Director Library"'), true);
   assert.equal(rendererSource.includes('iconButton("library-update", "Update Director Library Character"'), true);
   assert.equal(rendererSource.includes("stampReferenceLibraryItemId(timeline, reference, itemId)"), true);
-  assert.equal(rendererSource.includes("this.requireManagedLibrary().characters.replace("), true);
+  assert.equal(rendererSource.includes('fetchDirectorLibraryJson(`${DIRECTOR_LIBRARY_ROUTE}/characters/${encodeURIComponent(itemId)}`'), true);
   assert.equal(librarySource.includes("function collectTimelineAssetReferences(timeline)"), true);
   assert.equal(librarySource.includes("cloneProjectForDirectorLibrary(timeline, itemId)"), true);
 }

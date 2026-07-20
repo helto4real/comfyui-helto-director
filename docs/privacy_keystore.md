@@ -1,55 +1,71 @@
-# Managed Privacy Suite
+# Privacy Keystore
 
-Helto Director uses the shared `helto-privacy` runtime. It does not own a
-second keystore, unlock dialog, browser token client, privacy route family, or
-fallback codec.
+The privacy keystore replaces the per-repo plaintext `config/privacy_key.json`
+with a single password-protected key file shared by all Helto node packs.
 
-## Installation contract
+## How it works
 
-Director is one member of an exact coordinated Helto privacy suite. The shared
-runtime verifies the suite manifest, Director profile fingerprint, adapter
-set, and browser assets before any privacy-bearing operation is available. A
-missing, stale, mixed, or verification-only suite is blocked; Director never
-falls back to plaintext or to a pack-local privacy implementation.
+- **At rest** — data keys are wrapped with AES-256-GCM under a key derived
+  from your password with scrypt and stored in
+  `~/.config/helto/privacy_keystore.json` (override with
+  `HELTO_PRIVACY_KEYSTORE`). The file is useless without the password.
+- **While unlocked** — the plain keys and a session token are cached in
+  `$XDG_RUNTIME_DIR/helto/` (per-user tmpfs, mode 0600). The cache survives
+  browser refreshes and ComfyUI restarts, and the OS wipes it on
+  reboot/logout — that is when you re-enter the password.
+- **HTTP protection** — once a keystore exists, `/helto_director/privacy/encrypt`
+  and `/decrypt` require the `X-Helto-Privacy-Token` header issued by
+  `/unlock`, and privacy-mode previews (`/media/thumbnail?privacy=1`,
+  `/media/waveform?privacy=1`, media-browser `/thumb?privacy=1`) require the
+  same token. The Director UI stores it in `localStorage` for fetch calls and
+  in a `helto_privacy_token` cookie for `<img>`/media elements, which cannot
+  send custom headers. Global Privacy Mode is enforced server-side, so omitting
+  or falsifying a route's `privacy` parameter cannot create a public preview.
+  A browser that never unlocked (or any other client on the network) cannot use
+  these routes. When a keystore exists, turning global Privacy Mode off also
+  requires the current session token.
 
-Install Director through its declared package metadata and install
-`requirements.txt` before starting ComfyUI. Do not replace the exact
-`helto-privacy` pin with a floating branch, version range, editable checkout,
-or unrelated local package.
+## Using it
 
-## Keystore and session
+Open the Director's **Global Settings** window:
 
-- The password-protected shared keystore is
-  `~/.config/helto/privacy_keystore.json` by default. Tests and isolated
-  installations may override it with `HELTO_PRIVACY_KEYSTORE`.
-- The unlocked session lives under `$XDG_RUNTIME_DIR/helto/` by default and can
-  be redirected with `HELTO_PRIVACY_SESSION_DIR`.
-- The shared browser runtime owns the session header/cookie, bounded unlock
-  retry, setup, lock, password change, and recovery UI. Consumer JavaScript
-  cannot read or construct the token.
-- One successful unlock covers every profile in the same verified suite and
-  ComfyUI origin.
+- **Set Password** — creates the keystore. Your existing plaintext key is
+  imported (old workflows stay readable) and the old file is renamed to
+  `privacy_key.json.migrated`; delete it once you trust the keystore.
+- **Unlock** — after a reboot, or when a locked timeline shows the unlock
+  prompt.
+- **Lock** / **Change Password** — available while unlocked.
 
-Use the shared Helto Privacy surface presented by ComfyUI to initialize,
-unlock, lock, or change the password. Director exposes no
-`/helto_director/privacy/*` compatibility endpoints.
+Endpoints for scripting: `POST /helto_director/privacy/keystore/init`,
+`/unlock`, `/lock`, `/keystore/change_password` (JSON bodies with
+`password` / `current_password` + `new_password`).
 
-## Existing Director data
+When the `helto-privacy` package is installed, the Director also registers
+the pack-neutral canonical endpoints (`/helto_privacy/status`, `/unlock`,
+`/lock`, `/keystore/init`, `/keystore/change_password`) and serves the shared
+unlock dialog at `/helto_privacy/ui/privacy.js` for every Helto pack on this
+server. The `/helto_director/privacy/*` endpoints above remain as
+backward-compatible aliases used by the Director's own UI.
 
-The Director profile declares continuity for the existing
-`helto.timeline-director` envelope and a verified import for the historical
-Director JSON key. Migration is performed by the shared suite as a declared,
-audited operation. It verifies read-back before retiring plaintext key
-material and does not create a `.migrated` plaintext backup.
+## Sharing with other Helto packs
 
-Do not manually move, rewrite, delete, or prune keys while preparing or testing
-the candidate. Key pruning is a separate irreversible operation that requires
-its own evidence and explicit authorization.
+The shared implementation lives in
+[`helto-privacy`](https://github.com/helto4real/helto-privacy). Other Helto
+node packs can depend on the tagged package and use its
+`PrivacyEnvelopeCodec("<pack schema>")` with their own envelope schema while
+resolving the same keystore and session paths. One unlock covers every pack on
+the same ComfyUI origin.
 
-## Threat boundary
+This repo keeps `shared/privacy_keystore.py` as a compatibility shim with a
+vendored fallback for offline/manual installs. The fallback preserves existing
+Timeline Director behavior; new cross-pack migrations should use the package
+APIs (`initialize_keystore_with_legacy_migration`, `add_keys_to_keystore`, and
+`rotate_primary_key`).
 
-The suite protects saved workflows, private records and settings, managed
-artifacts, and browser disclosure paths at rest and while locked. It cannot
-protect against malware already running as the same OS user during an unlocked
-session. Use full-disk encryption, encrypted swap, and a trusted local ComfyUI
-deployment for those layers.
+## Threat model
+
+Gained: stolen disks, backups, and synced dotfiles cannot decrypt anything;
+other network clients cannot use the decrypt route without unlocking.
+Not gained: malware running as your user while unlocked can read the session
+cache — the same limitation as an unlocked OS keyring. Use full-disk
+encryption and encrypted swap for the layers below this one.

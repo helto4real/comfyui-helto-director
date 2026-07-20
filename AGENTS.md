@@ -157,12 +157,12 @@ creation, thumbnail routes, waveform routes, and media cache hydration:
 - `web/timeline/media_actions.js`
 - `web/timeline/media_cache.js`
 - `web/timeline/media.js`
-- `routes/managed_privacy.py`
-- `shared/media_domain.py`
-- `shared/timeline/managed_media_privacy.py`
-- `shared/timeline/managed_media_artifacts.py`
-- Tests: `tests/media/test_managed_media_privacy.py`,
-  `tests/media/test_managed_media_artifacts.py`,
+- `routes/media_browser.py`
+- `routes/media_cache.py`
+- `shared/media_browser.py`
+- `shared/media_cache.py`
+- Tests: `tests/media/test_browser_routes.py`,
+  `tests/media/test_cache_routes.py`,
   `tests/js/timeline_media_contract.test.mjs`,
   `tests/js/media_cache.test.mjs`, `tests/js/media_picker.test.mjs`
 

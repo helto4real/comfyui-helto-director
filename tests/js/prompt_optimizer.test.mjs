@@ -23,18 +23,7 @@ function testPromptOptimizerRowsUseTimelineSectionsAndAssets() {
   text.item_id = "section_text";
   text.prompt = "walk forward";
 
-  const mediaCache = {
-    requestThumbnail(asset, size) {
-      assert.equal(asset.asset_id, "image_001");
-      assert.equal(size, 320);
-      return `/helto_privacy/artifacts/hp-lease-${"T".repeat(32)}`;
-    },
-    requestView(asset) {
-      assert.equal(asset.asset_id, "image_001");
-      return `/helto_privacy/artifacts/hp-lease-${"V".repeat(32)}`;
-    },
-  };
-  const rows = promptOptimizerRows(timeline, mediaCache);
+  const rows = promptOptimizerRows(timeline);
 
   assert.equal(rows.length, 2);
   assert.equal(rows[0].id, "section_image");
@@ -43,11 +32,13 @@ function testPromptOptimizerRowsUseTimelineSectionsAndAssets() {
   assert.equal(rows[0].mediaPath, "/tmp/guide.png");
   assert.equal(rows[0].mediaFolderAlias, "input");
   assert.equal(rows[0].mediaFile, "guide.png");
-  assert.equal(rows[0].thumbnailUrl.startsWith("/helto_privacy/artifacts/hp-lease-"), true);
-  assert.equal(rows[0].thumbnailUrl.includes("guide.png"), false);
-  assert.equal(rows[0].mediaPreviewUrl.startsWith("/helto_privacy/artifacts/hp-lease-"), true);
-  assert.equal(rows[0].mediaPreviewUrl.includes("guide.png"), false);
+  assert.equal(rows[0].thumbnailUrl.includes("/helto_director/media/thumbnail?"), true);
+  assert.equal(rows[0].thumbnailUrl.includes("path=%2Ftmp%2Fguide.png"), true);
+  assert.equal(rows[0].thumbnailUrl.includes("privacy=1"), false);
+  assert.equal(rows[0].mediaPreviewUrl.includes("/helto_director/media/view?"), true);
+  assert.equal(rows[0].mediaPreviewUrl.includes("path=%2Ftmp%2Fguide.png"), true);
   assert.equal(rows[0].mediaPreviewCaption, "guide.png");
+  assert.equal(promptOptimizerRows(timeline, true)[0].thumbnailUrl.includes("privacy=1"), true);
   assert.equal(rows[1].id, "section_text");
   assert.equal(rows[1].prompt, "walk forward");
 }
@@ -57,6 +48,7 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
   const rendererSource = readFileSync(new URL("../../web/timeline/renderer.js", import.meta.url), "utf8");
 
   assert.equal(optimizerSource.includes('const ROUTE_PREFIX = "/helto_director/prompt_optimizer";'), true);
+  assert.equal(optimizerSource.includes("ensureStoredPrivacyTokenCookie(documentRef);"), true);
   assert.equal(optimizerSource.includes('body: JSON.stringify({'), true);
   assert.equal(optimizerSource.includes("segments,"), true);
   assert.equal(optimizerSource.includes("references: []"), true);
@@ -70,8 +62,7 @@ function testPromptOptimizerUsesModernRouteAndApplyMutation() {
   assert.equal(optimizerSource.includes("mediaPath: item.mediaPath ||"), true);
   assert.equal(optimizerSource.includes("img.src = item.thumbnailUrl"), true);
   assert.equal(optimizerSource.includes("showMediaPreview(documentRef"), true);
-  assert.equal(optimizerSource.includes("mediaPreviewUrl: mediaViewUrlForAsset(asset, mediaCache)"), true);
-  assert.equal(optimizerSource.includes("/helto_director/media"), false);
+  assert.equal(optimizerSource.includes("mediaPreviewUrl: mediaViewUrlForAsset(asset)"), true);
   assert.equal(optimizerSource.includes("if (options.privacyMode && !panel.matches(\":hover\")) return;"), true);
   assert.equal(optimizerSource.includes("width: 96px; height: 96px; min-width: 96px"), true);
   assert.equal(optimizerSource.includes("object-fit: contain"), true);
